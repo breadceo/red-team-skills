@@ -19,6 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_comments import detect, gh, gh_json, is_bot, load_state, save_state
 
 
+def save_notified(cwd, pr, repo, seen):
+    """저장 직전에 디스크를 다시 읽는다.
+
+    감시는 몇 시간씩 살아 있고 그동안 `fetch_comments.py --mark-triaged` 가 같은 파일에
+    `triaged` 를 쓴다. 시작 시점의 `st` 를 그대로 되쓰면 그 사이의 처리 표시가 통째로
+    날아간다 — 실제로 PR #872 에서 45건이 16건으로 되돌아갔다.
+    감시는 `notified` 에 추가만 하므로 합집합으로 병합하면 충분하다.
+    """
+    st = load_state(cwd, pr)
+    st["notified"] = sorted(set(st.get("notified", [])) | set(seen))
+    st["repo"] = repo
+    save_state(cwd, pr, st)
+
+
 def incoming(repo, pr, me, marker):
     out = []
     for c in gh_json(f"repos/{repo}/issues/{pr}/comments"):
@@ -62,9 +76,7 @@ def main():
     # 과거 코멘트는 `fetch_comments.py --new-only` 로 한 번에 본다.
     if not seen:
         seen = {cid for _, cid, _, _, _ in incoming(repo, pr, me, a.bot_marker)}
-        st["notified"] = sorted(seen)
-        st["repo"] = repo
-        save_state(cwd, pr, st)
+        save_notified(cwd, pr, repo, seen)
         print(f"[watch] {repo}#{pr} 감시 시작 — 기존 {len(seen)}건은 알리지 않는다 "
               f"(미처리분은 fetch_comments.py --new-only 로 확인)", flush=True)
 
@@ -82,9 +94,7 @@ def main():
             print(f"[pr-triage] {repo}#{pr} 신규 {src} 코멘트 · {who} · id={cid}\n"
                   f"  {head}\n  {url}", flush=True)
         if fresh:
-            st["notified"] = sorted(seen)
-            st["repo"] = repo
-            save_state(cwd, pr, st)
+            save_notified(cwd, pr, repo, seen)
             idle = 0.0
         else:
             idle += a.interval

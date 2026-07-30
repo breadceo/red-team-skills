@@ -29,8 +29,21 @@ CONTEXT = """# Context: sample
 ## Architecture 합의
 - 판정은 selectUserJudgment 로 파생한다
 
+## Spec AC 매핑
+- AC-1: 조회 실패 시 '미보유' 로 보이지 않는다 → 서브태스크 #1 매핑
+- AC-2: 재시도 버튼이 실제로 재조회한다 → 서브태스크 #2 매핑
+
+## Gherkin 시나리오
+- Scenario 1 (feature_consent.feature): 조회 실패 후 재시도 → 서브태스크 #2 매핑
+
 ## 코드 현황 (Code-Hub)
 - useUser.tsx:52 에서 error 시 data 를 버린다
+"""
+
+NO_CRITERIA_CONTEXT = """# Context: bare
+
+## PRD 요약
+- 목표: 문구만 고친다
 """
 
 
@@ -62,13 +75,19 @@ def main():
     assert "round:" not in r.stdout, "초안만 만들고 멈춰야 하는데 라운드가 돌았다"
 
     body = ctx.read_text()
-    for need in ("## 리뷰 대상", "## 이 변경이 하려는 것", "## 스코프 밖 (지적 금지)",
-                 "## 이미 반영된 지적 (재제기 금지)", "## 검증 상태", "## 계획 전문"):
+    for need in ("## 리뷰 대상", "## 이 변경이 하려는 것", "## 판정 기준 (Spec AC · Gherkin)",
+                 "## 스코프 밖 (지적 금지)", "## 이미 반영된 지적 (재제기 금지)",
+                 "## 검증 상태", "## 계획 전문"):
         assert need in body, f"절 누락: {need}"
     assert "동의 캐시 동기화를 type 병합으로" in body, "PLAN 작업 분석이 안 실렸다"
     assert "selectUserJudgment" in body, "CONTEXT Architecture 합의가 안 실렸다"
     assert "동시 응답 순서 보장 여부" in body, "미확인 항목이 안 실렸다"
     assert "순차: #1 → #2" in body, "plan 게이트는 계획 전문을 실어야 한다"
+    assert "AC-1:" in body and "AC-2:" in body, "Spec AC 매핑이 판정 기준으로 안 실렸다"
+    assert "feature_consent.feature" in body, "Gherkin 시나리오가 안 실렸다"
+    # 판정 기준은 '하려는 것' 뒤에, 스코프 밖 앞에 온다 — 리뷰어가 기준으로 읽어야 한다
+    assert body.index("## 이 변경이 하려는 것") < body.index("## 판정 기준") < body.index("## 스코프 밖"), \
+        "판정 기준 절 위치가 어긋났다"
 
     # 2. 이미 있으면 덮지 않는다 — 사람이 좁혀둔 스코프가 날아가면 안 된다
     ctx.write_text(body.replace("<PLAN.md 범위의 '제외되는 것'", "광고 슬롯 표시 로직(별도 티켓)"))
@@ -99,7 +118,18 @@ def main():
     r6 = run(tmp, "--cwd", str(tmp), "--from-zax", "no-such-task")
     assert r6.returncode != 0 and "task 디렉토리가 없다" in r6.stdout + r6.stderr
 
-    print("PASS — 초안 생성/멈춤, 덮어쓰기 금지, 게이트별 내용, 대문자 PLAN.md 신선도 경고, 인자 검증 모두 정상")
+    # 7. AC·시나리오가 없는 CONTEXT 면 판정 기준 절을 만들지 않는다 (빈 절로 리뷰어를 흔들지 않는다)
+    bare = tmp / "bare"
+    bare.mkdir()
+    (bare / "PLAN.md").write_text(PLAN)
+    (bare / "CONTEXT.md").write_text(NO_CRITERIA_CONTEXT)
+    run(tmp, "--cwd", str(tmp), "--from-zax", "bare", "--gate", "code")
+    bare_body = (bare / "redteam-context.md").read_text()
+    assert "## 판정 기준" not in bare_body, "AC 가 없는데 빈 판정 기준 절을 만들었다"
+    assert "문구만 고친다" in bare_body, "PRD 요약이 안 실렸다"
+
+    print("PASS — 초안 생성/멈춤, 덮어쓰기 금지, 게이트별 내용, 판정 기준 절(유/무), "
+          "대문자 PLAN.md 신선도 경고, 인자 검증 모두 정상")
 
 
 if __name__ == "__main__":

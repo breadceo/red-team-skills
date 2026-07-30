@@ -148,14 +148,21 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
     intent = "\n\n".join(x for x in (
         section(ptext, "작업 분석"), section(ctext, "PRD 요약"), section(ctext, "Architecture 합의")) if x)
     unknown = "\n".join(l for l in ptext.splitlines() if "미확인" in l)
+    # AC·시나리오는 리뷰어의 판정 기준이다 — 안 실으면 코드에서 역추론한다.
+    criteria = "\n\n".join(x for x in (
+        section(ctext, "Spec AC 매핑"), section(ctext, "Gherkin 시나리오")) if x)
     target = ("`git diff <base>..HEAD` (또는: 커밋되지 않은 작업 트리 변경)\n"
               "저장소: <--cwd 로 준 경로>. 파일 내용은 현재 체크아웃 상태가 맞다."
               if gate == "code" else
               "아래 `## 계획 전문` 의 계획. 코드는 현재 체크아웃 상태를 근거로 확인한다.")
 
     body = [f"## 리뷰 대상\n{target}",
-            f"## 이 변경이 하려는 것\n{intent or '<PLAN.md 작업 분석이 비어 있다 — 직접 채운다>'}",
-            "## 스코프 밖 (지적 금지)\n"
+            f"## 이 변경이 하려는 것\n{intent or '<PLAN.md 작업 분석이 비어 있다 — 직접 채운다>'}"]
+    if criteria:
+        body.append("## 판정 기준 (Spec AC · Gherkin)\n"
+                    "아래 AC·시나리오가 이 변경의 판정 기준이다. "
+                    "여기 적힌 동작이 코드에서 실제로 그렇게 되는지 본다.\n\n" + criteria)
+    body += ["## 스코프 밖 (지적 금지)\n"
             "<PLAN.md 범위의 '제외되는 것' 과 후속 티켓으로 분리한 것을 여기 옮긴다>"
             + (f"\n\n미확인으로 남은 것(리뷰어가 볼 지점):\n{unknown}" if unknown else ""),
             "## 이미 반영된 지적 (재제기 금지)\n"

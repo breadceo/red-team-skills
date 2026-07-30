@@ -275,9 +275,44 @@ python3 ~/.claude/skills/red-team/scripts/resume.py --next code
 "이 불변식이 더 이상 유효하지 않다"는 판단을 스크립트가 대신할 수 없다.
 
 그래서 `run_round.py` 가 **라운드 시작 시점에 mtime 을 비교해 경고**한다 —
-같은 디렉토리의 `plan*.md` 가 `context.md` 보다 새로우면 알린다. 오탐이 나도 비용은 한 번 훑어보는
-것이고, 놓치면 리뷰 전체가 낡은 기준 위에서 돈다. 경고가 뜨면 실제로 판정 기준이 바뀌었는지 보고,
-바뀌었으면 `context.md` 를 갱신한 뒤 라운드를 다시 돌린다.
+같은 디렉토리의 계획서(`plan*.md`, 대소문자 무시하므로 `PLAN.md` 도 잡는다)가 `context.md` 보다
+새로우면 알린다. 오탐이 나도 비용은 한 번 훑어보는 것이고, 놓치면 리뷰 전체가 낡은 기준 위에서
+돈다. 경고가 뜨면 실제로 판정 기준이 바뀌었는지 보고, 바뀌었으면 `context.md` 를 갱신한 뒤
+라운드를 다시 돌린다.
+
+## 오케스트레이터와 병행 — `zax:task` 의 경우
+
+이 스킬은 **오케스트레이션을 하지 않는다.** 분해·의존성·진행 추적은 `zax:task` 가 하고,
+이 스킬은 그 흐름의 **두 지점에 끼는 게이트**다. 계획을 세우거나 구현하는 것도 아니다.
+
+```
+/task plan  →  PLAN.md
+                 ↓ ① --gate plan     NO-GO → /task plan 재분석
+/task start →  CONTEXT.md · 워크트리/브랜치
+/task run   →  구현
+/task done  →  Step 2 tsc·lint·test 통과
+                 ↓ ② --gate code     NO-GO → done 처리하지 않는다
+               완료 처리
+```
+
+컨텍스트는 손으로 쓰지 않고 zax 산출물에서 초안을 뽑는다:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT:-~/.claude/skills}/red-team/scripts/run_round.py \
+  --cwd <저장소 경로> --gate plan --from-zax <task-name>
+```
+
+`~/.zb-task/<task-name>/redteam-context.md` 가 없으면 **초안만 만들고 멈춘다.**
+`PLAN.md` 의 작업 분석과 `CONTEXT.md` 의 PRD 요약·Architecture 합의가 `## 이 변경이 하려는 것` 으로,
+계획의 `미확인` 항목이 리뷰어가 볼 지점으로 실린다. `## 스코프 밖` 과 `## 검증 상태` 는 비워두므로
+채운 뒤 같은 명령을 다시 실행한다 — **이미 있으면 덮지 않는다**(위 표의 두 번째 행이 그 이유다).
+
+컨텍스트를 task 디렉토리에 두는 것이 핵심이다. `PLAN.md` 와 같은 디렉토리에 있어야 위의
+신선도 경고가 작동한다 — `/task run` 중에 계획이 바뀌면 그때 알려준다.
+
+**라운드 단위는 서브태스크가 아니라 브랜치 상태다.** `/task run` 은 여러 서브태스크를 한 브랜치에
+쌓으므로 서브태스크마다 돌리면 같은 diff 를 여러 번 보게 된다. 수합 시점이나 `/task done` 에서
+한 번 돌린다. 레포가 여러 개면(워크트리 여러 개) 레포별로 따로 돈다 — diff 가 레포별이라 그게 맞다.
 
 ## 주의
 

@@ -5,6 +5,7 @@ usage:
   run_round.py --set-engine codex|claude          # 최초 1회 (이후 변경도 같은 명령)
   run_round.py --cwd <repo> --context <file> [--gate code|plan] [--out <dir>]
                [--reviewers a-code,b1-state-matrix,...] [--engine codex|claude]
+  run_round.py --cwd <repo> --gate plan --from-zax <task>   # zax:task 산출물에서 컨텍스트 초안
 
 리뷰 엔진은 `~/.red-team/config.json` 에 저장된다. 우선순위는
 `--engine` > `RED_TEAM_ENGINE` 환경변수 > config.json 이고, 셋 다 없으면 최초 설정을 안내한다.
@@ -111,6 +112,62 @@ def resolve_out(cwd: str, gate: str) -> Path:
     return base / f"{gate}-{n}"
 
 
+ZB_TASK_HOME = Path(os.environ.get("ZB_TASK_HOME", Path.home() / ".zb-task"))
+
+
+def section(text: str, heading: str) -> str:
+    """`## heading` 절의 본문. 없으면 빈 문자열."""
+    m = re.search(rf"^##+\s*{re.escape(heading)}.*?\n(.*?)(?=^##\s|\Z)", text, re.S | re.M)
+    return m.group(1).strip() if m else ""
+
+
+def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
+    """zax:task 산출물에서 리뷰 컨텍스트 초안을 만든다.
+
+    반환은 (컨텍스트 경로, 새로 만들었나). **이미 있으면 덮지 않는다** — 판정 기준
+    (불변식·스코프 경계·확인 사항)은 사람이 갱신하는 문서이고, 라운드마다 자동 재생성하면
+    손으로 좁혀둔 스코프가 조용히 날아간다. 초안은 첫 라운드 전에 한 번만 깔아 준다.
+
+    컨텍스트를 task 디렉토리에 두는 이유: PLAN.md 와 같은 디렉토리에 있어야 라운드 시작
+    시점의 신선도 경고(계획서가 컨텍스트보다 새로움)가 작동한다.
+    """
+    tdir = ZB_TASK_HOME / task
+    if not tdir.is_dir():
+        sys.exit(f"zax task 디렉토리가 없다: {tdir}\n"
+                 f"  `/task plan` 으로 PLAN.md 를 먼저 만든다 (또는 ZB_TASK_HOME 을 지정한다).")
+    ctx = tdir / "redteam-context.md"
+    if ctx.exists():
+        return ctx, False
+
+    plan = next((p for p in tdir.iterdir() if p.name.lower() in ("plan.md", "plan.markdown")), None)
+    if plan is None:
+        sys.exit(f"{tdir} 에 PLAN.md 가 없다 — `/task plan` 을 먼저 돌린다.")
+    ptext = plan.read_text()
+    ctext = (tdir / "CONTEXT.md").read_text() if (tdir / "CONTEXT.md").exists() else ""
+
+    intent = "\n\n".join(x for x in (
+        section(ptext, "작업 분석"), section(ctext, "PRD 요약"), section(ctext, "Architecture 합의")) if x)
+    unknown = "\n".join(l for l in ptext.splitlines() if "미확인" in l)
+    target = ("`git diff <base>..HEAD` (또는: 커밋되지 않은 작업 트리 변경)\n"
+              "저장소: <--cwd 로 준 경로>. 파일 내용은 현재 체크아웃 상태가 맞다."
+              if gate == "code" else
+              "아래 `## 계획 전문` 의 계획. 코드는 현재 체크아웃 상태를 근거로 확인한다.")
+
+    body = [f"## 리뷰 대상\n{target}",
+            f"## 이 변경이 하려는 것\n{intent or '<PLAN.md 작업 분석이 비어 있다 — 직접 채운다>'}",
+            "## 스코프 밖 (지적 금지)\n"
+            "<PLAN.md 범위의 '제외되는 것' 과 후속 티켓으로 분리한 것을 여기 옮긴다>"
+            + (f"\n\n미확인으로 남은 것(리뷰어가 볼 지점):\n{unknown}" if unknown else ""),
+            "## 이미 반영된 지적 (재제기 금지)\n"
+            "<2라운드부터 `resume.py` 가 직전 라운드 decisions.md 에서 끌어온다>",
+            "## 검증 상태\n<`/task done` 의 tsc·lint·test 결과를 붙인다 — "
+            "비워두면 리뷰어가 '테스트 없음' 을 지적하느라 시간을 쓴다>"]
+    if gate == "plan":
+        body.append(f"## 계획 전문\n{ptext.strip()}")
+    ctx.write_text("\n\n".join(body) + "\n")
+    return ctx, True
+
+
 def build(reviewer: str, context: str) -> str:
     tpl = (PROMPTS / "_common.md").read_text()
     axis = (PROMPTS / f"{reviewer}.md").read_text()
@@ -163,6 +220,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cwd")
     ap.add_argument("--context", help="컨텍스트 md 파일 경로")
+    ap.add_argument("--from-zax", metavar="TASK", default=None,
+                    help="zax:task 산출물에서 컨텍스트를 잡는다 (~/.zb-task/<TASK>/). "
+                         "초안이 없으면 만들고 멈춘다 — 검토 후 다시 실행한다")
     ap.add_argument("--gate", choices=list(GATES), default="code")
     ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs/... 로 자동 결정")
     ap.add_argument("--reviewers", default=None, help="생략 시 게이트 기본값")
@@ -176,8 +236,18 @@ def main():
     if a.set_engine:
         set_engine(a.set_engine)
         return
+    if a.from_zax:
+        if a.context:
+            ap.error("--from-zax 와 --context 는 함께 쓸 수 없다")
+        ctx_path, drafted = zax_draft(a.from_zax, a.gate)
+        a.context = str(ctx_path)
+        if drafted:
+            print(f"컨텍스트 초안을 만들었다: {ctx_path}\n"
+                  f"  스코프 밖·검증 상태를 채운 뒤 같은 명령을 다시 실행한다.\n"
+                  f"  (판정 기준은 사람이 정한다 — 라운드마다 자동 재생성하지 않는다)")
+            return
     if not (a.cwd and a.context):
-        ap.error("--cwd 와 --context 가 필요하다")
+        ap.error("--cwd 와 (--context 또는 --from-zax) 가 필요하다")
     engine = resolve_engine(a.engine)
 
     out = Path(a.out) if a.out else resolve_out(a.cwd, a.gate)
@@ -192,8 +262,12 @@ def main():
     # 계획서가 컨텍스트보다 새로우면 판정 기준이 낡았을 수 있다.
     # 구현 중 새 사실이 나와 계획을 고쳤는데 context.md 를 안 고치면, 리뷰어는 낡은 기준으로
     # 판정한다 — 조용히 틀린 GO 가 나오는 경로라 라운드 시작 시점에 알린다.
+    # 파일명 대소문자를 가리지 않는다 — zax:task 는 `PLAN.md`, 손으로 쓸 때는 `plan-1.md` 다.
+    # (Python glob 은 대소문자를 구분하므로 `plan*.md` 만 보면 `PLAN.md` 를 놓친다)
     ctx_src = Path(a.context)
-    for plan in sorted(ctx_src.parent.glob("plan*.md")):
+    plans = sorted(p for p in ctx_src.parent.iterdir()
+                   if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
+    for plan in plans:
         if plan.stat().st_mtime > ctx_src.stat().st_mtime + 1:
             print(f"⚠ {plan.name} 이 {ctx_src.name} 보다 새롭다.\n"
                   f"  계획을 고쳤다면 context.md 의 판정 기준(불변식·스코프 밖·확인 사항)도 같이 갱신했는지\n"

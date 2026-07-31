@@ -71,6 +71,47 @@ def main():
         # claude 하위 티어에 haiku 를 쓰지 않는다(사용자 결정)
         assert not any("haiku" in (m or "") for m, _ in rr.TIERS["claude"].values())
 
+        # config assignments 오버라이드: 전체 지정이 tier 기본을 이긴다
+        ov = {"b2-interaction": {"engine": "claude", "model": "sonnet", "effort": "high"}}
+        assert rr.assign("b2-interaction", "code", both, None, None, ov) == \
+            ("claude", "sonnet", "high", "deep")
+        # 부분 오버라이드: engine 만 바꾸면 그 엔진의 tier 기본 model/effort 로 재계산
+        ov2 = {"b2-interaction": {"engine": "codex"}}
+        assert rr.assign("b2-interaction", "code", both, None, None, ov2) == \
+            ("codex", "gpt-5.6-sol", "high", "deep")
+        # 가용 밖 엔진 오버라이드는 통째로 무시 — --set-engine 한 방 전환이 이겨야 한다
+        assert rr.assign("b2-interaction", "code", ["codex"], None, None, ov) == \
+            ("codex", "gpt-5.6-sol", "high", "deep")
+        # CLI --model/--effort 는 config 오버라이드보다도 세다
+        assert rr.assign("b2-interaction", "code", both, "opus", "max", ov)[1:3] == ("opus", "max")
+
+        # set_assignment 저장/복귀 라운드트립
+        rr.set_engine("codex,claude")
+        rr.set_assignment("b2-interaction=claude/sonnet/high")
+        cfg = json.loads(rr.CONFIG.read_text())
+        assert cfg["assignments"]["b2-interaction"] == \
+            {"engine": "claude", "model": "sonnet", "effort": "high"}, cfg
+        assert cfg["engines"] == ["codex", "claude"], "set_assignment 이 engines 를 건드렸다"
+        rr.set_assignment("b2-interaction=")
+        assert "b2-interaction" not in json.loads(rr.CONFIG.read_text())["assignments"]
+        try:
+            rr.set_assignment("b2-interaction=gemini/x/y")
+            raise AssertionError("모르는 엔진 오버라이드는 거절해야 한다")
+        except SystemExit:
+            pass
+
+        # show_assignments: 오버라이드 표시 + 추천(기본) 병기 + 축 성격(why) 출력
+        import io
+        from contextlib import redirect_stdout
+        rr.set_assignment("b3-visibility=codex/gpt-5.6-luna/low")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rr.show_assignments()
+        s = buf.getvalue()
+        assert "✏ 오버라이드 (추천: claude/sonnet/medium)" in s, s
+        assert "대비비 계산" in s and "[code 게이트]" in s and "[plan 게이트]" in s, s
+        rr.set_assignment("b3-visibility=")
+
         # argv: codex 는 acpx 를 앞세우고 effort 를 CODEX_CONFIG env 로 준다
         codex, env = rr.engine_cmd("codex", "PROMPT", "/repo", "gpt-5.6-sol", "high")
         assert codex[-3:] == ["codex", "exec", "PROMPT"], codex

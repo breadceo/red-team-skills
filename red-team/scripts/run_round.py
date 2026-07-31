@@ -29,25 +29,25 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+# why 는 --show-assignments 가 "이 축은 어떤 일을 하니 무엇을 추천하나"로 출력한다.
 GATES = {
     "code": {
-        # 회귀·논리구멍·사실오류 — 변경 목적을 우회하는 경로 탐색, 복합 추론
-        "a-code":              {"tier": "deep",  "prefer": "codex"},
-        # surface × 상태 표 전수 — 체크리스트형. 코드는 읽어야 하니 low 가 아닌 medium
-        "b1-state-matrix":     {"tier": "cheap", "prefer": "codex"},
-        # 클릭→핸들러→데이터소스 추적 — 다단계 교차 추론.
-        # deep 축을 codex/claude 로 갈라 같은 모델의 맹점이 전 축에 복제되는 것을 막는다
-        "b2-interaction":      {"tier": "deep",  "prefer": "claude"},
-        # 최종 hex 확정 + 대비비 계산 — 기계적
-        "b3-visibility":       {"tier": "cheap", "prefer": "claude"},
-        # "판정 불가 vs 판정 결과 불가" 합쳐짐 감지 — 미묘하지만 범위가 좁다
-        "b4-null-propagation": {"tier": "mid",   "prefer": "claude"},
+        "a-code":              {"tier": "deep",  "prefer": "codex",
+                                "why": "회귀·논리구멍·사실오류 — 변경 목적을 우회하는 경로 탐색, 복합 추론. recall 우선"},
+        "b1-state-matrix":     {"tier": "cheap", "prefer": "codex",
+                                "why": "surface × 상태 표 전수 — 체크리스트형. 코드는 읽어야 하니 low 가 아닌 medium"},
+        "b2-interaction":      {"tier": "deep",  "prefer": "claude",
+                                "why": "클릭→핸들러→데이터소스 다단계 추적. deep 을 codex/claude 로 갈라 맹점 분산"},
+        "b3-visibility":       {"tier": "cheap", "prefer": "claude",
+                                "why": "최종 hex 확정 + 대비비 계산 — 기계적"},
+        "b4-null-propagation": {"tier": "mid",   "prefer": "claude",
+                                "why": "'판정 불가 vs 판정 결과 불가' 합쳐짐 감지 — 미묘하지만 범위가 좁다"},
     },
-    # 계획 결함은 구현 후 발견보다 압도적으로 싸다 — 여기 아끼지 않는다
-    "plan": {"a-plan": {"tier": "deep", "prefer": "codex"}},
+    "plan": {"a-plan": {"tier": "deep", "prefer": "codex",
+                        "why": "계획 결함은 구현 후 발견보다 압도적으로 싸다 — 여기 아끼지 않는다"}},
 }
 # --reviewers 로 GATES 밖 커스텀 축을 주면 이 스펙으로 돈다 — 성격을 모르면 비싼 쪽이 안전하다
-DEFAULT_SPEC = {"tier": "deep", "prefer": None}
+DEFAULT_SPEC = {"tier": "deep", "prefer": None, "why": "커스텀 축 — 성격을 모르면 비싼 쪽이 안전하다"}
 
 # tier → (model, effort). 결함 탐지(deep)는 recall 우선 — CodeRabbit 리뷰 벤치마크에서
 # Sol recall 69.7% vs Terra 52.5%, Sol 의 높은 FP 는 P1/P2 분류·사용자 게이트가 거른다.
@@ -143,13 +143,82 @@ def set_engine(spec: str) -> None:
     print(f"리뷰 엔진: {', '.join(engines)}  ({CONFIG}){warn}")
 
 
+def load_cfg() -> dict:
+    return json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+
+
+def cfg_engines(cfg: dict) -> list[str]:
+    return cfg.get("engines") or ([cfg["engine"]] if cfg.get("engine") else [])
+
+
 def assign(reviewer: str, gate: str, engines: list[str], model_override: str | None,
-           effort_override: str | None) -> tuple[str, str | None, str | None, str]:
-    """리뷰어 → (engine, model, effort, tier). CLI override 가 있으면 전 리뷰어에 강제된다."""
+           effort_override: str | None,
+           overrides: dict | None = None) -> tuple[str, str | None, str | None, str]:
+    """리뷰어 → (engine, model, effort, tier).
+
+    우선순위: CLI --model/--effort(전 리뷰어 강제) > config assignments[축] > tier/prefer 기본.
+    오버라이드의 engine 이 가용 목록 밖이면 **오버라이드 전체를 무시한다** — 한도 소진 시
+    `--set-engine codex` 한 방 전환이 축별 설정에 발목 잡히면 안 된다 (모델·effort 는
+    엔진에 종속이라 엔진이 무시되면 함께 무시하는 것이 안전하다).
+    """
     spec = GATES[gate].get(reviewer, DEFAULT_SPEC)
-    engine = spec["prefer"] if spec["prefer"] in engines else engines[0]
+    o = (overrides or {}).get(reviewer) or {}
+    if o.get("engine") and o["engine"] not in engines:
+        o = {}
+    engine = o.get("engine") or (spec["prefer"] if spec["prefer"] in engines else engines[0])
     model, effort = TIERS[engine][spec["tier"]]
-    return engine, model_override or model, effort_override or effort, spec["tier"]
+    return (engine, model_override or o.get("model") or model,
+            effort_override or o.get("effort") or effort, spec["tier"])
+
+
+def set_assignment(spec_str: str) -> None:
+    """`축=engine/model/effort` 를 config 에 저장한다. 값을 비우면 기본(추천)으로 복귀."""
+    axis, _, val = spec_str.partition("=")
+    axis = axis.strip()
+    if not axis:
+        sys.exit("형식: --set-assignment '축=engine/model/effort' (값을 비우면 기본 복귀)")
+    cfg = load_cfg()
+    asg = cfg.setdefault("assignments", {})
+    if not val.strip():
+        print(f"{axis}: " + ("오버라이드 제거 — tier 기본(추천)으로 복귀"
+                             if asg.pop(axis, None) else "오버라이드가 없다"))
+    else:
+        parts = [p.strip() for p in val.split("/")]
+        if len(parts) != 3 or parts[0] not in ENGINES or not all(parts):
+            sys.exit(f"형식: --set-assignment '{axis}=<{'|'.join(ENGINES)}>/<model>/<effort>'\n"
+                     "  model·effort 는 그 엔진 CLI 가 아는 값이어야 한다 (틀리면 라운드에서 에러로 표면화).")
+        engine, model, effort = parts
+        asg[axis] = {"engine": engine, "model": model, "effort": effort}
+        enabled = cfg_engines(cfg)
+        warn = (f"\n⚠ {engine} 는 가용 엔진({', '.join(enabled)}) 밖이다 — "
+                f"목록에 들어올 때까지 이 오버라이드는 무시된다."
+                if enabled and engine not in enabled else "")
+        print(f"{axis}: {engine}/{model}/{effort} 저장{warn}")
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+
+
+def show_assignments() -> None:
+    """유효 배정표 + 각 축의 성격(왜 이 tier 인가) + 오버라이드 표시 — '추천과 이유'의 원천."""
+    cfg = load_cfg()
+    engines = cfg_engines(cfg)
+    if not engines:
+        sys.exit("엔진이 설정되지 않았다 — 먼저 --set-engine 을 실행한다.")
+    overrides = cfg.get("assignments", {})
+    print(f"가용 엔진: {', '.join(engines)}  (전환: --set-engine, 예: 한도 소진 시 --set-engine codex)")
+    for gate, axes in GATES.items():
+        print(f"\n[{gate} 게이트]")
+        for axis, spec in axes.items():
+            e, m, ef, t = assign(axis, gate, engines, None, None, overrides)
+            de, dm, def_, _ = assign(axis, gate, engines, None, None, {})
+            mark = f"  ✏ 오버라이드 (추천: {de}/{dm}/{def_})" if (e, m, ef) != (de, dm, def_) else ""
+            print(f"  {axis:22} [{t:5}] {e}/{m}/{ef}{mark}")
+            print(f"      └ {spec['why']}")
+    ignored = [a for a, o in overrides.items()
+               if o.get("engine") and o["engine"] not in engines]
+    if ignored:
+        print(f"\n⚠ 무시 중인 오버라이드(가용 밖 엔진): {', '.join(ignored)}")
+    print("\n변경: --set-assignment '축=engine/model/effort' · 추천 복귀: --set-assignment '축='")
 
 
 def git(cwd: str, *args) -> str:
@@ -383,10 +452,21 @@ def main():
                          "콤마(codex,claude)면 축별 분산")
     ap.add_argument("--set-engine", default=None, metavar="ENGINES",
                     help="가용 엔진을 저장하고 종료 (예: codex 또는 codex,claude — 첫 항목이 기본)")
+    ap.add_argument("--set-assignment", action="append", default=None, metavar="AXIS=E/M/EF",
+                    help="축별 배정을 config 에 저장하고 종료 (값을 비우면 추천 복귀). 반복 가능")
+    ap.add_argument("--show-assignments", action="store_true",
+                    help="유효 배정표 + 축 성격(추천 이유) 출력하고 종료")
     a = ap.parse_args()
 
     if a.set_engine:
         set_engine(a.set_engine)
+        return
+    if a.set_assignment:
+        for s in a.set_assignment:
+            set_assignment(s)
+        return
+    if a.show_assignments:
+        show_assignments()
         return
     if a.from_zax:
         if a.context:
@@ -411,7 +491,8 @@ def main():
     # 빈 지정이 조용히 게이트 전체가 되어, 준비 확인용 실행이 실제 엔진 호출로 번진다(실측: 테스트가 opus 를 돌렸다).
     spec = a.reviewers if a.reviewers is not None else ",".join(GATES[a.gate])
     reviewers = [r.strip() for r in spec.split(",") if r.strip()]
-    assignments = {r: assign(r, a.gate, engines, a.model, a.effort) for r in reviewers}
+    overrides = load_cfg().get("assignments", {})
+    assignments = {r: assign(r, a.gate, engines, a.model, a.effort, overrides) for r in reviewers}
     if reviewers:
         print(f"round: gate={a.gate}, engines={'+'.join(engines)}, {len(reviewers)} reviewers, cwd={a.cwd}\n"
               f"  out: {out}", flush=True)

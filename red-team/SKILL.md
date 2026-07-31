@@ -112,6 +112,31 @@ python3 ~/.claude/skills/red-team/scripts/report_usage.py [repo/브랜치 조각
 분자는 `classification == regression` 이다 — raw findings 를 세면 말 많은 모델이
 과대평가된다. cheap 축의 0 건은 낭비가 아니라 커버리지 보험이므로, 표는 판단 재료이고
 배정 축소는 사람이 결정한다.
+
+#### 배정 바꾸기 (사용자가 명시적으로 요청할 때)
+
+기본 배정은 코드의 **추천값**이고, 사용자별 조정은 `config.json` 의 `assignments` 에
+얹힌다. 사용자가 "리뷰 배정 바꿔줘", "리뷰 모델 조정", "엔진 전환", "claude 아껴야 해",
+"토큰/한도" 같은 요청을 하면 **손으로 config 를 고치지 말고 이 플로우를 탄다**:
+
+1. `run_round.py --show-assignments` 로 현 배정·오버라이드·축 성격(추천 이유)을 확인한다.
+2. **AskUserQuestion 으로 묻는다.** 첫 질문은 빠른 선택지:
+   - `codex only 전환` — claude 한도 소진/절약. `--set-engine codex` 한 방 (배정표 무손상)
+   - `claude only 전환` — 반대 방향. `--set-engine claude`
+   - `추천 배정 복귀` — 오버라이드 전부 제거 (`--set-assignment '축='` 반복)
+   - `축별 세부 조정` — 다음 단계로
+3. 축별 세부 조정이면 축마다 옵션을 주되, **각 옵션에 "이 축은 ~하는 일이라 ~을 추천"
+   설명을 붙인다** — 재료는 `--show-assignments` 의 why 와 tier 다. 예: b2-interaction 은
+   "다단계 교차 추적이라 opus/high 추천 — 비용 부담이면 sonnet/high (recall 하락 가능,
+   report_usage 로 사후 검증)".
+4. 고른 것을 `--set-assignment '축=engine/model/effort'` 로 저장하고,
+   `--show-assignments` 를 다시 보여줘 확정한다.
+
+**한도 소진 플레이북**: claude(또는 codex) 사용량이 다 떨어졌으면 축별 설정을 건드리지
+말고 `--set-engine codex` (복귀는 `--set-engine codex,claude`). 가용 목록 밖 엔진을
+가리키는 축 오버라이드는 **그동안 자동 무시**되므로 전환-복귀가 배정표를 훼손하지 않는다.
+사용자가 한도를 언급하면 이 전환을 먼저 제안한다 — 한도가 차기 *전에* 미리 설정해 두겠냐고
+묻는 것도 좋다.
 혼합 라운드에서 한 엔진 소속 리뷰어가 전원 PARSE-FAIL 이면 경고가 뜬다 — 그 GO 는
 반쪽짜리이므로 해당 엔진 상태(로그인 등)를 확인하고 재실행한다.
 

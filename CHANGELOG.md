@@ -40,6 +40,20 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ## 2026-07-31
 
+### ✨ red-team — 축별 배정을 config 로 조정 + AskUserQuestion 설정 플로우
+
+코드의 GATES/TIERS 는 **추천 기본값**이 되고, 사용자별 조정은 `config.json` 의
+`assignments` 에 얹힌다. 우선순위: CLI `--model/--effort`(전 리뷰어 강제) >
+`assignments[축]` > tier/prefer 기본.
+
+- `--show-assignments` — 유효 배정표 + 축 성격(왜 이 tier 인가) + 오버라이드/추천 병기
+- `--set-assignment '축=engine/model/effort'` 저장, `'축='` 로 추천 복귀 (반복 지정 가능)
+- 가용 목록 밖 엔진을 가리키는 오버라이드는 자동 무시 — 한도 소진 시
+  `--set-engine codex` 한 방 전환이 축별 설정에 발목 잡히지 않고, 복귀하면 되살아난다
+- SKILL.md 에 사용자 요청("리뷰 배정 바꿔줘", "claude 아껴야 해" 등) 시
+  AskUserQuestion 으로 [codex only / claude only / 추천 복귀 / 축별 세부 조정]을
+  제시하는 플로우와 한도 소진 플레이북을 문서화 — 한도가 차기 전에 미리 설정하게 한다
+
 ### ✨ red-team — 배정별·축별 비용 대비 성과 리포트 (`report_usage.py`)
 
 라운드가 쌓이면 `report_usage.py [repo/브랜치 조각]` 으로 배정(engine/model/effort)별·

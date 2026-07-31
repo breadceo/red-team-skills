@@ -76,6 +76,7 @@ def main():
         assert codex[-3:] == ["codex", "exec", "PROMPT"], codex
         assert "--cwd" in codex and "/repo" in codex
         assert "--model" in codex and "gpt-5.6-sol" in codex, codex
+        assert codex[codex.index("--format") + 1] == "json", codex  # 토큰 집계용 스트림
         assert json.loads(env["CODEX_CONFIG"]) == {"model_reasoning_effort": "high"}, env
         _, env0 = rr.engine_cmd("codex", "P", "/repo", None, None)
         assert "CODEX_CONFIG" not in env0 or env0["CODEX_CONFIG"] == os.environ.get("CODEX_CONFIG")
@@ -85,6 +86,7 @@ def main():
         assert claude[:3] == ["claude", "-p", "PROMPT"], claude
         assert "--model" in claude and "opus" in claude, claude
         assert claude[claude.index("--effort") + 1] == "high", claude
+        assert claude[claude.index("--output-format") + 1] == "json", claude  # 토큰 집계용
         # hook·skill 은 끄고, 인증까지 끊는 --bare 는 쓰지 않는다(실측: Not logged in 으로 죽는다)
         assert "--disable-slash-commands" in claude, claude
         assert claude[claude.index("--settings") + 1] == '{"hooks":{}}', claude
@@ -99,6 +101,39 @@ def main():
         except SystemExit:
             pass
 
+        # parse_output: claude 는 JSON 래핑에서 result 와 usage 를 꺼낸다
+        wrapped = json.dumps({"result": "리뷰 본문", "total_cost_usd": 0.28,
+                              "usage": {"input_tokens": 2, "cache_creation_input_tokens": 46816,
+                                        "cache_read_input_tokens": 0, "output_tokens": 4}})
+        text, tok = rr.parse_output("claude", "경고 한 줄\n" + wrapped + "\n", "sonnet")
+        assert text == "리뷰 본문" and tok == {"input": 46818, "output": 4,
+                                              "total": 46822, "cost_usd": 0.28}, (text, tok)
+
+        # parse_output: codex 는 ACP 스트림에서 chunk 연결 + result.usage 를 꺼낸다
+        stream = "\n".join(json.dumps(x) for x in [
+            {"jsonrpc": "2.0", "method": "session/update",
+             "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "리뷰 "}}}},
+            {"jsonrpc": "2.0", "method": "session/update",
+             "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "본문"}}}},
+            {"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn",
+             "usage": {"totalTokens": 23406, "inputTokens": 14441, "cachedReadTokens": 8960,
+                       "outputTokens": 5, "thoughtTokens": 0}}},
+        ])
+        text, tok = rr.parse_output("codex", stream, "gpt-5.6-sol")
+        assert text == "리뷰 본문", text
+        # inputTokens 는 캐시 제외 — input = 14441+8960 = 23401.
+        # 비용: 14441*5 + 8960*0.5 + 5*30 = 76835 → $0.0768
+        assert tok == {"input": 23401, "output": 5, "total": 23406, "cost_usd": 0.0768}, tok
+        # 단가표에 없는 모델은 토큰만 집계하고 비용은 비운다
+        _, tok2 = rr.parse_output("codex", stream, "unknown-model")
+        assert tok2["cost_usd"] is None, tok2
+
+        # 래핑 파싱 실패 시 원문 폴백 — 라운드가 죽는 대신 토큰 집계만 빠진다
+        text, tok = rr.parse_output("claude", "그냥 텍스트", None)
+        assert text == "그냥 텍스트" and tok is None
+        text, tok = rr.parse_output("codex", '```json\n{"verdict":"GO","findings":[]}\n```', None)
+        assert "verdict" in text and tok is None
+
         # e2e: 엔진을 가짜로 갈아끼우고 코드 게이트 한 라운드 — 혼합 배정이 round.json 에 남는가
         fake = ("echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'")
         rr.engine_cmd = lambda e, p, c, m, ef: (["/bin/sh", "-c", fake], dict(os.environ))
@@ -112,8 +147,10 @@ def main():
         rj = json.loads((out / "round.json").read_text())
         assert rj["verdict"] == "GO" and rj["engine"] == "codex+claude", rj
         assert set(rj["assignments"]) == set(rj["reviewers"]) and len(rj["reviewers"]) == 5
-        assert rj["assignments"]["a-code"] == {"engine": "codex", "model": "gpt-5.6-sol",
-                                               "effort": "high", "tier": "deep"}, rj["assignments"]
+        a = rj["assignments"]["a-code"]
+        assert (a["engine"], a["model"], a["effort"], a["tier"]) == \
+            ("codex", "gpt-5.6-sol", "high", "deep"), rj["assignments"]
+        assert a["tokens"] is None  # 가짜 엔진은 래핑이 없으니 토큰 집계가 빠진다 (폴백 경로)
         assert rj["assignments"]["b3-visibility"]["engine"] == "claude"
         assert all(v == "GO" for v in rj["reviewers"].values()), rj["reviewers"]
 

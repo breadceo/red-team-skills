@@ -79,11 +79,13 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
         # effort 는 CODEX_CONFIG env 로 준다 — acpx 는 codex 의 `-c` 를 노출하지 않지만
         # codex-acp 어댑터가 이 env 의 JSON 을 세션 config 에 병합한다(어댑터 README).
         # model 은 검증된 경로인 acpx --model 로 준다.
+        # `--format json`(ACP JSON-RPC 스트림)은 토큰 사용량을 받기 위한 것이다 — parse_output 참고.
         env = dict(os.environ)
         if effort:
             env["CODEX_CONFIG"] = json.dumps({"model_reasoning_effort": effort})
         return [ACPX, "--approve-all", "--non-interactive-permissions", "deny", "--cwd", cwd,
-                *(["--model", model] if model else []), "codex", "exec", prompt], env
+                *(["--model", model] if model else []), "--format", "json",
+                "codex", "exec", prompt], env
     if engine == "claude":
         # hook·skill 을 끈다 — 리뷰어 세션에 다른 스킬의 프로토콜이 끼면 턴 하나를
         # 그쪽에 다 쓰고 리뷰가 밀린다(hipocampus FIRST RESPONSE RULE 로 실측).
@@ -92,6 +94,7 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
         return ["claude", "-p", prompt, "--disable-slash-commands",
                 "--settings", '{"hooks":{}}', *(["--model", model] if model else []),
                 *(["--effort", effort] if effort else []),
+                "--output-format", "json",
                 "--allowedTools", "Read,Grep,Glob,Bash"], dict(os.environ)
     sys.exit(f"모르는 엔진: {engine} — {'|'.join(ENGINES)} 중 하나여야 한다.")
 
@@ -254,6 +257,65 @@ def build(reviewer: str, context: str) -> str:
     return tpl.replace("{{CONTEXT}}", context).replace("{{AXIS}}", axis)
 
 
+# codex 는 subscription 이라 CLI 가 비용을 안 준다 — 환산 단가($/1M input, output).
+# OpenAI 표준대로 cached input 은 input 단가의 10% 로 계산한다.
+CODEX_PRICES = {"gpt-5.6-sol": (5.0, 30.0), "gpt-5.6-terra": (2.5, 15.0), "gpt-5.6-luna": (1.0, 6.0)}
+
+
+def parse_output(engine: str, stdout: str, model: str | None):
+    """JSON 래핑 출력에서 (리뷰 텍스트, tokens dict|None) 를 꺼낸다.
+
+    래핑 파싱이 실패하면 stdout 을 그대로 텍스트로 돌려준다 — CLI 출력 형식이 바뀌어도
+    라운드가 죽는 대신 토큰 집계만 빠진다. tokens 는 {"input","output","total","cost_usd"}.
+    """
+    if engine == "claude":
+        # `--output-format json`: 한 개의 JSON 객체. 리뷰 본문은 .result, 사용량은 .usage.
+        try:
+            d = json.loads(stdout[stdout.index("{"):stdout.rindex("}") + 1])
+            u = d["usage"]
+            inp = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) \
+                + u.get("cache_read_input_tokens", 0)
+            out = u.get("output_tokens", 0)
+            return d.get("result") or "", {"input": inp, "output": out,
+                                           "total": inp + out, "cost_usd": d.get("total_cost_usd")}
+        except (ValueError, KeyError, TypeError):
+            return stdout, None
+    if engine == "codex":
+        # acpx `--format json`: ACP JSON-RPC 스트림. 본문은 agent_message_chunk 조각의 연결,
+        # 사용량은 session/prompt 응답의 result.usage 다.
+        text, usage = [], None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            upd = (d.get("params") or {}).get("update") or {}
+            if upd.get("sessionUpdate") == "agent_message_chunk":
+                text.append((upd.get("content") or {}).get("text") or "")
+            if isinstance(d.get("result"), dict) and "usage" in d["result"]:
+                usage = d["result"]["usage"]
+        if not text and usage is None:
+            return stdout, None
+        tokens = None
+        if usage:
+            # inputTokens 는 캐시를 **제외한** 입력이다 — 실측 검산:
+            # totalTokens(23406) = inputTokens(14441) + cachedReadTokens(8960) + output(5).
+            fresh, cached = usage.get("inputTokens", 0), usage.get("cachedReadTokens", 0)
+            out = usage.get("outputTokens", 0) + usage.get("thoughtTokens", 0)
+            cost = None
+            if model in CODEX_PRICES:
+                in_rate, out_rate = CODEX_PRICES[model]
+                cost = (fresh * in_rate + cached * in_rate * 0.1 + out * out_rate) / 1e6
+            tokens = {"input": fresh + cached, "output": out,
+                      "total": usage.get("totalTokens", fresh + cached + out),
+                      "cost_usd": round(cost, 4) if cost is not None else None}
+        return "".join(text), tokens
+    return stdout, None
+
+
 def extract_json(raw: str):
     """마지막 fenced json 블록을 findings 로 읽는다. 없으면 None."""
     blocks = re.findall(r"```json\s*\n(.*?)\n```", raw, re.S)
@@ -273,10 +335,11 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
     prompt = build(reviewer, context)
     (out / f"{reviewer}.prompt.md").write_text(prompt)
     cmd, env = engine_cmd(engine, prompt, cwd, model, effort)
+    stdout = ""
     try:
         p = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, timeout=timeout, env=env)
-        raw = p.stdout + p.stderr
+        stdout, raw = p.stdout, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
         raw = f"[TIMEOUT after {timeout}s]\n" + (e.stdout or "") + (e.stderr or "")
     (out / f"{reviewer}.txt").write_text(raw)
@@ -285,17 +348,21 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
     # 리뷰어가 없는 파일 경로를 추측하는 것은 정상이므로, cwd 자체에 닿지 못한 경우만 센다.
     lost = sum(1 for line in raw.splitlines()
                if cwd in line and ("No such file or directory" in line or "not a git repository" in line))
-    parsed = extract_json(raw)
+    text, tokens = parse_output(engine, stdout, model)
+    parsed = extract_json(text)
     (out / f"{reviewer}.json").write_text(json.dumps(parsed, ensure_ascii=False, indent=2)
                                           if parsed else "null")
     warn = f"  ⚠ 파일접근오류 {lost}건 — 이 리뷰어 결과는 신뢰할 수 없다" if lost else ""
     label = f"[{engine}/{model or 'default'}/{effort or 'default'}]"
+    if tokens:
+        label += f" {tokens['total']/1000:.1f}k tok" \
+                 + (f" ${tokens['cost_usd']:.2f}" if tokens.get("cost_usd") is not None else "")
     if parsed is None:
         print(f"  {reviewer:24} PARSE-FAIL  {label}{warn}", flush=True)
     else:
         print(f"  {reviewer:24} {len(parsed['findings'])} findings  "
               f"{parsed.get('verdict', '?')}  {label}{warn}", flush=True)
-    return reviewer, parsed, lost
+    return reviewer, parsed, lost, tokens
 
 
 def main():
@@ -380,8 +447,9 @@ def main():
               "assignments": {r: {"engine": e, "model": m, "effort": ef, "tier": t}
                               for r, (e, m, ef, t) in assignments.items()},
               "reviewers": {}, "findings": [], "access_errors": {}}
-    for r, parsed, lost in results:
+    for r, parsed, lost, tokens in results:
         merged["reviewers"][r] = parsed.get("verdict") if parsed else "PARSE-FAIL"
+        merged["assignments"][r]["tokens"] = tokens
         if lost:
             merged["access_errors"][r] = lost
         for f in (parsed or {}).get("findings", []):
@@ -404,6 +472,12 @@ def main():
     (out / "round.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2))
 
     print(f"\n{merged['verdict']}  {merged['counts']}")
+    toks = [a["tokens"] for a in merged["assignments"].values() if a.get("tokens")]
+    if toks:
+        total = sum(t["total"] for t in toks)
+        costs = [t["cost_usd"] for t in toks if t.get("cost_usd") is not None]
+        print(f"tokens: {total/1000:.1f}k 합계"
+              + (f", ${sum(costs):.2f} (API 환산가, {len(costs)}/{len(reviewers)} 리뷰어 집계)" if costs else ""))
     if merged["verdict"] == "INVALID":
         print(f"⚠ 리뷰어 전원이 결과를 내지 못했다 — 이 라운드는 판정이 아니다.\n"
               f"  engines={'+'.join(engines)} 이 실제로 돌았는지 확인한다"
@@ -412,7 +486,7 @@ def main():
         # 혼합 라운드에서 한 엔진만 통째로 죽으면(예: claude 로그인 풀림) 나머지 엔진의
         # GO 에 묻혀 조용히 통과한다 — 7/30 `Not logged in` 사고의 재발 경로라 표면화한다.
         by_engine = {}
-        for r, parsed, _lost in results:
+        for r, parsed, _lost, _tokens in results:
             by_engine.setdefault(assignments[r][0], []).append(parsed is None)
         for e, fails in by_engine.items():
             if all(fails):

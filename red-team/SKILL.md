@@ -97,7 +97,21 @@ Sol recall 69.7% vs Terra 52.5% — 절제형(precision 우선) 모델을 deep �
 강제 override 다(엔진별 비교 실측용).
 
 어떤 배정으로 돌았는지는 `round.json` 의 `engine`(요약)과 `assignments`(리뷰어별
-engine/model/effort/tier)에 남는다 — 라운드를 재현하거나 엔진별 결과 차이를 볼 때 본다.
+engine/model/effort/tier + **tokens**)에 남는다 — 라운드를 재현하거나 엔진별 결과 차이를
+볼 때 본다. `tokens` 는 리뷰어별 `{input, output, total, cost_usd}` 다. subscription 이라
+실청구는 아니고 **API 환산가**다 — claude 는 CLI 가 주는 값, codex 는 로컬 단가표
+(`CODEX_PRICES`)로 계산하며 단가표에 없는 모델은 토큰만 남고 비용은 `null` 이다.
+CLI 출력 형식이 바뀌어 래핑 파싱이 실패하면 라운드는 그대로 돌고 토큰 집계만 빠진다.
+
+라운드가 몇 번 쌓이면 **배정이 값을 하는지**(regression/달러)를 표로 본다:
+
+```bash
+python3 ~/.claude/skills/red-team/scripts/report_usage.py [repo/브랜치 조각]
+```
+
+분자는 `classification == regression` 이다 — raw findings 를 세면 말 많은 모델이
+과대평가된다. cheap 축의 0 건은 낭비가 아니라 커버리지 보험이므로, 표는 판단 재료이고
+배정 축소는 사람이 결정한다.
 혼합 라운드에서 한 엔진 소속 리뷰어가 전원 PARSE-FAIL 이면 경고가 뜬다 — 그 GO 는
 반쪽짜리이므로 해당 엔진 상태(로그인 등)를 확인하고 재실행한다.
 

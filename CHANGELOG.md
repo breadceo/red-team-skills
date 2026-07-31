@@ -40,6 +40,29 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ## 2026-07-31
 
+### ✨ red-team — 배정별·축별 비용 대비 성과 리포트 (`report_usage.py`)
+
+라운드가 쌓이면 `report_usage.py [repo/브랜치 조각]` 으로 배정(engine/model/effort)별·
+축별 실행 수, 토큰, 비용, regression 수, $/regression 표를 본다. 분자는
+`classification == regression`(raw findings 는 말 많은 모델을 과대평가한다),
+구버전 라운드(assignments 없음)와 토큰 미집계 라운드는 분리 표기된다.
+decisions.md 의 반영 수 조인("accepted/$")은 필요해지면 붙인다.
+
+### ✨ red-team — 리뷰어별 토큰 사용량·비용 집계
+
+subscription 기반이라 청구서로는 엔진별 사용량을 알 수 없었는데, 두 CLI 모두 호출별
+usage 를 내려준다는 것을 확인하고 라운드에 집계를 붙였다.
+
+- claude 는 `--output-format json` 의 `usage`/`total_cost_usd`, codex 는 acpx
+  `--format json`(ACP 스트림)의 `result.usage` 에서 토큰을 꺼낸다 (`parse_output`)
+- `round.json` 의 `assignments` 에 리뷰어별 `tokens: {input, output, total, cost_usd}` 가
+  남고, 라운드 끝에 합계가 출력된다. 비용은 API 환산가 — claude 는 CLI 값,
+  codex 는 로컬 단가표(`CODEX_PRICES`, cached input 10%)로 계산한다
+- 래핑 파싱이 실패하면(CLI 출력 형식 변경 등) 원문 폴백으로 라운드는 그대로 돌고
+  토큰 집계만 빠진다 — 집계 기능이 리뷰를 죽이는 경로를 만들지 않는다
+- raw 로그(`<리뷰어>.txt`)는 이제 JSON 래핑/스트림 형태다 — 사람이 읽을 리뷰 본문이
+  필요하면 `.prompt.md` 와 `.json`(findings)을 본다
+
 ### ✨ red-team — 리뷰어 축별 모델·effort·엔진 차별화
 
 지금까지 라운드의 리뷰어 5명은 전원 같은 엔진·같은 모델·같은 effort(예: codex 면

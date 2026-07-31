@@ -1,0 +1,40 @@
+red-team/SKILL.md
+  69fcc4f3831bfb5a 40-42,44-54
+CHANGELOG.md
+  69fcc4f3831bfb5a 68-73
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "99559f7d838ae4eec781049ce21cee77d84f115c",
+  "prompts": {
+    "69fcc4f3831bfb5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f101818a-09f4-4c98-9512-108664f803b2",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall",
+          "ts": "2026-07-31T00:41:27.484Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 23,
+        "Bash": 51,
+        "Edit": 21,
+        "Agent": 3,
+        "Skill": 1,
+        "ToolSearch": 3,
+        "TaskStop": 2,
+        "WebSearch": 1,
+        "WebFetch": 5,
+        "AskUserQuestion": 2,
+        "Write": 1
+      },
+      "total_additions": 20,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

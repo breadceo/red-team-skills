@@ -204,8 +204,9 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
     <reviewer>.prompt.md    ← 실제로 보낸 프롬프트 전문
     <reviewer>.txt          ← 리뷰어 raw 출력
     <reviewer>.json         ← 파싱된 findings
-    round.json              ← 병합 결과 + verdict + counts + access_errors
+    round.json              ← 병합 결과 + verdict + counts + access_errors (+ reruns)
     decisions.md            ← 처리 결과 (사람이 쓴다, 아래 참고)
+    <reviewer>.superseded-<stamp>.*  ← 부분 재실행으로 교체된 이전 산출물 (지우지 않는다)
 ```
 
 **포인터 파일은 없다.** `<repo>/<branch>` 가 곧 키이고 그건 작업 중인 워크트리에서 나온다
@@ -221,8 +222,29 @@ PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증�
 `--out` 으로 돌린 결과는 `runs/` 밖에 있으니 `resume.py` 가 찾지 않는다 — 실험이 진행 상황을
 오염시키지 않는다.
 
-`PARSE-FAIL` 이 나오면 그 리뷰어만 1회 재실행한다. 두 번 실패하면 raw 출력을 직접 읽어
-findings 를 손으로 옮긴다 — 리뷰어의 판단을 버리지 않는다.
+### 부분 재실행은 원 라운드에 병합한다 — `round.json` 을 손으로 고치지 않는다
+
+`PARSE-FAIL` 이나 파일접근오류가 한두 축에만 나면 **라운드를 버리지 않는다.** 그 축만 다시
+돌려 같은 라운드에 병합한다:
+
+```bash
+python3 ~/.claude/skills/red-team/scripts/run_round.py \
+  --gate code --merge-into ~/.red-team/runs/<repo>/<branch>/code-9 \
+  --reviewers b1-state-matrix
+```
+
+`--cwd` 와 `--context` 는 생략한다 — 그 라운드의 `repo_cwd` 와 `context.md` 를 쓴다.
+다른 컨텍스트를 주면 거절한다(라운드가 자체 재현성을 잃는다). 병합이 하는 일:
+
+- 그 리뷰어의 `.txt/.json/.prompt.md` 를 새 결과로 교체하고 이전 것은
+  `<reviewer>.superseded-<stamp>.*` 로 **남긴다** (교체 사실은 `reruns` 에 누적)
+- 그 리뷰어의 **이전 findings 를 걷어낸 뒤** 새 findings 를 넣는다 (남기면 처리 끝난 지적이 부활한다)
+- `access_errors` 에서 그 리뷰어를 지우고 `verdict`·`counts` 를 전수 재계산한다.
+  **전원 PARSE-FAIL 이면 GO 가 아니라 `INVALID`** 라는 규칙은 재계산에서도 유지된다
+
+두 번 실패하면 raw 출력을 직접 읽어 findings 를 손으로 옮긴다 — 리뷰어의 판단을 버리지 않는다.
+`--merge-into` 가 없던 동안에는 `--out` 으로 별 디렉토리에 돌린 뒤 `round.json` 을 손으로
+고치는 수밖에 없었고(`code-9` 실측), 그러면 무엇이 왜 바뀌었는지가 사라진다.
 
 ## findings 처리
 

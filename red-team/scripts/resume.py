@@ -233,8 +233,18 @@ def main():
     if ran:
         rj = json.loads((rd / "round.json").read_text())
         verdict, counts = rj.get("verdict", "?"), rj.get("counts")
+        # 경고만 한다(진행을 막지는 않는다) — 대신 치유 명령을 준다. 이 문구가 "무효" 를
+        # 단정하던 동안 사용자가 round.json 을 손으로 고쳤고, 감사 기록이 그만큼 망가졌다.
         if rj.get("access_errors"):
-            print(f"⚠ 이 라운드에 파일접근오류가 있다 {rj['access_errors']} — 무효로 보고 재실행한다.")
+            print(f"⚠ 이 라운드에 파일접근오류가 있다 {rj['access_errors']} — 그 리뷰어 결과는 믿을 수 없다.\n"
+                  f"  그 축만 다시 돌려 이 라운드에 병합한다(round.json 을 손으로 고치지 않는다):\n"
+                  f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
+                  f"      --gate {gate} --merge-into {rd} --reviewers {','.join(rj['access_errors'])}")
+        if (pf := [r for r, v in (rj.get("reviewers") or {}).items() if v == "PARSE-FAIL"]):
+            print(f"⚠ PARSE-FAIL 리뷰어가 있다 {pf} — 그 축이 빠진 판정은 반쪽짜리다.\n"
+                  f"  1회 재실행해 병합한다:\n"
+                  f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
+                  f"      --gate {gate} --merge-into {rd} --reviewers {','.join(pf)}")
 
     print(f"저장소   : {repo_cwd or '(못 찾음)'}" + (f"  [{how}]" if how else ""))
     print(f"직전 라운드: {rd.name}  (gate={gate}, verdict={verdict})")

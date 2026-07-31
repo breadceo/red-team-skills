@@ -22,7 +22,7 @@ usage:
 리뷰어 id 는 prompts/<id>.md 의 파일명이다. 기본값은 게이트에 따라 정해진다.
 stdin 은 DEVNULL 로 고정한다 — codex 는 stdin 이 TTY 가 아니면 EOF 를 기다리며 교착한다.
 """
-import argparse, json, os, re, shutil, subprocess, sys
+import argparse, json, os, re, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -448,6 +448,50 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
     return reviewer, parsed, lost, tokens
 
 
+def recompute(merged: dict) -> dict:
+    """`reviewers`·`findings` 에서 verdict·counts 를 다시 계산한다 — 새 라운드와 병합이 공용으로 쓴다.
+
+    아무도 결과를 못 낸 라운드는 GO 가 아니라 무효다. findings 0 == 결함 없음 처럼 보이지만
+    엔진이 로그인 안 됐거나 세션이 끊긴 경우와 구별되지 않는다 — claude 엔진 첫 실측에서
+    `Not logged in` 한 줄만 받고도 GO 가 찍혔다. 그 GO 를 믿으면 리뷰 없이 커밋한다.
+    병합 경로에서 findings 만 보고 재계산하면 이 규칙이 조용히 풀리므로 여기 한 곳에 둔다.
+    """
+    reg = [f for f in merged["findings"] if f.get("classification") == "regression"]
+    merged["verdict"] = ("INVALID" if merged["reviewers"]
+                         and all(v == "PARSE-FAIL" for v in merged["reviewers"].values())
+                         else "NO-GO" if reg else "GO")
+    merged["counts"] = {
+        "regression_P1": sum(1 for f in reg if f.get("severity") == "P1"),
+        "regression_P2": sum(1 for f in reg if f.get("severity") == "P2"),
+        "non_regression": len(merged["findings"]) - len(reg),
+    }
+    return merged
+
+
+def merge_prepare(target: Path, reviewers: list[str]) -> dict:
+    """부분 재실행을 원 라운드에 되돌릴 준비 — 이전 산출물을 보존하고 round.json 을 돌려준다.
+
+    이 경로가 없던 동안 유일한 수단은 `--out` 으로 별 디렉토리에 돌린 뒤 round.json 을 손으로
+    고치는 것이었다(실측: code-9). 그러면 무엇이 왜 바뀌었는지가 감사 기록에서 사라진다.
+    그래서 덮되 지우지 않는다 — 이전 파일은 `<reviewer>.superseded-<stamp>.*` 로 남고
+    교체 사실은 `reruns` 에 누적된다.
+    """
+    rj = target / "round.json"
+    if not rj.exists():
+        sys.exit(f"--merge-into: {rj} 가 없다 — 아직 돌지 않은 라운드에는 병합할 것이 없다.")
+    merged = json.loads(rj.read_text())
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    for r in reviewers:
+        for suf in (".txt", ".json", ".prompt.md"):
+            if (old := target / f"{r}{suf}").exists():
+                old.rename(target / f"{r}.superseded-{stamp}{suf}")
+        merged.setdefault("reruns", []).append(
+            {"reviewer": r, "at": stamp, "was": (merged.get("reviewers") or {}).get(r),
+             "was_access_errors": (merged.get("access_errors") or {}).get(r),
+             "superseded": f"{r}.superseded-{stamp}.*"})
+    return merged
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cwd")
@@ -457,6 +501,9 @@ def main():
                          "초안이 없으면 만들고 멈춘다 — 검토 후 다시 실행한다")
     ap.add_argument("--gate", choices=list(GATES), default="code")
     ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs/... 로 자동 결정")
+    ap.add_argument("--merge-into", default=None, metavar="ROUND_DIR",
+                    help="부분 재실행 결과를 그 라운드에 병합한다 (PARSE-FAIL·파일접근오류 치유). "
+                         "--reviewers 필수. 이전 산출물은 *.superseded-* 로 남고 reruns 에 기록된다")
     ap.add_argument("--reviewers", default=None, help="생략 시 게이트 기본값")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--model", default=None, help="전 리뷰어 모델 강제 (생략 시 축별 tier 배정)")
@@ -492,15 +539,30 @@ def main():
                   f"  스코프 밖·검증 상태를 채운 뒤 같은 명령을 다시 실행한다.\n"
                   f"  (판정 기준은 사람이 정한다 — 라운드마다 자동 재생성하지 않는다)")
             return
+    if a.merge_into:
+        tgt = Path(a.merge_into)
+        if a.out:
+            ap.error("--merge-into 와 --out 은 함께 쓸 수 없다 — 병합 대상이 곧 출력 위치다")
+        if not a.reviewers:
+            ap.error("--merge-into 는 --reviewers 가 필요하다 (전원 재실행이면 새 라운드를 돈다)")
+        if not (tgt / "round.json").exists():
+            ap.error(f"--merge-into: {tgt/'round.json'} 가 없다")
+        # 라운드의 입력은 그 라운드의 context.md 다. 다른 컨텍스트로 돈 결과를 섞으면
+        # round.json 과 context.md 가 어긋나 라운드가 자체 재현성을 잃는다.
+        if a.context and Path(a.context).resolve() != (tgt / "context.md").resolve():
+            ap.error("--merge-into 는 그 라운드의 context.md 로만 돈다 — --context 를 생략한다")
+        a.context = str(tgt / "context.md")
+        a.cwd = a.cwd or json.loads((tgt / "round.json").read_text()).get("repo_cwd")
     if not (a.cwd and a.context):
         ap.error("--cwd 와 (--context 또는 --from-zax) 가 필요하다")
     engines = resolve_engines(a.engine)
 
-    out = Path(a.out) if a.out else resolve_out(a.cwd, a.gate)
+    out = Path(a.merge_into) if a.merge_into else (Path(a.out) if a.out else resolve_out(a.cwd, a.gate))
     out.mkdir(parents=True, exist_ok=True)
     context = Path(a.context).read_text()
-    # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
-    (out / "context.md").write_text(context)
+    if not a.merge_into:
+        # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
+        (out / "context.md").write_text(context)
     # `--reviewers ""` 는 "리뷰어 없이 준비 확인만" 이다 — 기본값 폴백(`or`)으로 처리하면
     # 빈 지정이 조용히 게이트 전체가 되어, 준비 확인용 실행이 실제 엔진 호출로 번진다(실측: 테스트가 opus 를 돌렸다).
     spec = a.reviewers if a.reviewers is not None else ",".join(GATES[a.gate])
@@ -509,7 +571,7 @@ def main():
     assignments = {r: assign(r, a.gate, engines, a.model, a.effort, overrides) for r in reviewers}
     if reviewers:
         print(f"round: gate={a.gate}, engines={'+'.join(engines)}, {len(reviewers)} reviewers, cwd={a.cwd}\n"
-              f"  out: {out}", flush=True)
+              f"  {'merge-into' if a.merge_into else 'out'}: {out}", flush=True)
 
     # 계획서가 컨텍스트보다 새로우면 판정 기준이 낡았을 수 있다.
     # 구현 중 새 사실이 나와 계획을 고쳤는데 context.md 를 안 고치면, 리뷰어는 낡은 기준으로
@@ -529,6 +591,10 @@ def main():
         print("리뷰어 없음(--reviewers \"\") — 준비 확인만 했고 라운드는 돌리지 않는다.")
         return
 
+    # 병합 준비는 리뷰어를 돌리기 **전에** 한다 — 뒤로 밀면 방금 쓴 새 산출물을
+    # superseded 로 밀어내고 새 결과 파일이 사라진다(테스트로 잡힌 실패다).
+    prepared = merge_prepare(out, reviewers) if a.merge_into else None
+
     with ThreadPoolExecutor(max_workers=len(reviewers)) as ex:
         results = list(ex.map(
             lambda r: run(r, a.cwd, out, context, a.timeout, assignments[r]), reviewers))
@@ -537,33 +603,27 @@ def main():
     # 전역 가변 포인터와 다르다 — 덮어쓰이지 않고, 티켓 이름으로 진입할 때 워크트리를 찾는 근거가 된다.
     # reviewers 값은 verdict 문자열 규격을 유지한다(summarize_round.py 가 그 형태를 읽는다) —
     # 배정 상세는 assignments 에 따로 남긴다.
-    merged = {"repo_cwd": str(Path(a.cwd).resolve()), "gate": a.gate,
-              "engine": "+".join(engines),
-              "assignments": {r: {"engine": e, "model": m, "effort": ef, "tier": t}
-                              for r, (e, m, ef, t) in assignments.items()},
-              "reviewers": {}, "findings": [], "access_errors": {}}
+    merged = prepared if prepared is not None else {
+        "repo_cwd": str(Path(a.cwd).resolve()), "gate": a.gate,
+        "engine": "+".join(engines),
+        "assignments": {}, "reviewers": {}, "findings": [], "access_errors": {}}
     for r, parsed, lost, tokens in results:
+        e, m, ef, t = assignments[r]
         merged["reviewers"][r] = parsed.get("verdict") if parsed else "PARSE-FAIL"
-        merged["assignments"][r]["tokens"] = tokens
+        merged["assignments"][r] = {"engine": e, "model": m, "effort": ef, "tier": t,
+                                   "tokens": tokens}
+        # 재실행한 리뷰어의 이전 findings 는 걷어낸다 — 남기면 처리가 끝난 지적이 되살아난다.
+        # 새 라운드에서는 no-op 다.
+        merged["findings"] = [f for f in merged["findings"] if f.get("reviewer") != r]
         if lost:
             merged["access_errors"][r] = lost
+        else:
+            merged["access_errors"].pop(r, None)  # 병합으로 치유되면 사라져야 한다
         for f in (parsed or {}).get("findings", []):
             f.setdefault("axis", r)
             f["reviewer"] = r
             merged["findings"].append(f)
-    reg = [f for f in merged["findings"] if f.get("classification") == "regression"]
-    # 아무도 결과를 못 낸 라운드는 GO 가 아니라 무효다. findings 0 == 결함 없음 처럼 보이지만
-    # 엔진이 로그인 안 됐거나 세션이 끊긴 경우와 구별되지 않는다 — claude 엔진 첫 실측에서
-    # `Not logged in` 한 줄만 받고도 GO 가 찍혔다. 그 GO 를 믿으면 리뷰 없이 커밋한다.
-    if all(v == "PARSE-FAIL" for v in merged["reviewers"].values()):
-        merged["verdict"] = "INVALID"
-    else:
-        merged["verdict"] = "NO-GO" if reg else "GO"
-    merged["counts"] = {
-        "regression_P1": sum(1 for f in reg if f.get("severity") == "P1"),
-        "regression_P2": sum(1 for f in reg if f.get("severity") == "P2"),
-        "non_regression": len(merged["findings"]) - len(reg),
-    }
+    recompute(merged)
     (out / "round.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2))
 
     print(f"\n{merged['verdict']}  {merged['counts']}")
@@ -572,7 +632,8 @@ def main():
         total = sum(t["total"] for t in toks)
         costs = [t["cost_usd"] for t in toks if t.get("cost_usd") is not None]
         print(f"tokens: {total/1000:.1f}k 합계"
-              + (f", ${sum(costs):.2f} (API 환산가, {len(costs)}/{len(reviewers)} 리뷰어 집계)" if costs else ""))
+              + (f", ${sum(costs):.2f} (API 환산가, {len(costs)}/{len(merged['assignments'])} 리뷰어 집계)"
+                 if costs else ""))
     if merged["verdict"] == "INVALID":
         print(f"⚠ 리뷰어 전원이 결과를 내지 못했다 — 이 라운드는 판정이 아니다.\n"
               f"  engines={'+'.join(engines)} 이 실제로 돌았는지 확인한다"
@@ -580,17 +641,32 @@ def main():
     else:
         # 혼합 라운드에서 한 엔진만 통째로 죽으면(예: claude 로그인 풀림) 나머지 엔진의
         # GO 에 묻혀 조용히 통과한다 — 7/30 `Not logged in` 사고의 재발 경로라 표면화한다.
+        heal = (f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
+                f"      --merge-into {out} --reviewers ")
         by_engine = {}
         for r, parsed, _lost, _tokens in results:
             by_engine.setdefault(assignments[r][0], []).append(parsed is None)
-        for e, fails in by_engine.items():
-            if all(fails):
-                print(f"⚠ engine={e} 리뷰어 전원({sum(fails)}명)이 결과를 내지 못했다 — "
-                      f"그 축들이 빠진 {merged['verdict']} 는 반쪽짜리다. "
-                      f"{e} 상태를 확인하고 라운드를 재실행한다.")
+        dead_engines = [e for e, fails in by_engine.items() if all(fails)]
+        for e in dead_engines:
+            print(f"⚠ engine={e} 리뷰어 전원({len(by_engine[e])}명)이 결과를 내지 못했다 — "
+                  f"그 축들이 빠진 {merged['verdict']} 는 반쪽짜리다.\n"
+                  f"  {e} 상태를 확인한 뒤 그 축만 다시 돌려 이 라운드에 병합한다:\n"
+                  + heal + ",".join(r for r in reviewers if assignments[r][0] == e))
+        # 엔진이 통째로 죽은 게 아니라 일부만 PARSE-FAIL 이면 라운드를 버리지 않는다 —
+        # SKILL.md 가 "그 리뷰어만 1회 재실행" 을 지시하는데, 되돌릴 수단이 병합이다.
+        fail = [r for r, v in merged["reviewers"].items() if v == "PARSE-FAIL"]
+        if fail and not dead_engines:
+            print(f"⚠ PARSE-FAIL: {','.join(fail)} — 그 축이 빠진 {merged['verdict']} 는 반쪽짜리다.\n"
+                  f"  그 리뷰어만 1회 재실행해 이 라운드에 병합한다:\n" + heal + ",".join(fail))
     if merged["access_errors"]:
-        print(f"⚠ 파일접근오류: {merged['access_errors']} — 이 라운드는 무효로 보고 재실행한다.\n"
-              f"  리뷰 대상 디렉토리가 실행 중 사라지지 않는 위치인지 확인한다.")
+        # 이 리뷰어 결과만 신뢰할 수 없다 — 라운드 전체를 버릴 필요는 없고, 손으로 round.json 을
+        # 고칠 필요도 없다. 병합 경로가 verdict·counts·access_errors 를 다시 계산한다.
+        print(f"⚠ 파일접근오류: {merged['access_errors']} — 그 리뷰어 결과는 신뢰할 수 없다.\n"
+              f"  리뷰 대상 디렉토리가 실행 중 사라지지 않는 위치인지 확인한 뒤,\n"
+              f"  그 리뷰어만 다시 돌려 이 라운드에 병합한다:\n"
+              f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
+              f"      --merge-into {out} --reviewers {','.join(merged['access_errors'])}\n"
+              f"  (round.json 을 손으로 고치지 않는다 — 병합이 verdict·counts·access_errors 를 다시 계산한다)")
 
 
 if __name__ == "__main__":

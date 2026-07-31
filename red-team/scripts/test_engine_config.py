@@ -195,6 +195,46 @@ def main():
         assert rj["assignments"]["b3-visibility"]["engine"] == "claude"
         assert all(v == "GO" for v in rj["reviewers"].values()), rj["reviewers"]
 
+        # --merge-into: 한 축을 NO-GO 로 오염시킨 뒤 그 축만 재실행해 원 라운드를 치유한다
+        rj["reviewers"]["b1-state-matrix"] = "PARSE-FAIL"
+        rj["access_errors"]["b1-state-matrix"] = 3
+        rj["findings"] = [{"reviewer": "b1-state-matrix", "classification": "regression",
+                           "severity": "P1", "claim": "낡은 지적"},
+                          {"reviewer": "a-code", "classification": "pre-existing",
+                           "severity": "P2", "claim": "남아야 한다"}]
+        (out / "round.json").write_text(json.dumps(rj, ensure_ascii=False))
+        (out / "b1-state-matrix.txt").write_text("이전 raw")
+        sys.argv = ["run_round.py", "--gate", "code",
+                    "--merge-into", str(out), "--reviewers", "b1-state-matrix"]
+        rr.main()
+        m = json.loads((out / "round.json").read_text())
+        # 재실행한 축의 낡은 findings 는 걷히고, 다른 축 findings 는 그대로 남는다
+        assert [f["claim"] for f in m["findings"]] == ["남아야 한다"], m["findings"]
+        assert m["reviewers"]["b1-state-matrix"] == "GO" and len(m["reviewers"]) == 5, m["reviewers"]
+        assert "b1-state-matrix" not in m["access_errors"], m["access_errors"]
+        assert m["verdict"] == "GO" and m["counts"]["non_regression"] == 1, (m["verdict"], m["counts"])
+        # 감사 기록: 교체 사실이 남고 이전 raw 출력이 보존된다
+        assert m["reruns"][0]["reviewer"] == "b1-state-matrix", m.get("reruns")
+        assert m["reruns"][0]["was"] == "PARSE-FAIL" and m["reruns"][0]["was_access_errors"] == 3
+        sup = list(out.glob("b1-state-matrix.superseded-*.txt"))
+        assert len(sup) == 1 and sup[0].read_text() == "이전 raw", sup
+        assert m["repo_cwd"] == str(Path(td).resolve()), "병합이 repo_cwd 를 잃었다"
+
+        # 전원 PARSE-FAIL 로 남는 병합은 GO 가 아니라 INVALID (재계산에서도 규칙 유지)
+        m2 = dict(m, reviewers={k: "PARSE-FAIL" for k in m["reviewers"]}, findings=[])
+        assert rr.recompute(m2)["verdict"] == "INVALID", m2["verdict"]
+
+        # 가드: --merge-into 는 --out·전원 재실행·다른 컨텍스트를 거절한다
+        for argv in (["--merge-into", str(out), "--reviewers", "b1-state-matrix", "--out", str(out)],
+                     ["--merge-into", str(out)],
+                     ["--merge-into", str(out), "--reviewers", "a-code", "--context", str(ctx)]):
+            sys.argv = ["run_round.py", "--gate", "code"] + argv
+            try:
+                rr.main()
+                raise AssertionError(f"거절해야 한다: {argv}")
+            except SystemExit as e:
+                assert e.code != 0, argv
+
     print("ok")
 
 

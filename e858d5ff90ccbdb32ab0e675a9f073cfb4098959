@@ -1,0 +1,42 @@
+red-team/scripts/resume.py
+  69fcc4f3831bfb5a 129-154,192-197
+red-team/scripts/test_carry_forward.py
+  69fcc4f3831bfb5a 31,95-117
+CHANGELOG.md
+  69fcc4f3831bfb5a 43-51
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "e858d5ff90ccbdb32ab0e675a9f073cfb4098959",
+  "prompts": {
+    "69fcc4f3831bfb5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f101818a-09f4-4c98-9512-108664f803b2",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall",
+          "ts": "2026-07-31T00:41:27.484Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 27,
+        "Bash": 89,
+        "Edit": 51,
+        "Agent": 6,
+        "Skill": 1,
+        "ToolSearch": 3,
+        "TaskStop": 2,
+        "WebSearch": 1,
+        "WebFetch": 5,
+        "AskUserQuestion": 4,
+        "Write": 3
+      },
+      "total_additions": 92,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

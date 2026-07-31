@@ -1,0 +1,46 @@
+red-team/scripts/run_round.py
+  69fcc4f3831bfb5a 5,7,10,13-17,28-65,69-71,74-84,86,89-90,94-120,122-125,127-149,265-267,270-273,275,278,287,289,292,294,297,307-318,331,336,339-340,343-350,359,363-381,396,398-421
+red-team/scripts/test_engine_config.py
+  69fcc4f3831bfb5a 2,24,30-32,34-46,49-75,78-81,83-84,87,97,102-119
+red-team/SKILL.md
+  69fcc4f3831bfb5a 61-62,65-94
+CHANGELOG.md
+  69fcc4f3831bfb5a 41-72
+README.md
+  69fcc4f3831bfb5a 42,49-50
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "cdeadee9915725254b838f1ee9d27feab0fdc55c",
+  "prompts": {
+    "69fcc4f3831bfb5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f101818a-09f4-4c98-9512-108664f803b2",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall",
+          "ts": "2026-07-31T00:41:27.484Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 22,
+        "Bash": 44,
+        "Edit": 19,
+        "Agent": 2,
+        "Skill": 1,
+        "ToolSearch": 3,
+        "TaskStop": 2,
+        "WebSearch": 1,
+        "WebFetch": 5,
+        "AskUserQuestion": 2,
+        "Write": 1
+      },
+      "total_additions": 1506,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

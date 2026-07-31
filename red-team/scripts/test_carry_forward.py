@@ -28,6 +28,7 @@ DEC1 = """# code-1 처리 결과
 
 ## 반영 — 다음 컨텍스트의 `이미 반영된 지적` 이 된다
 - [b2] 버튼 A 가 죽어 있었다 → invalidate 연결 (커밋 aaa)
+  세부: 원인은 서버컴포넌트 캐시와 클라이언트 observer 가 별개였던 것
 
 ## 후속 티켓 — 다음 컨텍스트의 `스코프 밖` 이 된다
 - [b1] pre-existing 지연 → TICKET-111 신설
@@ -91,4 +92,26 @@ assert "git diff master..HEAD 가 진짜" in d, "마지막(실제) 절이 유실
 assert "구현은 아직 0%" not in d, "철 지난 기재가 남았다"
 assert d.count("TODO(resume)") == 2, f"TODO 개수 {d.count('TODO(resume)')}"
 
-print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리 모두 정상")
+# 8) 반영 블록이 KEEP_FULL(2)개를 넘으면 오래된 블록은 1줄 인덱스로 접힌다 (diet)
+DEC3 = DEC2.replace("code-2", "code-3").replace("대비 미달", "포커스 트랩 누락") \
+           .replace("TICKET-222", "TICKET-333")
+r4 = carry_forward(r3, DEC3, "code-3")
+assert "### code-1 에서 반영 (요약" in r4, "오래된 블록이 접히지 않았다"
+assert "버튼 A 가 죽어 있었다" in r4, "접힌 항목의 식별자 첫 줄이 유실됐다 — 재제기 방지가 깨진다"
+assert "원인은 서버컴포넌트 캐시" not in r4, "접힌 상세가 남아 있다 (decisions.md 에만 있어야 함)"
+# 최근 2개(code-2, code-3)는 전문 유지
+assert "### code-2 에서 반영\n" in r4 and "대비 미달" in r4, "최근 블록이 접혔다"
+assert "포커스 트랩 누락" in r4
+# 후속 티켓·스코프 밖은 diet 대상이 아니다
+assert "TICKET-111" in r4 and "TICKET-333" in r4
+
+# 9) 한 라운드 더 가도 접힌 블록이 이중으로 접히지 않는다 (멱등)
+DEC4 = DEC2.replace("code-2", "code-4").replace("대비 미달", "빈 목록 오안내") \
+           .replace("TICKET-222", "TICKET-444")
+r5 = carry_forward(r4, DEC4, "code-4")
+assert r5.count("### code-1 에서 반영 (요약") == 1, "요약 마커가 중복됐다"
+assert "### code-2 에서 반영 (요약" in r5, "code-2 가 오래된 블록이 됐는데 접히지 않았다"
+assert "버튼 A 가 죽어 있었다" in r5 and "대비 미달" in r5, "접힌 식별자가 유실됐다"
+
+print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
+      "오래된 반영 블록 접기(diet)·멱등 모두 정상")

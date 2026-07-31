@@ -126,6 +126,32 @@ def pending(decisions: str) -> str:
 
 
 PER_ROUND = ("## 리뷰 대상", "## 검증 상태")
+KEEP_FULL = 2  # '이미 반영된 지적'에서 전문을 유지할 최근 라운드 블록 수
+
+
+def fold_applied(body: str) -> tuple[str, int]:
+    """오래된 `### <round> 에서 반영` 블록을 톱레벨 불릿 첫 줄만 남기고 접는다.
+
+    컨텍스트는 리뷰어 5명 × 매 라운드에 실리므로 반영 기록 누적이 곧 토큰 누적이다.
+    재제기 억제에 필요한 것은 매칭 가능한 식별자 한 줄이지 결정 전문이 아니고,
+    전문은 각 라운드 decisions.md 에 그대로 있다 — 기록 삭제가 아니라 가시성 압축이다.
+    단, 잘못 접어 재제기가 하나라도 살아나면 라운드 하나가 통째로 추가돼 절감분을
+    다 되먹는다. 그래서 최근 KEEP_FULL 개는 전문 유지, 접는 쪽도 항목을 지우지 않는다.
+    """
+    parts = re.split(r"^(### .+)$", body, flags=re.M)
+    blocks = [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
+    if len(blocks) <= KEEP_FULL:
+        return body, 0
+    out, saved = [parts[0]], 0
+    for idx, (h, b) in enumerate(blocks):
+        if idx >= len(blocks) - KEEP_FULL or "(요약" in h:  # 최근 것·이미 접힌 것은 그대로
+            out += [h, b]
+            continue
+        kept = [l for l in b.splitlines() if l.startswith("- ")]
+        saved += max(0, len(b.strip().splitlines()) - len(kept))
+        out += [h.rstrip() + " (요약 — 전문은 그 라운드 decisions.md)",
+                "\n\n" + "\n".join(kept) + "\n\n"]
+    return "".join(out), saved
 
 
 def collapse_per_round(secs):
@@ -163,7 +189,12 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str) -> str:
     for i, (h, b) in enumerate(secs):
         if h.startswith("## 이미 반영된 지적") and applied:
             body = re.sub(r"^\s*없음[^\n]*\n?", "", b.strip(), flags=re.M)
-            secs[i] = (h, f"\n{body}\n\n### {prev_round} 에서 반영\n\n{applied}\n".replace("\n\n\n", "\n\n"))
+            merged = f"\n{body}\n\n### {prev_round} 에서 반영\n\n{applied}\n".replace("\n\n\n", "\n\n")
+            merged, saved = fold_applied(merged)
+            if saved:
+                print(f"   ↳ 오래된 반영 기록 {saved}줄을 1줄 인덱스로 접었다 "
+                      f"(최근 {KEEP_FULL}개 라운드 블록은 전문 유지, 전문은 각 라운드 decisions.md)")
+            secs[i] = (h, merged)
         elif h.startswith("## 스코프 밖") and deferred:
             secs[i] = (h, b.rstrip() + f"\n\n### {prev_round} 에서 후속 티켓으로 분리\n\n{deferred}\n")
         elif h.startswith(("## 리뷰 대상", "## 검증 상태")) and TODO not in b:

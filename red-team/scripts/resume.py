@@ -120,8 +120,10 @@ def block(decisions: str, keyword: str) -> str:
 def pending(decisions: str) -> str:
     """`보류` 절에 실제 항목이 남아 있으면 그 내용을 돌려준다."""
     b = block(decisions, "보류")
+    # 불릿은 마커 뒤 공백까지 요구한다(CommonMark) — `---`·`***` 는 수평선이지 항목이 아니다.
+    # 이걸 항목으로 세면 미결이 없는데 `--next` 가 막히고, 원인이 문서 관례라 잘 안 보인다.
     lines = [l for l in b.splitlines()
-             if l.strip().startswith(("-", "*")) and "없" not in l and "비운다" not in l]
+             if re.match(r"\s*[-*+]\s+\S", l) and "없" not in l and "비운다" not in l]
     return "\n".join(lines)
 
 

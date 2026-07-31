@@ -1,0 +1,46 @@
+red-team/scripts/run_round.py
+  69fcc4f3831bfb5a 82,87-88,97,260-318,335,338-339,342,348-349,351-352,354-359,362,365,447,449-450,452,472-480,486,489
+red-team/scripts/test_report_usage.py
+  69fcc4f3831bfb5a 1-68
+red-team/SKILL.md
+  69fcc4f3831bfb5a 100-114
+CHANGELOG.md
+  69fcc4f3831bfb5a 43-65
+red-team/scripts/report_usage.py
+  69fcc4f3831bfb5a 1-93
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "8defe4cc9f69c57afaa5faf6e5bdbc5dc3158d6f",
+  "prompts": {
+    "69fcc4f3831bfb5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f101818a-09f4-4c98-9512-108664f803b2",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall",
+          "ts": "2026-07-31T00:41:27.484Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 26,
+        "Bash": 79,
+        "Edit": 37,
+        "Agent": 5,
+        "Skill": 1,
+        "ToolSearch": 3,
+        "TaskStop": 2,
+        "WebSearch": 1,
+        "WebFetch": 5,
+        "AskUserQuestion": 3,
+        "Write": 3
+      },
+      "total_additions": 831,
+      "total_deletions": 0,
+      "overriden_lines": 40
+    }
+  }
+}

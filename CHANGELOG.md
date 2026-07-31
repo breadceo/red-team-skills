@@ -38,6 +38,38 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-07-31
+
+### ✨ red-team — 리뷰어 축별 모델·effort·엔진 차별화
+
+지금까지 라운드의 리뷰어 5명은 전원 같은 엔진·같은 모델·같은 effort(예: codex 면
+gpt-5.6-terra / medium)로 돌았다. 축 성격은 서로 다른데 스펙이 같으니, 체크리스트형
+축(상태 매트릭스·대비 계산)에는 과했고 복합 추론 축(회귀·인터랙션 추적)에는 부족했다 —
+특히 CodeRabbit 리뷰 벤치마크 기준 Terra 는 recall 52.5% 로 절제형이라, 결함을 **찾는**
+스킬의 deep 축에 쓰기엔 목적과 반대 성향이었다(Sol 은 69.7%).
+
+바뀐 것:
+
+- `GATES` 가 축별 spec(`tier`, `prefer`)을 갖는다. tier(deep/mid/cheap)가 엔진별
+  모델·reasoning effort 를 정한다 — codex 는 sol-high / terra-high / luna-medium,
+  claude 는 opus-high / sonnet-medium (haiku 는 쓰지 않는다).
+- `--set-engine codex,claude` 로 **가용 엔진을 복수 저장**할 수 있다. 두 엔진이 모두
+  가용하면 deep 축이 codex/claude 로 갈라져 같은 모델의 맹점이 전 축에 복제되는 것을
+  막는다. 한 엔진만 저장하면 기존처럼 전 리뷰어가 통일된다(prefer 는 폴백).
+- codex 의 effort 는 `CODEX_CONFIG` env(codex-acp 어댑터가 세션 config 에 병합)로,
+  claude 는 `--effort` 플래그로 전달한다. `--model`/`--effort` CLI 는 전 리뷰어 강제
+  override 로 남는다.
+- `round.json` 에 `assignments`(리뷰어별 engine/model/effort/tier)가 추가됐다.
+  `reviewers`(verdict 문자열)와 `engine` 필드 형태는 유지되므로 기존 소비자
+  (summarize_round.py, resume.py, pr-triage)는 그대로 동작한다.
+- 혼합 라운드에서 한 엔진 소속 리뷰어가 전원 PARSE-FAIL 이면 경고한다 — 남은 엔진의
+  GO 에 묻혀 조용히 통과하는 것을 막는다(7/30 `Not logged in` 사고의 재발 경로).
+
+마이그레이션: 없음. 기존 `config.json` 의 단수 `engine` 키를 그대로 읽고, 엔진을
+분산하고 싶을 때만 `--set-engine codex,claude` 를 한 번 실행한다.
+
+---
+
 ## 2026-07-30
 
 첫 커밋 이후의 변경 3건. 리뷰 엔진 설정(`~/.red-team/config.json`)과 누적 라운드

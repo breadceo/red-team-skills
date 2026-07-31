@@ -58,15 +58,40 @@ claude -p "reply with exactly: ok"    # 'ok' 가 나오면 준비됨
 리뷰어 세션에 다른 스킬의 세션 시작 프로토콜이 끼면 턴을 그쪽에 다 쓰고 리뷰가 밀린다.
 
 ```bash
-python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex   # 또는 claude
+python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex          # 한 엔진만
+python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex,claude   # 둘 다 (권장)
 ```
 
-**이후 바꿀 때도 같은 명령이다.** 이번 라운드만 다른 엔진으로 돌리려면 `--engine <x>`,
-CI·eval 처럼 프로세스 단위로 고정하려면 `RED_TEAM_ENGINE=<x>` 를 쓴다
-(우선순위: `--engine` > 환경변수 > `config.json`).
+**콤마로 여러 엔진을 저장하면 리뷰어가 축별로 분산된다** — 첫 항목이 기본(폴백)이다.
+**이후 바꿀 때도 같은 명령이다.** 이번 라운드만 바꾸려면 `--engine <x[,y]>`,
+CI·eval 처럼 프로세스 단위로 고정하려면 `RED_TEAM_ENGINE=<x[,y]>` 를 쓴다
+(우선순위: `--engine` > 환경변수 > `config.json`). 단일 엔진을 주면 전 리뷰어가 통일된다.
 
-어떤 엔진으로 돌았는지는 `round.json` 의 `engine` 에 남는다 — 라운드를 재현하거나
-엔진별 결과 차이를 볼 때 이 필드를 본다.
+#### 축별 모델·effort 배정
+
+리뷰어는 전원 같은 스펙으로 돌지 않는다. 축 성격이 tier 를 정하고, tier 가 엔진별
+모델·reasoning effort 를 정한다 (`run_round.py` 의 `GATES`/`TIERS`):
+
+| 축 | tier | codex | claude | 성격 |
+|---|---|---|---|---|
+| `a-code` | deep | gpt-5.6-sol / high | opus / high | 회귀·논리구멍 — 복합 추론 |
+| `b2-interaction` | deep | gpt-5.6-sol / high | opus / high | 핸들러→데이터소스 다단계 추적 |
+| `b4-null-propagation` | mid | gpt-5.6-terra / high | sonnet / medium | 미묘하지만 범위가 좁다 |
+| `b1-state-matrix` | cheap | gpt-5.6-luna / medium | sonnet / medium | 표 채우기 전수, 체크리스트형 |
+| `b3-visibility` | cheap | gpt-5.6-luna / medium | sonnet / medium | 색·대비 계산, 기계적 |
+| `a-plan` | deep | gpt-5.6-sol / high | opus / high | 계획 결함은 여기서 잡는 게 가장 싸다 |
+
+결함 탐지 축(deep)에 recall 우선 모델을 두는 근거: CodeRabbit 리뷰 벤치마크에서
+Sol recall 69.7% vs Terra 52.5% — 절제형(precision 우선) 모델을 deep 축에 쓰면
+스킬의 목적과 반대로 동작한다. Sol 의 높은 FP 는 P1/P2 분류와 사용자 게이트가 거른다.
+두 엔진이 모두 가용하면 deep 축이 codex/claude 로 갈라지는데, 같은 모델의 맹점이
+전 축에 복제되는 것을 막기 위한 의도적 분산이다. `--model`/`--effort` 는 전 리뷰어
+강제 override 다(엔진별 비교 실측용).
+
+어떤 배정으로 돌았는지는 `round.json` 의 `engine`(요약)과 `assignments`(리뷰어별
+engine/model/effort/tier)에 남는다 — 라운드를 재현하거나 엔진별 결과 차이를 볼 때 본다.
+혼합 라운드에서 한 엔진 소속 리뷰어가 전원 PARSE-FAIL 이면 경고가 뜬다 — 그 GO 는
+반쪽짜리이므로 해당 엔진 상태(로그인 등)를 확인하고 재실행한다.
 
 ### 1. 컨텍스트 파일을 쓴다
 

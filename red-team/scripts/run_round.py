@@ -2,13 +2,18 @@
 """red-team 라운드 1회 — 리뷰어를 병렬로 돌려 raw 출력과 findings JSON 을 남긴다.
 
 usage:
-  run_round.py --set-engine codex|claude          # 최초 1회 (이후 변경도 같은 명령)
+  run_round.py --set-engine codex,claude          # 최초 1회 (이후 변경도 같은 명령)
   run_round.py --cwd <repo> --context <file> [--gate code|plan] [--out <dir>]
-               [--reviewers a-code,b1-state-matrix,...] [--engine codex|claude]
+               [--reviewers a-code,b1-state-matrix,...] [--engine codex|claude|codex,claude]
   run_round.py --cwd <repo> --gate plan --from-zax <task>   # zax:task 산출물에서 컨텍스트 초안
 
-리뷰 엔진은 `~/.red-team/config.json` 에 저장된다. 우선순위는
+가용 엔진 목록은 `~/.red-team/config.json` 에 저장된다. 우선순위는
 `--engine` > `RED_TEAM_ENGINE` 환경변수 > config.json 이고, 셋 다 없으면 최초 설정을 안내한다.
+
+리뷰어는 전원 동일 스펙으로 돌지 않는다 — 축 성격별로 GATES 의 tier(deep/mid/cheap)가
+모델·reasoning effort 를 정하고, prefer 가 가용 엔진 안에 있으면 그 엔진으로 분산된다
+(없으면 첫 엔진으로 폴백). `--model`/`--effort` 는 전 리뷰어 강제 override 다.
+배정 결과는 round.json 의 `assignments` 에 남는다.
 
 산출물은 기본적으로 저장소 밖 `~/.red-team/runs/<repo>/<branch>/<gate>-<n>/` 에 쌓인다 —
 리뷰 대상 저장소를 오염시키지 않고, 라운드 간 컨텍스트가 보존되어 다음 라운드가 이어진다.
@@ -25,8 +30,39 @@ SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 GATES = {
-    "code": ["a-code", "b1-state-matrix", "b2-interaction", "b3-visibility", "b4-null-propagation"],
-    "plan": ["a-plan"],
+    "code": {
+        # 회귀·논리구멍·사실오류 — 변경 목적을 우회하는 경로 탐색, 복합 추론
+        "a-code":              {"tier": "deep",  "prefer": "codex"},
+        # surface × 상태 표 전수 — 체크리스트형. 코드는 읽어야 하니 low 가 아닌 medium
+        "b1-state-matrix":     {"tier": "cheap", "prefer": "codex"},
+        # 클릭→핸들러→데이터소스 추적 — 다단계 교차 추론.
+        # deep 축을 codex/claude 로 갈라 같은 모델의 맹점이 전 축에 복제되는 것을 막는다
+        "b2-interaction":      {"tier": "deep",  "prefer": "claude"},
+        # 최종 hex 확정 + 대비비 계산 — 기계적
+        "b3-visibility":       {"tier": "cheap", "prefer": "claude"},
+        # "판정 불가 vs 판정 결과 불가" 합쳐짐 감지 — 미묘하지만 범위가 좁다
+        "b4-null-propagation": {"tier": "mid",   "prefer": "claude"},
+    },
+    # 계획 결함은 구현 후 발견보다 압도적으로 싸다 — 여기 아끼지 않는다
+    "plan": {"a-plan": {"tier": "deep", "prefer": "codex"}},
+}
+# --reviewers 로 GATES 밖 커스텀 축을 주면 이 스펙으로 돈다 — 성격을 모르면 비싼 쪽이 안전하다
+DEFAULT_SPEC = {"tier": "deep", "prefer": None}
+
+# tier → (model, effort). 결함 탐지(deep)는 recall 우선 — CodeRabbit 리뷰 벤치마크에서
+# Sol recall 69.7% vs Terra 52.5%, Sol 의 높은 FP 는 P1/P2 분류·사용자 게이트가 거른다.
+# mid 는 Terra 의 recall 약점을 effort=high 로 보완. claude 하위 티어는 sonnet/medium 통일(haiku 금지).
+TIERS = {
+    "codex": {
+        "deep":  ("gpt-5.6-sol",   "high"),
+        "mid":   ("gpt-5.6-terra", "high"),
+        "cheap": ("gpt-5.6-luna",  "medium"),
+    },
+    "claude": {
+        "deep":  ("opus",   "high"),
+        "mid":   ("sonnet", "medium"),
+        "cheap": ("sonnet", "medium"),
+    },
 }
 
 ACPX = shutil.which("acpx") or os.path.expanduser("~/.local/share/mise/shims/acpx")
@@ -35,12 +71,19 @@ CONFIG = HOME_DIR / "config.json"
 ENGINES = ("codex", "claude")
 
 
-def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None) -> list[str]:
-    """엔진별 argv. 프롬프트 조립·JSON 추출·판정 병합은 엔진과 무관하므로,
+def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
+               effort: str | None) -> tuple[list[str], dict]:
+    """엔진별 (argv, env). 프롬프트 조립·JSON 추출·판정 병합은 엔진과 무관하므로,
     엔진을 바꾸는 일은 여기 한 곳을 갈아끼우는 것으로 끝난다."""
     if engine == "codex":
+        # effort 는 CODEX_CONFIG env 로 준다 — acpx 는 codex 의 `-c` 를 노출하지 않지만
+        # codex-acp 어댑터가 이 env 의 JSON 을 세션 config 에 병합한다(어댑터 README).
+        # model 은 검증된 경로인 acpx --model 로 준다.
+        env = dict(os.environ)
+        if effort:
+            env["CODEX_CONFIG"] = json.dumps({"model_reasoning_effort": effort})
         return [ACPX, "--approve-all", "--non-interactive-permissions", "deny", "--cwd", cwd,
-                *(["--model", model] if model else []), "codex", "exec", prompt]
+                *(["--model", model] if model else []), "codex", "exec", prompt], env
     if engine == "claude":
         # hook·skill 을 끈다 — 리뷰어 세션에 다른 스킬의 프로토콜이 끼면 턴 하나를
         # 그쪽에 다 쓰고 리뷰가 밀린다(hipocampus FIRST RESPONSE RULE 로 실측).
@@ -48,32 +91,62 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None) -> list[st
         # `Not logged in · Please run /login` 한 줄만 받는다(실측). 로그인은 정상인데도 그렇다.
         return ["claude", "-p", prompt, "--disable-slash-commands",
                 "--settings", '{"hooks":{}}', *(["--model", model] if model else []),
-                "--allowedTools", "Read,Grep,Glob,Bash"]
+                *(["--effort", effort] if effort else []),
+                "--allowedTools", "Read,Grep,Glob,Bash"], dict(os.environ)
     sys.exit(f"모르는 엔진: {engine} — {'|'.join(ENGINES)} 중 하나여야 한다.")
 
 
-def resolve_engine(cli_engine: str | None) -> str:
-    """--engine > RED_TEAM_ENGINE > config.json. 아무것도 없으면 최초 설정으로 돌려보낸다."""
-    engine = cli_engine or os.environ.get("RED_TEAM_ENGINE")
-    if not engine and CONFIG.exists():
-        engine = json.loads(CONFIG.read_text()).get("engine")
-    if not engine:
+def parse_engines(spec: str) -> list[str]:
+    """콤마 목록을 검증한다. 첫 항목이 기본(폴백) 엔진이다."""
+    engines = list(dict.fromkeys(e.strip() for e in spec.split(",") if e.strip()))
+    bad = [e for e in engines if e not in ENGINES]
+    if bad or not engines:
+        sys.exit(f"모르는 엔진: {', '.join(bad) or '(빈 값)'} — {'|'.join(ENGINES)} 를 콤마로 잇는다.")
+    return engines
+
+
+def resolve_engines(cli_engine: str | None) -> list[str]:
+    """--engine > RED_TEAM_ENGINE > config.json. 아무것도 없으면 최초 설정으로 돌려보낸다.
+
+    반환 리스트가 이번 라운드의 가용 엔진이다 — 리뷰어별 prefer 는 이 안에 있을 때만
+    존중되고, 없으면 첫 항목으로 폴백한다. 단일 엔진이면 자연히 전 리뷰어가 통일된다.
+    """
+    spec = cli_engine or os.environ.get("RED_TEAM_ENGINE")
+    if not spec and CONFIG.exists():
+        cfg = json.loads(CONFIG.read_text())
+        stored = cfg.get("engines") or ([cfg["engine"]] if cfg.get("engine") else [])
+        if stored:
+            return parse_engines(",".join(stored))
+    if not spec:
         sys.exit("리뷰 엔진이 설정되지 않았다. 최초 1회만 정하면 된다:\n"
-                 f"  python3 {__file__} --set-engine codex    # OpenAI codex CLI (acpx 경유)\n"
-                 f"  python3 {__file__} --set-engine claude   # Claude Code headless (claude -p)\n"
+                 f"  python3 {__file__} --set-engine codex          # 한 엔진만\n"
+                 f"  python3 {__file__} --set-engine codex,claude   # 축별 분산 (첫 항목이 기본)\n"
                  "이후 바꿀 때도 같은 명령이다. SKILL.md 0단계 참고.")
-    return engine
+    return parse_engines(spec)
 
 
-def set_engine(engine: str) -> None:
+def set_engine(spec: str) -> None:
+    engines = parse_engines(spec)
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     cfg = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-    cfg["engine"] = engine
+    cfg["engines"] = engines
+    cfg["engine"] = engines[0]  # 단수 키만 읽는 구버전 리더 호환
     CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
-    binary = "acpx" if engine == "codex" else "claude"
-    warn = "" if shutil.which(binary) or (engine == "codex" and Path(ACPX).exists()) \
-        else f"\n⚠ `{binary}` 를 PATH 에서 찾지 못했다 — 설치 후 라운드를 돌린다."
-    print(f"리뷰 엔진: {engine}  ({CONFIG}){warn}")
+    warn = ""
+    for e in engines:
+        binary = "acpx" if e == "codex" else "claude"
+        if not (shutil.which(binary) or (e == "codex" and Path(ACPX).exists())):
+            warn += f"\n⚠ `{binary}` 를 PATH 에서 찾지 못했다 — 설치 후 라운드를 돌린다."
+    print(f"리뷰 엔진: {', '.join(engines)}  ({CONFIG}){warn}")
+
+
+def assign(reviewer: str, gate: str, engines: list[str], model_override: str | None,
+           effort_override: str | None) -> tuple[str, str | None, str | None, str]:
+    """리뷰어 → (engine, model, effort, tier). CLI override 가 있으면 전 리뷰어에 강제된다."""
+    spec = GATES[gate].get(reviewer, DEFAULT_SPEC)
+    engine = spec["prefer"] if spec["prefer"] in engines else engines[0]
+    model, effort = TIERS[engine][spec["tier"]]
+    return engine, model_override or model, effort_override or effort, spec["tier"]
 
 
 def git(cwd: str, *args) -> str:
@@ -194,14 +267,15 @@ def extract_json(raw: str):
     return None
 
 
-def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int, model: str | None,
-        engine: str):
+def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
+        assignment: tuple[str, str | None, str | None, str]):
+    engine, model, effort, _tier = assignment
     prompt = build(reviewer, context)
     (out / f"{reviewer}.prompt.md").write_text(prompt)
-    cmd = engine_cmd(engine, prompt, cwd, model)
+    cmd, env = engine_cmd(engine, prompt, cwd, model, effort)
     try:
         p = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=timeout)
+                           text=True, timeout=timeout, env=env)
         raw = p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
         raw = f"[TIMEOUT after {timeout}s]\n" + (e.stdout or "") + (e.stderr or "")
@@ -215,11 +289,12 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int, model: s
     (out / f"{reviewer}.json").write_text(json.dumps(parsed, ensure_ascii=False, indent=2)
                                           if parsed else "null")
     warn = f"  ⚠ 파일접근오류 {lost}건 — 이 리뷰어 결과는 신뢰할 수 없다" if lost else ""
+    label = f"[{engine}/{model or 'default'}/{effort or 'default'}]"
     if parsed is None:
-        print(f"  {reviewer:24} PARSE-FAIL{warn}", flush=True)
+        print(f"  {reviewer:24} PARSE-FAIL  {label}{warn}", flush=True)
     else:
         print(f"  {reviewer:24} {len(parsed['findings'])} findings  "
-              f"{parsed.get('verdict', '?')}{warn}", flush=True)
+              f"{parsed.get('verdict', '?')}  {label}{warn}", flush=True)
     return reviewer, parsed, lost
 
 
@@ -234,10 +309,13 @@ def main():
     ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs/... 로 자동 결정")
     ap.add_argument("--reviewers", default=None, help="생략 시 게이트 기본값")
     ap.add_argument("--timeout", type=int, default=1800)
-    ap.add_argument("--model", default=None)
-    ap.add_argument("--engine", choices=ENGINES, default=None, help="이번 라운드만 다른 엔진")
-    ap.add_argument("--set-engine", choices=ENGINES, default=None,
-                    help="기본 리뷰 엔진을 저장하고 종료 (최초 1회 / 변경 시)")
+    ap.add_argument("--model", default=None, help="전 리뷰어 모델 강제 (생략 시 축별 tier 배정)")
+    ap.add_argument("--effort", default=None, help="전 리뷰어 effort 강제 (생략 시 축별 tier 배정)")
+    ap.add_argument("--engine", default=None,
+                    help="이번 라운드만 가용 엔진을 바꾼다 — 단일(codex)이면 전 리뷰어 통일, "
+                         "콤마(codex,claude)면 축별 분산")
+    ap.add_argument("--set-engine", default=None, metavar="ENGINES",
+                    help="가용 엔진을 저장하고 종료 (예: codex 또는 codex,claude — 첫 항목이 기본)")
     a = ap.parse_args()
 
     if a.set_engine:
@@ -255,16 +333,21 @@ def main():
             return
     if not (a.cwd and a.context):
         ap.error("--cwd 와 (--context 또는 --from-zax) 가 필요하다")
-    engine = resolve_engine(a.engine)
+    engines = resolve_engines(a.engine)
 
     out = Path(a.out) if a.out else resolve_out(a.cwd, a.gate)
     out.mkdir(parents=True, exist_ok=True)
     context = Path(a.context).read_text()
     # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
     (out / "context.md").write_text(context)
-    reviewers = [r.strip() for r in (a.reviewers or ",".join(GATES[a.gate])).split(",") if r.strip()]
-    print(f"round: gate={a.gate}, engine={engine}, {len(reviewers)} reviewers, cwd={a.cwd}\n"
-          f"  out: {out}", flush=True)
+    # `--reviewers ""` 는 "리뷰어 없이 준비 확인만" 이다 — 기본값 폴백(`or`)으로 처리하면
+    # 빈 지정이 조용히 게이트 전체가 되어, 준비 확인용 실행이 실제 엔진 호출로 번진다(실측: 테스트가 opus 를 돌렸다).
+    spec = a.reviewers if a.reviewers is not None else ",".join(GATES[a.gate])
+    reviewers = [r.strip() for r in spec.split(",") if r.strip()]
+    assignments = {r: assign(r, a.gate, engines, a.model, a.effort) for r in reviewers}
+    if reviewers:
+        print(f"round: gate={a.gate}, engines={'+'.join(engines)}, {len(reviewers)} reviewers, cwd={a.cwd}\n"
+              f"  out: {out}", flush=True)
 
     # 계획서가 컨텍스트보다 새로우면 판정 기준이 낡았을 수 있다.
     # 구현 중 새 사실이 나와 계획을 고쳤는데 context.md 를 안 고치면, 리뷰어는 낡은 기준으로
@@ -280,13 +363,22 @@ def main():
                   f"  계획을 고쳤다면 context.md 의 판정 기준(불변식·스코프 밖·확인 사항)도 같이 갱신했는지\n"
                   f"  확인한다. 계획서만 고치면 리뷰어가 낡은 기준으로 판정한다.", flush=True)
 
+    if not reviewers:
+        print("리뷰어 없음(--reviewers \"\") — 준비 확인만 했고 라운드는 돌리지 않는다.")
+        return
+
     with ThreadPoolExecutor(max_workers=len(reviewers)) as ex:
         results = list(ex.map(
-            lambda r: run(r, a.cwd, out, context, a.timeout, a.model, engine), reviewers))
+            lambda r: run(r, a.cwd, out, context, a.timeout, assignments[r]), reviewers))
 
     # repo_cwd 는 '이 라운드가 어디를 리뷰했나'는 라운드별 불변 기록이다.
     # 전역 가변 포인터와 다르다 — 덮어쓰이지 않고, 티켓 이름으로 진입할 때 워크트리를 찾는 근거가 된다.
-    merged = {"repo_cwd": str(Path(a.cwd).resolve()), "gate": a.gate, "engine": engine,
+    # reviewers 값은 verdict 문자열 규격을 유지한다(summarize_round.py 가 그 형태를 읽는다) —
+    # 배정 상세는 assignments 에 따로 남긴다.
+    merged = {"repo_cwd": str(Path(a.cwd).resolve()), "gate": a.gate,
+              "engine": "+".join(engines),
+              "assignments": {r: {"engine": e, "model": m, "effort": ef, "tier": t}
+                              for r, (e, m, ef, t) in assignments.items()},
               "reviewers": {}, "findings": [], "access_errors": {}}
     for r, parsed, lost in results:
         merged["reviewers"][r] = parsed.get("verdict") if parsed else "PARSE-FAIL"
@@ -314,8 +406,19 @@ def main():
     print(f"\n{merged['verdict']}  {merged['counts']}")
     if merged["verdict"] == "INVALID":
         print(f"⚠ 리뷰어 전원이 결과를 내지 못했다 — 이 라운드는 판정이 아니다.\n"
-              f"  engine={engine} 이 실제로 돌았는지 확인한다"
+              f"  engines={'+'.join(engines)} 이 실제로 돌았는지 확인한다"
               f"({out}/*.txt 첫 줄이 흔히 이유를 말해준다).")
+    else:
+        # 혼합 라운드에서 한 엔진만 통째로 죽으면(예: claude 로그인 풀림) 나머지 엔진의
+        # GO 에 묻혀 조용히 통과한다 — 7/30 `Not logged in` 사고의 재발 경로라 표면화한다.
+        by_engine = {}
+        for r, parsed, _lost in results:
+            by_engine.setdefault(assignments[r][0], []).append(parsed is None)
+        for e, fails in by_engine.items():
+            if all(fails):
+                print(f"⚠ engine={e} 리뷰어 전원({sum(fails)}명)이 결과를 내지 못했다 — "
+                      f"그 축들이 빠진 {merged['verdict']} 는 반쪽짜리다. "
+                      f"{e} 상태를 확인하고 라운드를 재실행한다.")
     if merged["access_errors"]:
         print(f"⚠ 파일접근오류: {merged['access_errors']} — 이 라운드는 무효로 보고 재실행한다.\n"
               f"  리뷰 대상 디렉토리가 실행 중 사라지지 않는 위치인지 확인한다.")

@@ -30,9 +30,11 @@ SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 # why 는 --show-assignments 가 "이 축은 어떤 일을 하니 무엇을 추천하나"로 출력한다.
+# core: --lean(MoE) 중간 라운드에서도 항상 도는 축. core 가 아닌 축은 "생략"이 아니라
+# "유예"다 — coverage 가 partial 인 GO 는 게이트 통과가 아니고, top-up 병합으로 채워야 확정된다.
 GATES = {
     "code": {
-        "a-code":              {"tier": "deep",  "prefer": "codex",
+        "a-code":              {"tier": "deep",  "prefer": "codex", "core": True,
                                 "why": "회귀·논리구멍·사실오류 — 변경 목적을 우회하는 경로 탐색, 복합 추론. recall 우선"},
         "b1-state-matrix":     {"tier": "cheap", "prefer": "codex",
                                 "why": "surface × 상태 표 전수 — 체크리스트형. 코드는 읽어야 하니 low 가 아닌 medium"},
@@ -44,7 +46,7 @@ GATES = {
                                 "why": "'판정 불가 vs 판정 결과 불가' 합쳐짐 감지 — 미묘하지만 범위가 좁다"},
     },
     "plan": {
-        "a-plan":          {"tier": "deep", "prefer": "codex",
+        "a-plan":          {"tier": "deep", "prefer": "codex", "core": True,
                             "why": "계획 결함은 구현 후 발견보다 압도적으로 싸다 — 여기 아끼지 않는다"},
         # 계획 게이트가 1축이던 동안 순서·경합 계열이 전부 코드 게이트로 새어나갔다
         # (B2C-52953: plan 1라운드 GO → code 9라운드, 그중 3라운드가 자체 회귀 검산).
@@ -263,6 +265,48 @@ def resolve_out(cwd: str, gate: str) -> Path:
     return base / f"{gate}-{n}"
 
 
+def lean_reviewers(gate: str, cwd: str) -> tuple[list[str], str]:
+    """MoE 중간 라운드의 축 = core + 직전 라운드에서 regression 을 낸 축.
+
+    "이번엔 필요 없어 보여서" 축을 빼는 판단은 이 스킬이 만들어진 사고 그 자체라 하지 않는다.
+    대신 결정적 규칙으로 **유예**한다 — 직전 라운드가 없으면 전체 축(베이스라인)이고,
+    결함을 낸 축은 그 수정을 재검증해야 하므로 자동으로 다시 켜지며, 축이 빠진 라운드의
+    GO 는 coverage=partial 로 기록되어 top-up 병합 전에는 게이트 통과가 아니다.
+    """
+    axes = GATES[gate]
+    rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd).glob(f"{gate}-*")
+              if re.fullmatch(rf"{gate}-\d+", d.name) and (rj := d / "round.json").exists()]
+    if not rounds:
+        return list(axes), "직전 라운드 없음 — 전체 축(베이스라인)"
+    prev = max(rounds)  # round.json mtime 기준 — 번호 순이 아니다 (resume.py 와 같은 이유)
+    hot = {f.get("reviewer") for f in json.loads(prev[2].read_text()).get("findings", [])
+           if f.get("classification") == "regression"}
+    sel = [a for a, spec in axes.items() if spec.get("core") or a in hot]
+    return sel, f"core + 직전({prev[2].parent.name})에서 regression 을 낸 축"
+
+
+DIFF_CAP = 200_000  # chars — 넘으면 프롬프트에 첨부하지 않는다 (프롬프트가 터진다)
+
+
+def diff_snapshot(cwd: str, base_ref: str | None) -> str:
+    """라운드 시작 시점의 diff 를 마크다운 절로 만든다. 빈 diff 면 빈 문자열.
+
+    리뷰어 N 명이 각자 `git diff` 를 다시 뜨는 탐색 턴이 실측 턴당 ~120K 토큰이었다 —
+    러너가 한 번 떠서 전원에게 같은 스냅샷을 준다. 리뷰어는 이걸로 시작하되
+    findings 의 근거는 여전히 파일에서 재확인한다(스냅샷 헤더가 그렇게 지시한다).
+    """
+    body = git(cwd, "diff", f"{base_ref}...HEAD") if base_ref else git(cwd, "diff", "HEAD")
+    if not body.strip():
+        return ""
+    status = git(cwd, "status", "--short")
+    label = f"`git diff {base_ref}...HEAD`" if base_ref else "`git diff HEAD` (작업 트리)"
+    return (f"\n\n## Diff 스냅샷 (자동 생성 — 라운드 시작 시점, {label})\n\n"
+            "리뷰어마다 같은 diff 를 다시 뜨는 탐색을 없애기 위해 러너가 첨부했다. "
+            "탐색은 이걸로 시작하되, findings 의 근거는 파일을 직접 열어 재확인한다.\n\n"
+            f"```diff\n{body}\n```\n"
+            + (f"\n### git status --short\n\n```\n{status}\n```\n" if status else ""))
+
+
 ZB_TASK_HOME = Path(os.environ.get("ZB_TASK_HOME", Path.home() / ".zb-task"))
 
 
@@ -313,6 +357,19 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
         body.append("## 판정 기준 (Spec AC · Gherkin)\n"
                     "아래 AC·시나리오가 이 변경의 판정 기준이다. "
                     "여기 적힌 동작이 코드에서 실제로 그렇게 되는지 본다.\n\n" + criteria)
+    if gate == "plan":
+        # 문서 6-구조 — B2C-52504 회고: 리뷰 32건 중 25건(78%)이 문서에서 예방 가능했고,
+        # 그 빈칸이 이 여섯이다. 채우는 절차(누락 행의 AskUserQuestion clarify)는 SKILL.md 에 있다.
+        body.append("## 판정 기준 — 문서 6-구조 커버리지\n"
+                    "각 행을 PRD·계획서와 대조해 채운다 — `반영(어디 — 인용)` / `해당 없음(이유)` / `누락`.\n"
+                    "인용 없는 `반영` 은 무효다. `누락` 은 라운드 전에 사용자에게 물어(clarify) 해소한다 (SKILL.md).\n\n"
+                    "| 구조 | 판정 | 근거·인용 |\n|---|---|---|\n"
+                    "| 1. 화면별 상태 매트릭스 (조회중·무효접근·조회실패·전제불일치·정상·만료) | <반영/해당없음/누락> | |\n"
+                    "| 2. 개념 사전 + 소비처 목록 (핵심 판정의 SSOT 와 쓰는 화면 전수) | <반영/해당없음/누락> | |\n"
+                    "| 3. 신뢰 경계 (딥링크·params 중 믿을 값 vs 서버 권위값으로 덮을 값) | <반영/해당없음/누락> | |\n"
+                    "| 4. 과도기 규정 (서버 반영 전 구간에 보여줄 것과 막을 것) | <반영/해당없음/누락> | |\n"
+                    "| 5. 집계·이벤트 시점 (어느 상태 전이에서, FE/BE 중 누가 세나) | <반영/해당없음/누락> | |\n"
+                    "| 6. BE 계약 위반 시 FE 기대 (규격 밖 값을 막나 통과시키나) | <반영/해당없음/누락> | |")
     # 인벤토리는 초안이 만들 수 없다(호출부 grep 은 변경 대상을 알아야 한다) — 자리만 남긴다.
     body.append("## 변경 대상 인벤토리 (전수 주장)\n"
                 "`<이 목록을 뽑은 명령 — 예: grep -rn \"getUsersMe\" apps/>` 기준. "
@@ -465,6 +522,12 @@ def recompute(merged: dict) -> dict:
         "regression_P2": sum(1 for f in reg if f.get("severity") == "P2"),
         "non_regression": len(merged["findings"]) - len(reg),
     }
+    # 축이 빠진 라운드의 GO 는 게이트 통과가 아니다 — 어떤 축이 빠졌는지를 라운드 자체에
+    # 남겨야 resume.py 와 사람이 top-up 전에 GO 로 읽는 사고를 막는다. 병합(top-up)이
+    # 리뷰어를 채우면 여기서 자동으로 full 로 돌아온다.
+    skipped = sorted(set(GATES.get(merged.get("gate"), {})) - set(merged["reviewers"]))
+    merged["coverage"] = "partial" if skipped else "full"
+    merged["skipped"] = skipped
     return merged
 
 
@@ -505,6 +568,14 @@ def main():
                     help="부분 재실행 결과를 그 라운드에 병합한다 (PARSE-FAIL·파일접근오류 치유). "
                          "--reviewers 필수. 이전 산출물은 *.superseded-* 로 남고 reruns 에 기록된다")
     ap.add_argument("--reviewers", default=None, help="생략 시 게이트 기본값")
+    ap.add_argument("--lean", action="store_true",
+                    help="MoE 중간 라운드: core + 직전 라운드에서 regression 을 낸 축만 돈다. "
+                         "축이 빠진 GO 는 coverage=partial — top-up 병합 전에는 게이트 통과가 아니다")
+    ap.add_argument("--full", action="store_true",
+                    help="config 의 moe:true 를 이번 라운드만 해제하고 전체 축을 돈다")
+    ap.add_argument("--diff-base", default=None, metavar="REF",
+                    help="코드 게이트 diff 스냅샷의 기준 (git diff REF...HEAD 로 뜬다). "
+                         "생략 시 작업 트리(git diff HEAD)")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--model", default=None, help="전 리뷰어 모델 강제 (생략 시 축별 tier 배정)")
     ap.add_argument("--effort", default=None, help="전 리뷰어 effort 강제 (생략 시 축별 tier 배정)")
@@ -563,11 +634,20 @@ def main():
     if not a.merge_into:
         # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
         (out / "context.md").write_text(context)
+    cfg = load_cfg()
+    if a.lean and a.full:
+        ap.error("--lean 과 --full 은 함께 쓸 수 없다")
+    if a.lean and (a.reviewers is not None or a.merge_into):
+        ap.error("--lean 은 --reviewers/--merge-into 와 함께 쓸 수 없다 — 축은 lean 이 계산한다")
     # `--reviewers ""` 는 "리뷰어 없이 준비 확인만" 이다 — 기본값 폴백(`or`)으로 처리하면
     # 빈 지정이 조용히 게이트 전체가 되어, 준비 확인용 실행이 실제 엔진 호출로 번진다(실측: 테스트가 opus 를 돌렸다).
-    spec = a.reviewers if a.reviewers is not None else ",".join(GATES[a.gate])
-    reviewers = [r.strip() for r in spec.split(",") if r.strip()]
-    overrides = load_cfg().get("assignments", {})
+    if a.reviewers is None and not a.merge_into and (a.lean or (cfg.get("moe") and not a.full)):
+        reviewers, lean_why = lean_reviewers(a.gate, a.cwd)
+        print(f"lean: {lean_why} → {','.join(reviewers)}")
+    else:
+        spec = a.reviewers if a.reviewers is not None else ",".join(GATES[a.gate])
+        reviewers = [r.strip() for r in spec.split(",") if r.strip()]
+    overrides = cfg.get("assignments", {})
     assignments = {r: assign(r, a.gate, engines, a.model, a.effort, overrides) for r in reviewers}
     if reviewers:
         print(f"round: gate={a.gate}, engines={'+'.join(engines)}, {len(reviewers)} reviewers, cwd={a.cwd}\n"
@@ -591,13 +671,36 @@ def main():
         print("리뷰어 없음(--reviewers \"\") — 준비 확인만 했고 라운드는 돌리지 않는다.")
         return
 
+    # diff 스냅샷 — 리뷰어 N 명이 각자 git diff 를 다시 뜨는 탐색 턴(실측 턴당 ~120K 토큰)을
+    # 러너가 한 번 뜨는 것으로 대체한다. context.md 에는 넣지 않는다 — 그건 라운드 간
+    # 이관되는 사람 문서라 diff 가 낡은 채 승계된다. 스냅샷은 diff.md 로 라운드에 보존된다.
+    if a.diff_base and a.gate != "code":
+        ap.error("--diff-base 는 코드 게이트에서만 쓴다 — 계획 게이트의 리뷰 대상은 계획 문서다")
+    prompt_context = context
+    if a.gate == "code":
+        if a.merge_into:
+            # top-up·재실행 리뷰어도 원 라운드와 같은 스냅샷을 봐야 한다 — 다시 뜨지 않는다
+            if (dmd := out / "diff.md").exists():
+                prompt_context += dmd.read_text()
+        else:
+            snap = diff_snapshot(a.cwd, a.diff_base)
+            if not snap:
+                print("ℹ diff 가 비어 있어 스냅샷을 첨부하지 않는다 — 브랜치 diff 를 리뷰한다면 "
+                      "--diff-base <base> 를 준다.", flush=True)
+            elif len(snap) > DIFF_CAP:
+                print(f"ℹ diff 스냅샷이 {len(snap)//1000}K자로 상한({DIFF_CAP//1000}K)을 넘는다 — "
+                      f"첨부를 생략한다(리뷰어가 직접 뜬다).", flush=True)
+            else:
+                (out / "diff.md").write_text(snap)
+                prompt_context += snap
+
     # 병합 준비는 리뷰어를 돌리기 **전에** 한다 — 뒤로 밀면 방금 쓴 새 산출물을
     # superseded 로 밀어내고 새 결과 파일이 사라진다(테스트로 잡힌 실패다).
     prepared = merge_prepare(out, reviewers) if a.merge_into else None
 
     with ThreadPoolExecutor(max_workers=len(reviewers)) as ex:
         results = list(ex.map(
-            lambda r: run(r, a.cwd, out, context, a.timeout, assignments[r]), reviewers))
+            lambda r: run(r, a.cwd, out, prompt_context, a.timeout, assignments[r]), reviewers))
 
     # repo_cwd 는 '이 라운드가 어디를 리뷰했나'는 라운드별 불변 기록이다.
     # 전역 가변 포인터와 다르다 — 덮어쓰이지 않고, 티켓 이름으로 진입할 때 워크트리를 찾는 근거가 된다.
@@ -667,6 +770,13 @@ def main():
               f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
               f"      --merge-into {out} --reviewers {','.join(merged['access_errors'])}\n"
               f"  (round.json 을 손으로 고치지 않는다 — 병합이 verdict·counts·access_errors 를 다시 계산한다)")
+    if merged["verdict"] == "GO" and merged.get("coverage") == "partial":
+        # 축을 빼는 것은 "생략"이 아니라 "유예"다 — 빠진 축이 못 본 결함은 GO 로 결론나면 안 된다.
+        # 이 top-up 병합이 채워진 뒤의 verdict 만 게이트 판정이다 (resume.py 도 같은 규칙을 본다).
+        print(f"⚠ 축 {','.join(merged['skipped'])} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
+              f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
+              f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
+              f"      --merge-into {out} --reviewers {','.join(merged['skipped'])}")
 
 
 if __name__ == "__main__":

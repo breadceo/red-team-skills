@@ -259,6 +259,15 @@ def main():
               f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
               f"    --cwd {repo_cwd or '<워크트리 경로>'} --gate {gate} --context {ctx_path} --out {rd}")
         return
+    # 축이 빠진 라운드(--lean 등)의 GO 는 coverage=partial 로 기록된다 — 빠진 축이 못 본
+    # 결함이 있을 수 있으므로 top-up 병합으로 커버리지를 채운 뒤의 verdict 만 게이트 판정이다.
+    # findings 처리(decisions.md)보다 먼저 안내한다 — top-up 이 findings 를 더할 수 있다.
+    if verdict == "GO" and rj.get("coverage") == "partial":
+        print(f"\n⚠ 축 {','.join(rj.get('skipped', []))} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
+              f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
+              f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
+              f"      --gate {gate} --merge-into {rd} --reviewers {','.join(rj.get('skipped', []))}")
+        return
     if not dec_path.exists():
         print("\n▶ 다음 할 일: 이 라운드의 findings 가 아직 처리되지 않았다.\n"
               f"  {rd/'round.json'} 을 읽어 P1/P2 를 처리하고 {dec_path} 를 쓴다 (형식은 SKILL.md).")

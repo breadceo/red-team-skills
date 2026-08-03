@@ -88,6 +88,10 @@ def main():
     # 판정 기준은 '하려는 것' 뒤에, 스코프 밖 앞에 온다 — 리뷰어가 기준으로 읽어야 한다
     assert body.index("## 이 변경이 하려는 것") < body.index("## 판정 기준") < body.index("## 스코프 밖"), \
         "판정 기준 절 위치가 어긋났다"
+    # 계획 게이트 초안에는 문서 6-구조 커버리지 표가 빈 채로 깔린다 (채우는 것은 clarify 단계)
+    assert "## 판정 기준 — 문서 6-구조 커버리지" in body, "6-구조 표가 계획 초안에 없다"
+    assert body.count("<반영/해당없음/누락>") == 6, "6-구조 행이 6개가 아니다"
+    assert "신뢰 경계" in body and "과도기 규정" in body, "6-구조 행 내용이 빠졌다"
 
     # 2. 이미 있으면 덮지 않는다 — 사람이 좁혀둔 스코프가 날아가면 안 된다
     ctx.write_text(body.replace("<PLAN.md 범위의 '제외되는 것'", "광고 슬롯 표시 로직(별도 티켓)"))
@@ -102,6 +106,7 @@ def main():
     code_body = ctx.read_text()
     assert "## 계획 전문" not in code_body, "code 게이트에 계획 전문이 실렸다"
     assert "git diff" in code_body, "code 게이트 리뷰 대상이 diff 가 아니다"
+    assert "문서 6-구조" not in code_body, "6-구조 표는 계획 게이트 전용이다 (코드 게이트로는 이관으로 온다)"
 
     # 4. PLAN.md 가 컨텍스트보다 새로우면 경고한다 (대문자 파일명도 잡아야 한다)
     time.sleep(1.1)

@@ -60,6 +60,15 @@ python3 ~/.claude/skills/red-team/scripts/resume.py
 라운드 산출물은 **저장소 밖**(`~/.red-team/runs/`)에 쌓인다. 리뷰 산출물이 `git status` 에
 뜨면 리뷰 중 작업 트리가 흔들리고 PR 에 섞여 들어가기 때문이다.
 
+비용 레버 세 개 (자세한 근거는 `red-team/SKILL.md`):
+
+- **리뷰 루프를 구현 세션과 분리**해 돌린다 — 실측에서 비용의 64% 가 리뷰어가 아니라 모든
+  것을 한 세션에 쌓은 메인 세션이었다. `resume.py` 가 분리를 공짜로 만든다.
+- 코드 게이트는 러너가 **diff 스냅샷을 리뷰어 프롬프트에 첨부**한다 — 리뷰어마다 diff 를
+  다시 뜨는 탐색 턴을 없앤다. 브랜치 diff 는 `--diff-base <base>`.
+- **중간 라운드 다이어트 `--lean`** (옵트인 MoE) — 중간 라운드는 core + 직전 결함 축만 돌고,
+  GO 는 언제나 전체 축 top-up 후에만 확정된다. 생략이 아니라 유예라 커버리지가 줄지 않는다.
+
 자세한 사용법은 각 스킬의 `SKILL.md` 를, `red-team` 의 설계 판단과 측정 기록은
 [`red-team/DESIGN.md`](red-team/DESIGN.md) 를 본다.
 

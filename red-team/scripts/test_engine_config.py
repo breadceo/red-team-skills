@@ -3,7 +3,7 @@
 
 usage: python3 test_engine_config.py
 """
-import importlib, json, os, sys, tempfile
+import importlib, json, os, subprocess, sys, tempfile
 from pathlib import Path
 
 
@@ -223,6 +223,136 @@ def main():
         # 전원 PARSE-FAIL 로 남는 병합은 GO 가 아니라 INVALID (재계산에서도 규칙 유지)
         m2 = dict(m, reviewers={k: "PARSE-FAIL" for k in m["reviewers"]}, findings=[])
         assert rr.recompute(m2)["verdict"] == "INVALID", m2["verdict"]
+
+        # --- MoE: coverage / --lean / top-up ---
+        # 전체 축 라운드는 full 로 기록된다 (위 e2e·병합 라운드)
+        assert m["coverage"] == "full" and m["skipped"] == [], (m.get("coverage"), m.get("skipped"))
+
+        # 직전 라운드가 없으면 lean 도 전체 축(베이스라인)이다
+        lr, _why = rr.lean_reviewers("code", td)
+        assert lr == list(rr.GATES["code"]), (lr, _why)
+
+        # 직전 라운드에 regression 을 심으면 core + 그 축만 켜진다 (pre-existing 은 켜지 않는다)
+        prev = rr.branch_dir(td) / "code-1"
+        prev.mkdir(parents=True)
+        (prev / "round.json").write_text(json.dumps({
+            "gate": "code", "reviewers": {k: "GO" for k in rr.GATES["code"]},
+            "findings": [{"reviewer": "b4-null-propagation", "classification": "regression"},
+                         {"reviewer": "b3-visibility", "classification": "pre-existing"}]}))
+        lr, _why = rr.lean_reviewers("code", td)
+        assert lr == ["a-code", "b4-null-propagation"], (lr, _why)
+
+        # e2e lean 라운드: 축이 빠진 GO 는 partial 로 기록되고 top-up 명령을 안내한다
+        out2 = Path(td) / "e2e-lean"
+        sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
+                    "--gate", "code", "--out", str(out2), "--lean"]
+        buf2 = io.StringIO()
+        with redirect_stdout(buf2):
+            rr.main()
+        rj2 = json.loads((out2 / "round.json").read_text())
+        assert set(rj2["reviewers"]) == {"a-code", "b4-null-propagation"}, rj2["reviewers"]
+        assert rj2["verdict"] == "GO" and rj2["coverage"] == "partial", rj2
+        assert rj2["skipped"] == ["b1-state-matrix", "b2-interaction", "b3-visibility"], rj2["skipped"]
+        s2 = buf2.getvalue()
+        assert "게이트 통과가 아니다" in s2 and "--merge-into" in s2, s2
+
+        # top-up: 빠진 축을 같은 라운드에 병합하면 coverage 가 full 로 돌아온다
+        sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out2),
+                    "--reviewers", ",".join(rj2["skipped"])]
+        rr.main()
+        rj3 = json.loads((out2 / "round.json").read_text())
+        assert rj3["coverage"] == "full" and rj3["skipped"] == [], rj3
+        assert len(rj3["reviewers"]) == 5 and rj3["verdict"] == "GO", rj3["reviewers"]
+
+        # config 의 moe:true 는 lean 을 기본으로 만들고, --full 이 1회성 해제다
+        cfgm = json.loads(rr.CONFIG.read_text())
+        cfgm["moe"] = True
+        rr.CONFIG.write_text(json.dumps(cfgm))
+        out3 = Path(td) / "e2e-moe"
+        sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
+                    "--gate", "code", "--out", str(out3)]
+        rr.main()
+        assert set(json.loads((out3 / "round.json").read_text())["reviewers"]) == \
+            {"a-code", "b4-null-propagation"}
+        out4 = Path(td) / "e2e-moe-full"
+        sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
+                    "--gate", "code", "--out", str(out4), "--full"]
+        rr.main()
+        assert len(json.loads((out4 / "round.json").read_text())["reviewers"]) == 5
+        cfgm["moe"] = False
+        rr.CONFIG.write_text(json.dumps(cfgm))
+
+        # 가드: --lean 은 --reviewers/--merge-into/--full 과 함께 쓸 수 없다
+        for argv in (["--cwd", td, "--context", str(ctx), "--lean", "--reviewers", "a-code"],
+                     ["--gate", "code", "--lean", "--merge-into", str(out2), "--reviewers", "a-code"],
+                     ["--cwd", td, "--context", str(ctx), "--lean", "--full"]):
+            sys.argv = ["run_round.py"] + argv
+            try:
+                rr.main()
+                raise AssertionError(f"거절해야 한다: {argv}")
+            except SystemExit as e:
+                assert e.code != 0, argv
+
+        # --- diff 스냅샷 ---
+        # git 저장소가 아니면 diff 가 비고, 첨부는 조용히 생략된다
+        assert rr.diff_snapshot(td, None) == ""
+
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        env_git = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+        subprocess.run(["git", "init", "-q"], cwd=repo, env=env_git, check=True)
+        (repo / "f.txt").write_text("old-line\n")
+        subprocess.run(["git", "add", "."], cwd=repo, env=env_git, check=True)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qm", "init"], cwd=repo, env=env_git, check=True)
+        (repo / "f.txt").write_text("new-line\n")
+
+        out5 = Path(td) / "e2e-diff"
+        sys.argv = ["run_round.py", "--cwd", str(repo), "--context", str(ctx),
+                    "--gate", "code", "--out", str(out5)]
+        rr.main()
+        assert (out5 / "diff.md").exists(), "diff.md 가 라운드에 보존되지 않았다"
+        prompt = (out5 / "a-code.prompt.md").read_text()
+        assert "## Diff 스냅샷" in prompt and "-old-line" in prompt and "+new-line" in prompt, \
+            "리뷰어 프롬프트에 diff 스냅샷이 없다"
+        # context.md 는 사람 문서다 — diff 가 섞이면 낡은 채 다음 라운드로 이관된다
+        assert "Diff 스냅샷" not in (out5 / "context.md").read_text()
+
+        # merge-into(top-up·재실행)는 원 라운드의 스냅샷을 그대로 본다 — 다시 뜨지 않는다
+        (repo / "f.txt").write_text("changed-after-round\n")
+        sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out5),
+                    "--reviewers", "b1-state-matrix"]
+        rr.main()
+        mp = (out5 / "b1-state-matrix.prompt.md").read_text()
+        assert "+new-line" in mp and "changed-after-round" not in mp, \
+            "병합 재실행이 원 라운드와 다른 diff 를 봤다"
+
+        # 계획 게이트에는 diff 를 붙이지 않고, --diff-base 도 거절한다
+        out6 = Path(td) / "e2e-plan"
+        sys.argv = ["run_round.py", "--cwd", str(repo), "--context", str(ctx),
+                    "--gate", "plan", "--out", str(out6)]
+        rr.main()
+        assert "Diff 스냅샷" not in (out6 / "a-plan.prompt.md").read_text()
+        sys.argv = ["run_round.py", "--cwd", str(repo), "--context", str(ctx),
+                    "--gate", "plan", "--out", str(Path(td) / "e2e-plan2"), "--diff-base", "HEAD"]
+        try:
+            rr.main()
+            raise AssertionError("계획 게이트의 --diff-base 는 거절해야 한다")
+        except SystemExit as e:
+            assert e.code != 0
+
+        # 상한을 넘는 diff 는 첨부하지 않는다 (라운드는 그대로 돈다)
+        (repo / "big.txt").write_text("x" * (rr.DIFF_CAP + 100))
+        subprocess.run(["git", "add", "."], cwd=repo, env=env_git, check=True)
+        out7 = Path(td) / "e2e-bigdiff"
+        sys.argv = ["run_round.py", "--cwd", str(repo), "--context", str(ctx),
+                    "--gate", "code", "--out", str(out7)]
+        buf7 = io.StringIO()
+        with redirect_stdout(buf7):
+            rr.main()
+        assert "상한" in buf7.getvalue(), buf7.getvalue()
+        assert "Diff 스냅샷" not in (out7 / "a-code.prompt.md").read_text()
+        assert json.loads((out7 / "round.json").read_text())["verdict"] == "GO"
 
         # 가드: --merge-into 는 --out·전원 재실행·다른 컨텍스트를 거절한다
         for argv in (["--merge-into", str(out), "--reviewers", "b1-state-matrix", "--out", str(out)],

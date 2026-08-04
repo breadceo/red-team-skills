@@ -38,6 +38,27 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-08-04
+
+### ✨ red-team·pr-triage — 레포 밖 계약(BE)을 code-hub MCP 로 확인 (조건부)
+
+FE 개발자가 clone 권한 없는 BE 레포의 계약(응답 형태·에러 코드·nullability)은 지금까지
+검증 수단이 없어 계획서 주장이나 리뷰 코멘트를 그대로 믿거나 confidence 만 낮췄다.
+code-hub MCP(사내 42개 레포 master 스냅샷, 3시간 증분)가 연결돼 있으면:
+
+- **red-team 계획 게이트** — 6-구조 표의 6행(BE 계약 위반 기대)을 채울 때 에이전트가
+  `findApi`/`getApiImplementation` 으로 계약 증거를 조회해 context.md 판정 기준 절에
+  주입한다. 리뷰어 세션은 MCP 를 못 쓰므로(allowedTools 잠금) 주입 지점은 메인 세션이다.
+- **pr-triage 2절 ① 사실인가** — 레포 밖을 가리키는 주장을 code-hub 로 확인하고, 응답
+  초안에 BE 코드(파일:줄)를 인용한다.
+
+공통 규칙 둘: 증거에 **`master 기준, 동기화 <시각>` 라벨 필수**(미머지 BE PR 과 다를 수
+있다 — 라벨 없으면 낡은 계약을 사실로 단정하는 오류 모드가 생긴다), **미머지 BE 변경
+전제는 code-hub 로 검증 불가**로 명시하고 사용자에게 올린다. code-hub 는 선택 의존이다 —
+없으면 기존 동작 그대로다. 코드 변경 없음(SKILL.md 만).
+
+---
+
 ## 2026-08-03
 
 ### ✨ red-team — 계획 게이트에 "문서 6-구조 커버리지" clarify 단계

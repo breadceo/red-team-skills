@@ -1,0 +1,39 @@
+red-team/SKILL.md
+  3ad2dc7c830e136b 212-232
+pr-triage/SKILL.md
+  3ad2dc7c830e136b 17,132-150
+CHANGELOG.md
+  3ad2dc7c830e136b 41-61
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "b1716a091bd7bf7a72574591ddc7143c41e30b93",
+  "prompts": {
+    "3ad2dc7c830e136b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2537e43b-96b8-40d8-b3c4-5de5d7b223fb",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall",
+          "ts": "2026-08-04T07:12:49.227Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 11,
+        "Bash": 15,
+        "Skill": 1,
+        "ToolSearch": 1,
+        "mcp__code-hub__listIndexedRepos": 1,
+        "mcp__code-hub__findApi": 2,
+        "Agent": 1,
+        "Edit": 4
+      },
+      "total_additions": 79,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

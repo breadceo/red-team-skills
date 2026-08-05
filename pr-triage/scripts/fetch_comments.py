@@ -77,6 +77,29 @@ def save_state(cwd: str, pr: int, st: dict) -> Path:
     return p
 
 
+def merge_state(cwd: str, pr: int, updates: dict) -> dict:
+    """상태 쓰기 공통 규칙 — save 직전 디스크를 **다시 읽고** 병합해 쓴다.
+
+    시작 시점 스냅샷을 되쓰면 병행 watch 의 `notified` 나 `--mark-triaged` 의 `triaged` 를
+    통째로 덮는다(PR #872 실사고 — watch_comments.save_notified 가 같은 패턴이다).
+    리스트 키는 합집합, `fp_replies` 는 keep-first — **디스크 기존 키가 우선**한다.
+    1회차 전문 반박이 그 fp 의 앵커다: 2회차 요약 회신이 같은 fp 를 달고 와도
+    앵커가 요약으로 밀리면 안 된다.
+    """
+    st = load_state(cwd, pr)
+    for k, v in updates.items():
+        if k == "fp_replies":
+            merged = dict(v)
+            merged.update(st.get("fp_replies") or {})   # 디스크 우선 = keep-first
+            st["fp_replies"] = merged
+        elif isinstance(v, list):
+            st[k] = sorted(set(st.get(k) or []) | set(v))
+        else:
+            st[k] = v
+    save_state(cwd, pr, st)
+    return st
+
+
 # 분류 기록은 **PR 경계를 넘어** 누적돼야 한다 — 한 PR 에서는 임계값에 도달하지 않는다.
 # append-only 로그라서 last.json 같은 '가변 포인터'와 다르다: 낡을 진실이 없고,
 # 과거 분류는 다른 곳에서 파생할 수도 없다. 그래서 전역 파일이 정당하다.
@@ -84,6 +107,20 @@ LOG = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "pr-tri
 # 검토를 물을 시점 — 문서에 적어두면 아무도 세지 않으므로 기록 시점에 스크립트가 알린다.
 REVIEW_AT_TOTAL = (30, 100)     # 30: 안전 A·B 비율 / 100: 드문 라벨
 REVIEW_AT_CORRECTED = (5, 20)   # 교정 5건이면 구체적 실패 사례가 모인다
+
+# 봇 종결 실패 텔레메트리 — 회신에 답했는데 봇이 같은 fingerprint 로 또 올린 기록.
+# **오분류 신호가 아니다** — 봇은 회신이 옳아도 재게시하므로 pr-triage-log.jsonl 에
+# 섞지 않는다. 섞으면 두 소비처(log_count 임계값, evals/score.py)에 가드가 필요해진다 —
+# 분리가 가드보다 단순하다. 경로는 LOG 와 같은 파생식이다(테스트 격리·env 오버라이드가
+# 갈라지면 안 된다 — 리터럴 `~/.red-team` 하드코딩 금지).
+REPOSTS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "pr-triage-reposts.jsonl"
+REPOST_REVIEW_AT = (10, 30)     # 누적되면 봇 팀에 종결 경로 신설을 요청할 근거가 된다
+
+
+def repost_count():
+    if not REPOSTS.exists():
+        return 0
+    return sum(1 for l in REPOSTS.read_text().splitlines() if l.strip())
 
 
 def log_count():
@@ -99,6 +136,25 @@ def _sections(text: str):
     return [(parts[i], parts[i + 1]) for i in range(1, len(parts), 2)]
 
 
+# hermes 류 봇이 코멘트마다 심는 fingerprint 마커. **비탐욕**이라 한 본문의 마커 여러 개를
+# 각각 잡고(탐욕이면 첫 `<!--` 부터 마지막 `-->` 까지 삼킨다), fp 값의 공백·쉼표를 허용하며
+# 위치(말미)를 가정하지 않는다 — #9588 실물 6건(다중 마커·공백 fp·footer 후행)으로 검증됐다.
+FP_RE = re.compile(r"<!--\s*hermes:fp=(.+?)\s*-->")
+
+
+def fp_markers(body: str) -> list:
+    """본문의 hermes fingerprint 마커를 전부 뽑는다 — **마커 스캔의 단일 정의**다.
+
+    blockquote 라인(strict `^>` — GitHub quote-reply 실물은 전부 컬럼 0 이라 충분하다)을
+    걷어낸 뒤 스캔하므로, 내 회신이 봇 코멘트를 인용해도 인용 속 마커는 잡히지 않는다.
+    판정을 관대하게(들여쓴 인용 등) 넓히지 않는다 — post_replies 의 게시 게이트가 이 함수를
+    그대로 import 해 쓰므로, 여기가 관대해지면 쓰기 게이트(관대)와 읽기 파싱(엄격)이 갈라져
+    게이트를 통과한 본문이 다음 fetch 에서 봇으로 판정되는 드리프트가 생긴다.
+    """
+    kept = "\n".join(l for l in body.splitlines() if not l.startswith(">"))
+    return [m.group(1) for m in FP_RE.finditer(kept)]
+
+
 def is_bot(body: str, marker: str) -> bool:
     """리뷰 봇이 올린 코멘트인가.
 
@@ -106,11 +162,39 @@ def is_bot(body: str, marker: str) -> bool:
     형식도 레포마다 다르다 — 어떤 레포는 본문이 바로 마커로 시작하지만
     어떤 레포는 `<!-- …-pr-auto-review:… -->` HTML 주석을 먼저 붙인다.
     앞쪽 HTML 주석을 걷어낸 뒤 마커를 보고, 주석 자체가 봇 서명이면 그것으로도 판정한다.
+
+    **fp 마커 자체가 🤖 보다 강한 봇 서명이다** — hermes 는 사람 리뷰어 계정으로 🤖 없이
+    재게시하는 실물이 있다(#9588 의 fp 코멘트 11건 중 4건이 산문으로 시작). 비-blockquote
+    라인의 마커만 본다(fp_markers 가 인용을 걷어낸다) — 내 회신의 인용은 봇 판정이 아니다.
     """
     if re.match(r"\s*<!--\s*[\w./#-]*(?:auto-review|autoreview|bot)\b", body, re.I):
         return True
+    if fp_markers(body):
+        return True
     head = re.sub(r"^\s*(?:<!--.*?-->\s*)+", "", body, flags=re.S)
     return head.lstrip().startswith(marker)
+
+
+# pulls/{pr}/files API 는 파일 3000개까지만 내려준다. 상한에 근접하면 잘린 목록일 수 있고,
+# 잘린 목록 기준 `in_diff=false` 는 틀린 표시다 — 플래그 전체를 null 로 강등하고 경고한다.
+FILES_API_CAP = 3000
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def line_in_hunk(patch, line, side):
+    """inline 코멘트의 line 이 그 파일 patch 의 new-side hunk 범위 안인가.
+
+    판정은 side=RIGHT 만 한다 — LEFT(삭제 라인)의 line 은 old-side 좌표라 new-side hunk 와
+    비교할 수 없다. null 규칙: line 이 null(outdated 코멘트) / side 가 RIGHT 아님 /
+    해당 파일에 patch 없음(바이너리·대형 diff) → null (모른다는 뜻이지 범위 밖이 아니다).
+    """
+    if line is None or side != "RIGHT" or not patch:
+        return None
+    for m in HUNK_RE.finditer(patch):
+        start, count = int(m.group(1)), int(m.group(2) or 1)
+        if start <= line < start + count:
+            return True
+    return False
 
 
 def gh(*args, check=True):
@@ -167,6 +251,10 @@ def main():
     ap.add_argument("--show-scope", action="store_true",
                     help="context.md 의 '스코프 밖'·'후속 티켓' 절을 그대로 출력한다. "
                          "분류 확인 화면에 붙일 입력이다 — 대조는 사람이 한다")
+    ap.add_argument("--show-files", action="store_true",
+                    help="PR 의 변경 파일 목록을 출력한다. top-level 봇 코멘트(경로를 본문에 "
+                         "쓰는 류)와의 대조 입력이다 — 목록까지 기계, 대조는 모델+사람 "
+                         "(--show-scope 와 같은 역할 분담)")
     a = ap.parse_args()
 
     cwd = a.cwd or os.getcwd()
@@ -212,7 +300,7 @@ def main():
     for c in gh_json(f"repos/{repo}/pulls/{pr}/comments"):
         items.append({"source": "inline", "id": c["id"], "author": c["user"]["login"],
                       "created_at": c["created_at"], "body": c.get("body") or "",
-                      "path": c.get("path"), "line": c.get("line"),
+                      "path": c.get("path"), "line": c.get("line"), "side": c.get("side"),
                       "in_reply_to": c.get("in_reply_to_id"), "url": c.get("html_url")})
     for c in gh_json(f"repos/{repo}/issues/{pr}/comments"):
         items.append({"source": "top-level", "id": c["id"], "author": c["user"]["login"],
@@ -248,8 +336,80 @@ def main():
         later = [c for c in commits if c["date"] and c["date"] > it["created_at"]]
         it["commits_after"] = [c["sha"] for c in later]
 
-    # 이미 처리한 코멘트를 표시한다. --new-only 면 그것들을 목록에서 뺀다.
+    # ── diff 대조 플래그 — inline 코멘트 한정 ──────────────────────────────
+    # files API 는 여기서 **한 번만** 부르고, 플래그 계산과 --show-files 출력이 같은 응답을
+    # 공유한다. top-level(issue) 코멘트에는 계산하지 않는다(null) — 위치 좌표가 없다.
+    # 플래그는 표시일 뿐 **필터하지 않는다** — 범위 밖 지적도 사실관계는 유효할 수 있다.
+    files = gh_json(f"repos/{repo}/pulls/{pr}/files")
+    patches = {f["filename"]: f.get("patch") for f in files}
+    files_truncated = len(files) >= FILES_API_CAP - 100
+    for it in items:
+        if it["source"] != "inline" or files_truncated:
+            it["in_diff"] = it["line_in_hunk"] = None
+        else:
+            it["in_diff"] = it.get("path") in patches
+            it["line_in_hunk"] = line_in_hunk(patches.get(it.get("path")),
+                                              it.get("line"), it.get("side"))
+
+    # ── fingerprint 파싱 ───────────────────────────────────────────────────
+    # 파싱 자격: is_incoming 이고 (bot_marker 이거나 본문에 fp 마커 존재). bot_marker 만으로
+    # 한정하면 hermes 가 사람 계정으로 🤖 없이 올린 재게시가 탈락한다(#9588 에서 11건 중 4건).
+    # is_my_reply 는 파싱하지 않고, fp_markers 가 blockquote 를 걷어내므로 인용도 안전하다.
+    # 스키마는 **리스트다** — 한 코멘트에 마커 2개 실물이 있다(#9588 에 4건: 한 fp 로는 3번째
+    # 게시 + 다른 fp 로는 초회 게시가 공존). 단수 fp 필드는 어디에도 두지 않는다.
+    # fp_seq(fp, comment 쌍 단위)·fp_replied·재게시 감지는 **--new-only 필터 전** 전체 items
+    # 기준으로 계산한다 — 필터 뒤에 세면 처리된 1회차가 빠져 회차가 줄어든다.
     st = load_state(cwd, pr) if branch_dir else {"triaged": []}
+    fp_replies = st.get("fp_replies") or {}
+    seq, first_id = {}, {}
+    for it in items:
+        markers = fp_markers(it["body"]) if it["is_incoming"] else []
+        fps = []
+        for fp in markers:
+            seq[fp] = seq.get(fp, 0) + 1
+            first_id.setdefault(fp, it["id"])
+            rep = fp_replies.get(fp) or {}
+            fps.append({"fp": fp, "fp_seq": seq[fp], "fp_first_id": first_id[fp],
+                        "fp_replied": fp in fp_replies,
+                        "fp_reply_url": rep.get("reply_url")})
+        it["fps"] = fps
+
+    # ── 봇 종결 실패 텔레메트리 — fp_replied 인 fp 의 재게시 ──────────────
+    # **오분류 신호가 아니다** — 봇은 회신이 옳아도 재게시한다. 내 회신(fp_replies 의
+    # reply_id)보다 **뒤에** 생성된 코멘트만 재게시다 — 내가 답한 원본까지 세면 허위 기록이다.
+    # 회신을 목록에서 못 찾으면(삭제 등) 시점을 판정할 수 없으므로 기록하지 않는다.
+    logged = set(st.get("repost_logged") or [])
+    by_id = {it["id"]: it for it in items}
+    repost_rows = []
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for it in items:
+        for e in it["fps"]:
+            reply = by_id.get((fp_replies.get(e["fp"]) or {}).get("reply_id"))
+            key = f"{e['fp']}:{it['id']}"   # dedup — 같은 재게시를 fetch 마다 다시 세지 않는다
+            if not e["fp_replied"] or not reply or key in logged \
+                    or it["created_at"] <= reply["created_at"]:
+                continue
+            logged.add(key)
+            repost_rows.append({"fp": e["fp"], "comment_id": it["id"],
+                                "prior_reply": e["fp_reply_url"],
+                                "repo": repo, "pr": pr, "at": stamp})
+    if repost_rows:
+        before = repost_count()
+        REPOSTS.parent.mkdir(parents=True, exist_ok=True)
+        with REPOSTS.open("a") as f:
+            for row in repost_rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        after = repost_count()
+        if branch_dir:
+            merge_state(cwd, pr, {"repost_logged": sorted(logged), "repo": repo})
+        print(f"봇 재게시(회신 후) {len(repost_rows)}건 기록 → {REPOSTS} · 누적 {after}건")
+        # crossing 판정(이전 < t <= 이후)이라 정확히 한 번 발동한다 — 기존 REVIEW_AT_* 와 동일.
+        hits = [t for t in REPOST_REVIEW_AT if before < t <= after]
+        if hits:
+            print(f"▶ 봇 종결 실패 누적 {after}건 (임계 {', '.join(map(str, hits))}건 도달) — "
+                  f"봇 팀 전달(종결 경로 신설 요청)을 검토한다.")
+
+    # 이미 처리한 코멘트를 표시한다. --new-only 면 그것들을 목록에서 뺀다.
     done = set(st.get("triaged", []))
     for it in items:
         it["triaged"] = it["id"] in done
@@ -284,6 +444,9 @@ def main():
     print(f"{repo}#{pr} · 나={me} · 코멘트 {len(items)}건 "
           f"({'미처리 리뷰만' if a.new_only else f'리뷰 {n_in} / 내 응답 {len(items)-n_in}'})")
     print(f"미처리 리뷰 코멘트: {n_todo}건 · 내 마지막 응답 이후: {n_open}건")
+    if files_truncated:
+        print(f"⚠ 변경 파일 {len(files)}개 — API 상한({FILES_API_CAP})에 근접해 목록이 잘렸을 수 "
+              "있다. diff 플래그(in_diff·line_in_hunk)를 전부 null 로 강등했다.")
     if record and record.get("round_dir"):
         print(f"의사결정 기록: {record['round_dir']}")
         print(f"  context.md   : {'있음' if record['context_md'] else '없음'}")
@@ -305,6 +468,14 @@ def main():
                     found = True
         if not found:
             print("\n⚠ 스코프 밖·후속 티켓 절을 찾지 못했다 — 범위 판단 근거가 기록에 없다.")
+
+    if a.show_files:
+        # 목록까지는 기계가 정확하다. top-level 봇 코멘트(경로를 본문에 쓰는 aws 류)와의
+        # 대조는 산문이 끼므로 모델+사람이 한다 — --show-scope 와 같은 역할 분담이다.
+        print(f"\n변경 파일 {len(files)}개"
+              + (" ⚠ API 상한 근접 — 잘린 목록일 수 있다" if files_truncated else "") + ":")
+        for f in files:
+            print(f"  {f['filename']}")
     if out_path:
         print(f"저장: {out_path}")
     print()
@@ -319,7 +490,14 @@ def main():
         st = f" <{it['state']}>" if it.get("state") else ""
         # +N = 이 코멘트 이후 푸시된 커밋 수. 크면 리뷰가 낡은 코드를 봤을 가능성이 있다.
         aft = f" +{len(it['commits_after'])}c" if it["is_incoming"] and it["commits_after"] else ""
-        print(f"{mark} [{i:2}] {it['source']:9} {who:24}{st}{aft}{loc} {head}")
+        # ↻N = 이 fingerprint 의 게시 회차(fp_seq). **회차의 유일한 진실이다** — 봇 산문의
+        # "N번째" 나 기억으로 세지 않는다(#9588 실물: 산문 "3번째" vs fp 기준 2번째).
+        fpm = "".join(f" ↻{e['fp_seq']}" for e in it.get("fps", []))
+        # ∉diff/∉hunk = inline 코멘트의 위치가 변경 파일/new-side hunk 밖. 표시일 뿐
+        # 걸러내지 않는다 — 범위 밖 지적도 사실관계는 유효할 수 있다.
+        flag = " ∉diff" if it.get("in_diff") is False else \
+               (" ∉hunk" if it.get("line_in_hunk") is False else "")
+        print(f"{mark} [{i:2}] {it['source']:9} {who:24}{st}{aft}{loc}{fpm}{flag} {head}")
 
 
 if __name__ == "__main__":

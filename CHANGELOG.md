@@ -38,6 +38,67 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-08-05
+
+### ✨ pr-triage — 봇 fingerprint 추적·재게시 프로토콜·리액션
+
+봇 리뷰 실측 3종(product-hub#1003 docs-only 94건 중 무효 72%, zigbang-client#9588 오탐
+4회 재게시, hermes 계열 594 PR 전수 — 산문 무시·👎만 종결 신호)에서 드러난 공백을 막는다.
+스크립트에는 **결정론적으로 계산 가능한 신호만** 넣고(산문 대조 금지 원칙 유지), 판단
+규칙은 SKILL.md 로 갔다.
+
+- **fp 파싱** (`fetch_comments.py`) — `fp_markers()` 가 마커 스캔의 단일 정의다(strict
+  `^>` blockquote 제거 + 비탐욕 `<!--\s*hermes:fp=(.+?)\s*-->` finditer, #9588 실물 6건
+  검증). fp 마커는 🤖 보다 강한 봇 서명으로 `is_bot()` 에 추가됐다 — hermes 는 사람
+  리뷰어 계정으로 🤖 없이 재게시한다. 코멘트당
+  `fps: [{fp, fp_seq, fp_first_id, fp_replied, fp_reply_url}]` **리스트**(단수 fp 필드
+  없음 — 한 코멘트 마커 2개 실물이 4건), `--new-only` 필터 **전** 전체 items 기준 계산,
+  목록에 회차 `↻N` 병기 — 재게시 회차는 `fp_seq` 가 유일한 진실이다.
+- **diff 대조 플래그** (`fetch_comments.py`) — `pulls/{pr}/files` 를 1회만 호출해
+  inline 코멘트에만 `in_diff`/`line_in_hunk` 를 계산한다(side=RIGHT 만 판정 —
+  outdated line·LEFT·patch 부재·3000 상한 근접은 null). top-level 봇 코멘트(#1003 류)
+  에는 적용 0건 — 같은 응답을 공유하는 `--show-files` 목록 + 모델 대조가 경로다.
+  플래그는 표시만 하고 **필터하지 않는다**.
+- **재게시 프로토콜·리액션** (`post_replies.py`) — replies.json 에 `fps`(문자열
+  리스트)·`reaction`("-1"|"+1") 선택 필드. reaction 은 **fps 필수 게이트**(fp 는 봇
+  코멘트에만 있으므로 사람 코멘트 👎 차단 — 값 자체는 모델 복사 신뢰), review+reaction
+  은 리액션 API 부재(404)라 거부. 게시 전 검증이 **is_bot 판정 본문을 전 분기(fp 마커·
+  선두 🤖·서명 주석)에서 거부**한다 — 봇 본문 raw 인용이 내 회신을 리뷰로 뒤집는
+  자기오염(커서 후퇴·fp_seq 인플레이션) 봉쇄이고, fetch 와 같은 헬퍼를 import 해 규칙
+  동치를 강제한다. 게시 성공분의 fps 는 **모든 게시 후 일괄**로 상태 `fp_replies` 에
+  기록한다(keep-first — 1회차 전문 반박 앵커 보존, save 직전 재읽기 병합). `--cwd`·
+  `--bot-marker` 추가, 리액션 실패는 회신 성공과 별도 보고, dry-run 에 리액션 예정 표시.
+  SKILL.md 7절에 봇 리뷰어 분기 신설 — 1회차 전문+👎 / 2회차 `fp_reply_url` 링크+3줄
+  요약 / 3회차 이후 회신 중단·사용자 보고, 회신 본문 봇 서명 금지, 수동 앵커 폴백(증상
+  기반).
+- **봇 종결 실패 텔레메트리** (`fetch_comments.py`) — 회신한 fp 의 재게시(내 회신
+  이후 생성분만)를 `pr-triage-reposts.jsonl`(`RED_TEAM_HOME` 파생 — LOG 와 같은
+  파생식)에 append 한다. **오분류 신호가 아니다** — 봇은 회신이 옳아도 재게시하므로
+  분류 로그와 분리했고 채점(score.py)에도 안 들어간다. dedup 은 상태의
+  `repost_logged`(`"<fp>:<comment_id>"` 문자열 set), 누적 (10, 30)건 crossing
+  (`이전 < t <= 이후`)에서 봇 팀 전달 검토를 정확히 한 번 안내한다.
+- 테스트: `pr-triage/scripts/test_fetch_comments.py`·`test_post_replies.py` — gh 를
+  fixture 로 대체해 오프라인으로 돈다. fetch↔post 게이트 parity(동일 헬퍼) 포함.
+- **harvest 기준선**: `is_bot` 의 fp 마커 분기로 인해 이번 변경 이후 `harvest_replies`
+  재수집분은 이전 스냅샷과 직접 비교하지 않는다(과거 회신이 raw 마커를 인용한 경우 mine
+  라벨이 이동할 수 있음).
+
+### 📝 pr-triage·red-team — docs-only 사전확률·미결 등재 대조·자기 등재 재수확 금지
+
+- **pr-triage 2절**: 82.7% 기본값은 **코드 PR** 실측이다 — docs-only PR 은 유효율이
+  ~28% 로 역전된다(#1003). 기본값을 뒤집지 말고 `--show-files` 대조와 미결 등재 대조를
+  먼저 통과시킨다. 지적 대상이 **PR diff 안 문서의 미결 표**에 이미 등재돼 있으면:
+  등재로 충족되는 자기참조는 Q1(사실인가)에서 `already-applied`(등재 커밋 인용),
+  해결 요구는 Q2 의 `out-of-scope` 근거다 — red-team 기록 없는 PR 에서도 수행한다
+  (대조 대상이 기록이 아니라 diff 문서 자체다). 5절에 같은 사례 구분을 추가했다.
+- **red-team findings 처리·pr-triage 6-1절**: 미결을 diff 안 문서로 옮겨 적으면 외부
+  봇의 지적 표면적이 된다(#1003 — 등재 직후 46건). 외부 봇이 리뷰하는 PR 은 미결
+  목록을 diff 밖(티켓·PR 본문)에 우선 둔다.
+- **a-plan 리뷰어**: 문서가 스스로 미결/TODO/오픈이슈로 등재한 항목은 finding 이
+  아니다 — 등재 내용이 사실과 다르거나 착수 블로커 오분류일 때만 지적한다.
+
+---
+
 ## 2026-08-04
 
 ### ✨ red-team·pr-triage — 레포 밖 계약(BE)을 code-hub MCP 로 확인 (조건부)

@@ -263,10 +263,19 @@ def main():
     # 결함이 있을 수 있으므로 top-up 병합으로 커버리지를 채운 뒤의 verdict 만 게이트 판정이다.
     # findings 처리(decisions.md)보다 먼저 안내한다 — top-up 이 findings 를 더할 수 있다.
     if verdict == "GO" and rj.get("coverage") == "partial":
-        print(f"\n⚠ 축 {','.join(rj.get('skipped', []))} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
+        # 빠진 이유가 둘이다 — skipped(호출 안 됨, --lean 유예) / unparsed(PARSE-FAIL, 실행 사고).
+        # 치유 명령은 같지만(그 축만 병합) 사용자가 원인을 알아야 다음 라운드에서 같은 일을 안 겪는다.
+        missing = list(rj.get("skipped", [])) + list(rj.get("unparsed", []))
+        why = []
+        if rj.get("skipped"):
+            why.append(f"유예(--lean 등): {','.join(rj['skipped'])}")
+        if rj.get("unparsed"):
+            why.append(f"결과 파싱 실패(PARSE-FAIL): {','.join(rj['unparsed'])}")
+        print(f"\n⚠ 축 {','.join(missing)} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
+              f"  원인 — {' · '.join(why)}\n"
               f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
               f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
-              f"      --gate {gate} --merge-into {rd} --reviewers {','.join(rj.get('skipped', []))}")
+              f"      --gate {gate} --merge-into {rd} --reviewers {','.join(missing)}")
         return
     if not dec_path.exists():
         print("\n▶ 다음 할 일: 이 라운드의 findings 가 아직 처리되지 않았다.\n"

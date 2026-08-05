@@ -231,13 +231,59 @@ def main():
         assert len(sup) == 1 and sup[0].read_text() == "이전 raw", sup
         assert m["repo_cwd"] == str(Path(td).resolve()), "병합이 repo_cwd 를 잃었다"
 
+        # e2e: 한 축만 파싱 불가한 출력을 내는 라운드 — 출력 문구·round.json 까지 실제 경로로 확인
+        # (recompute 단위 단정과 별개로, main() 의 안내 분기가 빈 목록을 내지 않는지가 여기서만 걸린다)
+        good = "echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'"
+        junk = "echo '리뷰 못 했습니다 (구조화 형식 아님)'"
+        rr.engine_cmd = lambda e, prompt, c, m, ef: (
+            ["/bin/sh", "-c", junk if "`visibility`" in prompt else good], dict(os.environ))
+        out3 = Path(td) / "e2e-parsefail"
+        sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
+                    "--gate", "code", "--out", str(out3)]
+        buf3 = io.StringIO()
+        with redirect_stdout(buf3):
+            rr.main()
+        rj4 = json.loads((out3 / "round.json").read_text())
+        assert rj4["reviewers"]["b3-visibility"] == "PARSE-FAIL", rj4["reviewers"]
+        assert rj4["verdict"] == "GO", rj4["verdict"]
+        assert rj4["coverage"] == "partial", rj4          # ← 이 PR 의 핵심
+        assert rj4["unparsed"] == ["b3-visibility"] and rj4["skipped"] == [], rj4
+        s3 = buf3.getvalue()
+        assert "결과를 내지 못한 GO" in s3 and "게이트 통과가 아니다" in s3, s3
+        # skipped 가 빈 상태에서 top-up 문구가 새면 "축  가 빠진" 처럼 빈 목록이 출력된다
+        assert "축  가 빠진" not in s3, s3
+        assert "--reviewers \n" not in s3, s3
+
+        # 그 축을 정상 출력으로 재실행해 병합하면 coverage 가 full 로 돌아온다
+        rr.engine_cmd = lambda e, prompt, c, m, ef: (["/bin/sh", "-c", good], dict(os.environ))
+        sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out3),
+                    "--reviewers", "b3-visibility"]
+        rr.main()
+        rj5 = json.loads((out3 / "round.json").read_text())
+        assert rj5["coverage"] == "full" and rj5["unparsed"] == [], rj5
+        assert rj5["reviewers"]["b3-visibility"] == "GO", rj5["reviewers"]
+
         # 전원 PARSE-FAIL 로 남는 병합은 GO 가 아니라 INVALID (재계산에서도 규칙 유지)
         m2 = dict(m, reviewers={k: "PARSE-FAIL" for k in m["reviewers"]}, findings=[])
         assert rr.recompute(m2)["verdict"] == "INVALID", m2["verdict"]
 
+        # 일부만 PARSE-FAIL 이면 verdict 는 GO 로 나오지만 그 축이 못 본 상태이므로 coverage=partial 이다
+        # (축이 빠진 GO 를 통과로 보지 않는 MoE 규칙과 같은 취급 — 경고문을 읽었는지에 의존하지 않는다)
+        m3 = rr.recompute(dict(m, findings=[],
+                               reviewers=dict(m["reviewers"], **{"b3-visibility": "PARSE-FAIL"})))
+        assert m3["verdict"] == "GO", m3["verdict"]
+        assert m3["coverage"] == "partial", m3
+        # 원인을 갈라 남긴다 — skipped(호출 안 됨) 와 unparsed(PARSE-FAIL) 는 치유 안내가 다르다
+        assert m3["unparsed"] == ["b3-visibility"] and m3["skipped"] == [], (m3["unparsed"], m3["skipped"])
+
+        # 그 축을 재실행해 결과가 들어오면 full 로 돌아온다 (top-up 과 같은 회복 경로)
+        m4 = rr.recompute(dict(m3, reviewers=dict(m3["reviewers"], **{"b3-visibility": "GO"})))
+        assert m4["coverage"] == "full" and m4["unparsed"] == [], m4
+
         # --- MoE: coverage / --lean / top-up ---
         # 전체 축 라운드는 full 로 기록된다 (위 e2e·병합 라운드)
-        assert m["coverage"] == "full" and m["skipped"] == [], (m.get("coverage"), m.get("skipped"))
+        assert m["coverage"] == "full" and m["skipped"] == [] and m["unparsed"] == [], \
+            (m.get("coverage"), m.get("skipped"), m.get("unparsed"))
 
         # 직전 라운드가 없으면 lean 도 전체 축(베이스라인)이다
         lr, _why = rr.lean_reviewers("code", td)

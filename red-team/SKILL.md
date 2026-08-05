@@ -292,7 +292,7 @@ PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증�
 ### 부분 재실행은 원 라운드에 병합한다 — `round.json` 을 손으로 고치지 않는다
 
 `PARSE-FAIL` 이나 파일접근오류가 한두 축에만 나면 **라운드를 버리지 않는다.** 그 축만 다시
-돌려 같은 라운드에 병합한다:
+돌려 같은 라운드에 병합한다 — 그때까지 그 라운드는 `coverage: partial` 이라 게이트 통과가 아니다:
 
 ```bash
 python3 ~/.claude/skills/red-team/scripts/run_round.py \
@@ -590,8 +590,10 @@ drift 가 남는다.
   리뷰를 못 한다 — 실측된 실패다. `--bare` 로 한 번에 끄면 안 된다(0단계 참고).
 - 리뷰어 전원이 `PARSE-FAIL` 이면 `verdict` 가 **`INVALID`** 로 찍힌다 — GO 가 아니다.
   엔진이 로그인 안 됐거나 세션이 끊겨도 findings 0 은 결함 없음과 똑같이 보이기 때문에
-  스크립트가 대신 막는다. 일부만 PARSE-FAIL 인 경우는 여전히 GO/NO-GO 가 나오므로
-  `round.json` 의 `reviewers` 를 직접 본다(축 하나가 빠진 GO 는 반쪽짜리다).
+  스크립트가 대신 막는다. **일부만 PARSE-FAIL 인 경우는 `coverage: partial` 로 기록된다** —
+  `verdict` 는 GO/NO-GO 로 나오지만 그 GO 는 게이트 통과가 아니고, `resume.py` 가 다음 라운드로
+  넘어가지 못하게 막는다(축이 빠진 GO 를 통과로 보지 않는 MoE 규칙과 같은 취급이다).
+  어느 축이 왜 빠졌는지는 `round.json` 의 `skipped`(호출 안 됨)·`unparsed`(PARSE-FAIL)로 갈라 남는다.
 - 커밋되지 않은 변경을 리뷰할 때는 리뷰가 도는 동안 작업 트리를 건드리지 않는다.
   브랜치를 바꾸거나 파일을 고치면 리뷰어가 흔들리는 바닥 위에서 판단한다.
 

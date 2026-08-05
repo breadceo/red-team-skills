@@ -113,6 +113,17 @@ def main():
         rr.set_assignment("b3-visibility=")
 
         # argv: codex 는 acpx 를 앞세우고 effort 를 CODEX_CONFIG env 로 준다
+        # codex_home 설정은 Codex 리뷰어에만 전달한다. 없으면 호출 환경의 CODEX_HOME도
+        # 넘기지 않아 기본 ~/.codex를 쓴다.
+        os.environ["CODEX_HOME"] = "/caller-should-not-leak"
+        rr.CONFIG.write_text(json.dumps({"engines": ["codex"], "codex_home": "/vanilla-codex"}))
+        _, configured_env = rr.engine_cmd("codex", "P", "/repo", None, None)
+        assert configured_env["CODEX_HOME"] == "/vanilla-codex", configured_env
+        rr.CONFIG.write_text(json.dumps({"engines": ["codex"]}))
+        _, default_env = rr.engine_cmd("codex", "P", "/repo", None, None)
+        assert "CODEX_HOME" not in default_env, default_env
+        del os.environ["CODEX_HOME"]
+
         codex, env = rr.engine_cmd("codex", "PROMPT", "/repo", "gpt-5.6-sol", "high")
         assert codex[-3:] == ["codex", "exec", "PROMPT"], codex
         assert "--cwd" in codex and "/repo" in codex

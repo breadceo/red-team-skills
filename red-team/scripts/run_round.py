@@ -89,6 +89,12 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
         # model 은 검증된 경로인 acpx --model 로 준다.
         # `--format json`(ACP JSON-RPC 스트림)은 토큰 사용량을 받기 위한 것이다 — parse_output 참고.
         env = dict(os.environ)
+        # 설정이 없으면 Codex 기본 홈(~/.codex)을 쓴다. 호출 셸의 CODEX_HOME은
+        # 리뷰어 설정으로 쓰지 않는다.
+        env.pop("CODEX_HOME", None)
+        codex_home = load_cfg().get("codex_home")
+        if isinstance(codex_home, str) and codex_home:
+            env["CODEX_HOME"] = codex_home
         if effort:
             env["CODEX_CONFIG"] = json.dumps({"model_reasoning_effort": effort})
         return [ACPX, "--approve-all", "--non-interactive-permissions", "deny", "--cwd", cwd,

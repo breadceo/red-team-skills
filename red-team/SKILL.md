@@ -78,6 +78,10 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex,claude
 CI·eval 처럼 프로세스 단위로 고정하려면 `RED_TEAM_ENGINE=<x[,y]>` 를 쓴다
 (우선순위: `--engine` > 환경변수 > `config.json`). 단일 엔진을 주면 전 리뷰어가 통일된다.
 
+Codex 리뷰어만 별도 홈(인증·MCP 설정)을 쓰려면 `~/.red-team/config.json` 에
+`"codex_home": "/절대/경로"`를 둔다. 이 키가 없으면 red-team은 `CODEX_HOME`을 넘기지 않아
+Codex 기본 `~/.codex`를 쓴다. 대상 디렉터리는 미리 만들고 그 홈으로 `codex login`을 한 번 실행한다.
+
 #### 축별 모델·effort 배정
 
 리뷰어는 전원 같은 스펙으로 돌지 않는다. 축 성격이 tier 를 정하고, tier 가 엔진별

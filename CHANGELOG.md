@@ -79,6 +79,9 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
   (`이전 < t <= 이후`)에서 봇 팀 전달 검토를 정확히 한 번 안내한다.
 - 테스트: `pr-triage/scripts/test_fetch_comments.py`·`test_post_replies.py` — gh 를
   fixture 로 대체해 오프라인으로 돈다. fetch↔post 게이트 parity(동일 헬퍼) 포함.
+- **harvest 기준선**: `is_bot` 의 fp 마커 분기로 인해 이번 변경 이후 `harvest_replies`
+  재수집분은 이전 스냅샷과 직접 비교하지 않는다(과거 회신이 raw 마커를 인용한 경우 mine
+  라벨이 이동할 수 있음).
 
 ### 📝 pr-triage·red-team — docs-only 사전확률·미결 등재 대조·자기 등재 재수확 금지
 

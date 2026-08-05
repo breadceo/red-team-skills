@@ -35,6 +35,14 @@ rejected([{**OK_ITEM, "body": "<!-- zigbang-pr-auto-review:v3 -->\n지적이 맞
 ppr.validate([{**OK_ITEM, "body": f"> <!-- hermes:fp={FP} -->\n> 🤖 원문 인용\n\n지적이 맞습니다"}],
              "🤖")
 
+# ── 1b) target_id 게이트 — inline 회신·reaction 은 target_id 없이 게시 대상을 못 정한다 ─
+no_target = {k: v for k, v in OK_ITEM.items() if k != "target_id"}
+msg = rejected([no_target], "inline 인데 target_id 없음")
+assert "target_id" in msg, "inline target_id 게이트 메시지가 아니다"
+msg = rejected([{**no_target, "source": "top-level", "fps": [FP], "reaction": "-1"}],
+               "reaction 인데 target_id 없음")
+assert "target_id" in msg, "reaction target_id 게이트 메시지가 아니다"
+
 # ── 2) reaction 게이트 ─────────────────────────────────────────────────────
 msg = rejected([{**OK_ITEM, "reaction": "-1"}], "fps 없는 reaction")
 assert "fps" in msg, "필수 필드 게이트 메시지가 아니다"
@@ -50,6 +58,8 @@ msg = rejected([{**OK_ITEM, "fps": [{"fp": FP, "fp_seq": 1}]}], "fetch 객체 �
 assert "문자열" in msg, "타입 게이트 메시지가 아니다"
 rejected([{**OK_ITEM, "fps": [""]}], "빈 문자열 fp")
 rejected([{**OK_ITEM, "fps": FP}], "리스트가 아닌 fps")
+# fps: null 은 "다루는 fp 없음"의 명시적 표현이다 — 빈 리스트로 취급해 통과시킨다
+ppr.validate([{**OK_ITEM, "fps": None}], "🤖")
 
 # ── 4) parity — fetch 의 fp_markers 가 마커로 파싱하는 body 는 게이트가 반드시 거부 ─
 for body in (f"<!-- hermes:fp={FP} -->",
@@ -74,11 +84,20 @@ def fake_run(cmd, capture_output=True, text=True):
         if FAIL_REACTION[0]:
             return types.SimpleNamespace(returncode=1, stdout="", stderr="boom")
         return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+    if CRASH_TARGET[0] is not None and path.endswith(f"/comments/{CRASH_TARGET[0]}/replies"):
+        raise RuntimeError("boom-mid-loop")   # 게시 루프 중간의 미검증 예외를 흉내낸다
+    if FAIL_POST[0]:
+        return types.SimpleNamespace(returncode=1, stdout="", stderr="post-boom")
+    if NONJSON_REPLY[0]:
+        return types.SimpleNamespace(returncode=0, stdout="not-json", stderr="")   # id 없는 성공
     return types.SimpleNamespace(returncode=0, stderr="",
                                  stdout=json.dumps({"id": 991, "html_url": "http://r/991"}))
 
 
 FAIL_REACTION = [False]
+FAIL_POST = [False]
+NONJSON_REPLY = [False]
+CRASH_TARGET = [None]
 ppr.subprocess.run = fake_run
 
 
@@ -128,6 +147,58 @@ run_main([{"target_id": 2, "source": "top-level",
 assert [c for c in CALLS if c[4].endswith("/reactions")][0][4] == \
     "repos/o/r/issues/comments/2/reactions", "issue 리액션 엔드포인트가 틀렸다"
 
-print("PASS — is_bot 3분기 거부·인용 통과, reaction 필수 필드 게이트·review 404·값 검증, "
-      "fps 타입 게이트, fetch↔post parity, dry-run 표시, branch_dir 가드, "
-      "일괄 기록 keep-first·리액션 실패 별도 보고, 엔드포인트 분기 모두 정상")
+# 5e) 회신 실패 시 리액션은 보류한다 — 1회차 계약은 "전문 반박 + 👎 동시"다
+CALLS.clear()
+FAIL_POST[0] = True
+out = run_main([{**OK_ITEM, "fps": [FP], "reaction": "-1"}], "--confirm")
+FAIL_POST[0] = False
+assert "✗ 실패" in out, "회신 실패 메시지가 안 보인다"
+assert not [c for c in CALLS if c[4].endswith("/reactions")], "회신 실패에도 리액션이 호출됐다"
+
+# 5f) id 없는 성공(비-JSON 응답) — fp_replies 에 기록하지 않고 경고로 보고한다
+NONJSON_REPLY[0] = True
+out = run_main([{**OK_ITEM, "fps": ["id-missing-fp"]}], "--confirm")
+NONJSON_REPLY[0] = False
+assert "✓ 게시됨" in out and "id 없는 성공" in out, "id 없는 성공 경고가 안 보인다"
+st = fc.load_state(".", 5)
+assert "id-missing-fp" not in st.get("fp_replies", {}), "id 없는 성공이 그대로 기록됐다"
+
+# 5g) 상태 파일의 repo 와 --repo 가 다르면 merge_state 전에 거부한다
+fc.merge_state(".", 5, {"repo": "o/r"})   # 대조 기준을 명시적으로 맞춰 테스트 순서 독립으로 만든다
+mismatch_path = TMP / "replies-mismatch.json"
+mismatch_path.write_text(json.dumps([{**OK_ITEM, "fps": ["mismatch-fp"]}], ensure_ascii=False))
+sys.argv = ["post_replies.py", "--repo", "other/repo", "--pr", "5",
+            "--replies", str(mismatch_path), "--confirm"]
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        ppr.main()
+    raise AssertionError("repo 불일치인데 거부되지 않았다")
+except SystemExit as e:
+    assert "다르다" in str(e), f"repo 불일치 메시지가 아니다: {e}"
+st = fc.load_state(".", 5)
+assert "mismatch-fp" not in st.get("fp_replies", {}), "repo 불일치인데 fp_replies 가 병합됐다"
+
+# 5h) 게시 중 예외에도 그 앞서 게시된 분은 finally 에서 fp_replies 에 기록된다
+CRASH_TARGET[0] = 777
+items = [{**OK_ITEM, "target_id": 555, "fps": ["survivor-fp"]},
+         {**OK_ITEM, "target_id": 777, "fps": ["never-fp"]}]
+crash_path = TMP / "replies-crash.json"
+crash_path.write_text(json.dumps(items, ensure_ascii=False))
+sys.argv = ["post_replies.py", "--repo", "o/r", "--pr", "5",
+            "--replies", str(crash_path), "--confirm"]
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        ppr.main()
+    raise AssertionError("예외가 전파되지 않았다")
+except RuntimeError:
+    pass
+CRASH_TARGET[0] = None
+st = fc.load_state(".", 5)
+assert "survivor-fp" in st.get("fp_replies", {}), \
+    "예외 이전 게시분이 finally 에서 기록되지 않았다"
+assert "never-fp" not in st.get("fp_replies", {}), "예외가 난 항목까지 기록됐다"
+
+print("PASS — is_bot 3분기 거부·인용 통과, target_id 게이트, reaction 필수 필드 게이트·"
+      "review 404·값 검증, fps 타입 게이트(null 허용)·fetch↔post parity, dry-run 표시, "
+      "branch_dir 가드, 일괄 기록 keep-first·리액션 보류·id 없는 성공 경고·repo 불일치 거부·"
+      "예외 시 finally 기록, 엔드포인트 분기 모두 정상")

@@ -140,17 +140,24 @@ def _sections(text: str):
 # 각각 잡고(탐욕이면 첫 `<!--` 부터 마지막 `-->` 까지 삼킨다), fp 값의 공백·쉼표를 허용하며
 # 위치(말미)를 가정하지 않는다 — #9588 실물 6건(다중 마커·공백 fp·footer 후행)으로 검증됐다.
 FP_RE = re.compile(r"<!--\s*hermes:fp=(.+?)\s*-->")
+# 코드펜스(``` 로 시작·끝나는 라인 사이) 를 통째로 제거한다 — fp_markers 가 이 다음에
+# blockquote 를 걷어내고 스캔하므로, 여기서 지운 구간도 인용과 동일하게 마커 스캔 대상에서
+# 빠진다. 비탐욕 `.*?` 로 첫 닫는 펜스에서 멈춘다(중첩 펜스는 실물에서 보지 못했다).
+FENCE_RE = re.compile(r"^```[^\n]*\n.*?^```[ \t]*$", re.M | re.S)
 
 
 def fp_markers(body: str) -> list:
     """본문의 hermes fingerprint 마커를 전부 뽑는다 — **마커 스캔의 단일 정의**다.
 
-    blockquote 라인(strict `^>` — GitHub quote-reply 실물은 전부 컬럼 0 이라 충분하다)을
-    걷어낸 뒤 스캔하므로, 내 회신이 봇 코멘트를 인용해도 인용 속 마커는 잡히지 않는다.
+    blockquote 라인(strict `^>` — GitHub quote-reply 실물은 전부 컬럼 0 이라 충분하다)과
+    코드펜스(``` … ```) 블록 내부를 걷어낸 뒤 스캔한다 — 제3자가 코드블록으로 봇 코멘트를
+    그대로 인용해도(이슈 본문에 붙여넣기 등) 마커가 있다는 이유만으로 그 사람이 봇으로
+    오판정되면 안 된다 — 인용(blockquote)과 같은 취급이다.
     판정을 관대하게(들여쓴 인용 등) 넓히지 않는다 — post_replies 의 게시 게이트가 이 함수를
     그대로 import 해 쓰므로, 여기가 관대해지면 쓰기 게이트(관대)와 읽기 파싱(엄격)이 갈라져
     게이트를 통과한 본문이 다음 fetch 에서 봇으로 판정되는 드리프트가 생긴다.
     """
+    body = FENCE_RE.sub("", body)
     kept = "\n".join(l for l in body.splitlines() if not l.startswith(">"))
     return [m.group(1) for m in FP_RE.finditer(kept)]
 
@@ -206,8 +213,10 @@ def gh(*args, check=True):
     return p.stdout
 
 
-def gh_json(path):
-    out = gh("api", path, "--paginate", "--slurp")
+def gh_json(path, check=True):
+    out = gh("api", path, "--paginate", "--slurp", check=check)
+    if out is None:
+        return None   # check=False 호출자만 받는다 — 그 외 경로는 gh() 가 이미 exit 했다
     try:
         pages = json.loads(out)
     except json.JSONDecodeError:
@@ -340,11 +349,19 @@ def main():
     # files API 는 여기서 **한 번만** 부르고, 플래그 계산과 --show-files 출력이 같은 응답을
     # 공유한다. top-level(issue) 코멘트에는 계산하지 않는다(null) — 위치 좌표가 없다.
     # 플래그는 표시일 뿐 **필터하지 않는다** — 범위 밖 지적도 사실관계는 유효할 수 있다.
-    files = gh_json(f"repos/{repo}/pulls/{pr}/files")
+    # files API 는 diff 대조에만 쓰이는 **부가** 신호다 — 실패해도 전체 fetch 를 죽이지
+    # 않는다(check=False). 실패하면 "모른다=null" 로 강등한다 — 기존 3000건 상한 강등과
+    # 같은 경로를 재사용한다(잘렸는지 아예 못 받았는지는 소비 측에서 구분할 필요가 없다).
+    files = gh_json(f"repos/{repo}/pulls/{pr}/files", check=False)
+    files_failed = files is None
+    if files_failed:
+        files = []
+        print("⚠ 변경 파일 목록 조회 실패(gh api 오류) — diff 플래그(in_diff·line_in_hunk)를 "
+              "전부 null 로 강등했다.")
     patches = {f["filename"]: f.get("patch") for f in files}
     files_truncated = len(files) >= FILES_API_CAP - 100
     for it in items:
-        if it["source"] != "inline" or files_truncated:
+        if it["source"] != "inline" or files_truncated or files_failed:
             it["in_diff"] = it["line_in_hunk"] = None
         else:
             it["in_diff"] = it.get("path") in patches
@@ -365,7 +382,10 @@ def main():
     for it in items:
         markers = fp_markers(it["body"]) if it["is_incoming"] else []
         fps = []
-        for fp in markers:
+        # 같은 코멘트 안에 동일 마커가 2회 나타나도 그 코멘트에서의 등장은 1회로 센다 —
+        # dict.fromkeys 로 등장 순서를 유지한 채 dedup 한다. dedup 없이 markers 그대로
+        # 돌면 한 코멘트가 같은 fp 의 seq 를 2번 올려 fp_seq 가 부풀어 오른다.
+        for fp in dict.fromkeys(markers):
             seq[fp] = seq.get(fp, 0) + 1
             first_id.setdefault(fp, it["id"])
             rep = fp_replies.get(fp) or {}
@@ -472,10 +492,13 @@ def main():
     if a.show_files:
         # 목록까지는 기계가 정확하다. top-level 봇 코멘트(경로를 본문에 쓰는 aws 류)와의
         # 대조는 산문이 끼므로 모델+사람이 한다 — --show-scope 와 같은 역할 분담이다.
-        print(f"\n변경 파일 {len(files)}개"
-              + (" ⚠ API 상한 근접 — 잘린 목록일 수 있다" if files_truncated else "") + ":")
-        for f in files:
-            print(f"  {f['filename']}")
+        if files_failed:
+            print("\n변경 파일 조회 실패 — gh api 오류로 목록을 가져오지 못했다.")
+        else:
+            print(f"\n변경 파일 {len(files)}개"
+                  + (" ⚠ API 상한 근접 — 잘린 목록일 수 있다" if files_truncated else "") + ":")
+            for f in files:
+                print(f"  {f['filename']}")
     if out_path:
         print(f"저장: {out_path}")
     print()

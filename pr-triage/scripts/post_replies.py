@@ -53,11 +53,22 @@ def validate(items, marker):
         body = str(it.get("body") or "")
         if not body.strip():
             sys.exit(f"[{i}] body 가 빈 항목이 있다: {it}")
+        # inline 회신은 target_id 없이는 어느 스레드에 붙일지 post() 가 알 수 없다 —
+        # 검증 없이 게시하면 그 항목만 조용히 잘못된 경로로 나가거나 KeyError 로 죽어
+        # "일부만 게시"가 남는다. reaction 도 같은 target_id 필드로 원 코멘트를 가리키므로
+        # 동일하게 게이트한다.
+        if it.get("source") == "inline" and not it.get("target_id"):
+            sys.exit(f"[{i}] inline 회신은 target_id 가 필수다")
+        if it.get("reaction") and not it.get("target_id"):
+            sys.exit(f"[{i}] reaction 은 target_id 가 필수다")
         if is_bot(body, marker):
             sys.exit(f"[{i}] 회신 본문이 봇 판정(is_bot)에 걸린다 — fp 마커·선두 {marker}·"
                      "봇 서명 주석을 본문에 넣지 않는다(fps 는 replies.json 필드로만 나른다). "
                      "이대로 올리면 내 회신이 '리뷰'로 오분류되어 커서가 후퇴한다.")
-        fps = it.get("fps", [])
+        # None 도 허용한다(빈 리스트로 취급) — replies.json 을 만드는 쪽이 "다루는 fp 없음"을
+        # 명시적으로 null 로 적어도 막지 않는다. get(..., []) 는 키가 있고 값이 None 이면
+        # None 을 그대로 돌려주므로 or [] 로 다시 접어야 한다.
+        fps = it.get("fps") or []
         # 원소는 비어 있지 않은 문자열만 — fetch 출력의 객체 배열([{fp, fp_seq, …}])을
         # 통째로 복사하면 게시는 다 되고 일괄 기록 시점에 TypeError 로
         # "전부 게시·전부 미기록"이 된다. 게시 전에 타입으로 막는다.
@@ -129,42 +140,64 @@ def main():
 
     print(f"{a.repo}#{a.pr} · {len(items)}건 "
           f"{'게시한다' if a.confirm else '미리보기 (게시하지 않는다)'}\n")
-    posted, react_fails = [], []
-    for i, it in enumerate(items):
-        print(f"── [{i}] target={it.get('target_id')} source={it.get('source', 'top-level')}"
-              + (f" fps={it['fps']}" if it.get("fps") else ""))
-        print("\n".join("   " + l for l in str(it["body"]).splitlines()[:12]))
-        if len(str(it["body"]).splitlines()) > 12:
-            print("   …")
-        r = post(a.repo, a.pr, it, a.confirm)
-        print("   " + r["msg"])
-        if r["ok"] and not r.get("dry") and it.get("fps"):
-            posted.append((it, r.get("id"), r.get("url")))
-        if it.get("reaction"):
-            msg = react(a.repo, a.pr, it, a.confirm)
-            print("   " + msg)
-            if msg.startswith("✗"):
-                react_fails.append((i, msg.splitlines()[0]))
-        print()
+    posted, react_fails, id_missing = [], [], []
+    try:
+        for i, it in enumerate(items):
+            print(f"── [{i}] target={it.get('target_id')} source={it.get('source', 'top-level')}"
+                  + (f" fps={it['fps']}" if it.get("fps") else ""))
+            print("\n".join("   " + l for l in str(it["body"]).splitlines()[:12]))
+            if len(str(it["body"]).splitlines()) > 12:
+                print("   …")
+            r = post(a.repo, a.pr, it, a.confirm)
+            print("   " + r["msg"])
+            if r["ok"] and not r.get("dry") and it.get("fps"):
+                if r.get("id"):
+                    posted.append((it, r.get("id"), r.get("url")))
+                else:
+                    # 비-JSON 응답이라 id 를 못 얻은 성공 — reply_id=None 으로 기록하면
+                    # 다음 fetch 의 fp_reply_url 조회가 깨진다. 리액션 실패처럼 회신 성공과
+                    # 별도로 경고한다(기록 대신 보고).
+                    id_missing.append(i)
+            # 회신이 실패했으면 리액션도 보류한다 — 1회차 계약은 "전문 반박 + 👎 동시"라서,
+            # 반박이 못 올라간 채 👎 만 붙으면 근거 없는 반응만 남는다.
+            if r["ok"] and it.get("reaction"):
+                msg = react(a.repo, a.pr, it, a.confirm)
+                print("   " + msg)
+                if msg.startswith("✗"):
+                    react_fails.append((i, msg.splitlines()[0]))
+            print()
+    finally:
+        # 상태 기록은 **모든 게시가 끝난 뒤 일괄**이되, 루프 중 미검증 예외로 여기 도달해도
+        # 반드시 실행한다 — finally 가 아니면 이미 게시된 분(posted)이 fp_replies 에 하나도
+        # 남지 않는 "전부 게시·전부 미기록"이 된다. keep-first 정책이라 여기서 다시 돌아도
+        # 중복 기록 위험은 없다. branch_dir 가드가 먼저다: state_path() 는 red-team 미발견 시
+        # sys.exit 하므로, 가드 없이 부르면 경고가 아니라 즉사가 된다.
+        if posted:
+            if fetch_comments.branch_dir is None:
+                print("⚠ red-team 을 찾지 못해 fp_replies 를 기록하지 못했다 — 게시는 끝났다.\n"
+                      "  다음 fetch 에서 이 fp 가 fp_replied 아님으로 보이면 과거 회신을 수동 "
+                      "앵커하고 상태를 백필한다 (pr-triage/SKILL.md 7절).")
+            else:
+                # merge_state 전에 상태 파일의 repo 를 대조한다 — 다르면 fp_replies 를
+                # 엉뚱한 저장소 상태에 병합해 그 저장소의 1회차 앵커를 훼손할 수 있다
+                # (--cwd 오지정·다른 워크트리를 가리키는 경우가 흔한 원인이다). 상태 파일이
+                # 없거나 repo 키가 아직 없으면(첫 기록) 통과시킨다.
+                st = load_state(cwd, a.pr)
+                if st.get("repo") and st["repo"] != a.repo:
+                    sys.exit(f"상태 파일의 repo({st['repo']!r})가 --repo({a.repo!r})와 다르다 "
+                             "— --cwd 가 잘못된 저장소를 가리키고 있을 수 있다.")
+                fp_replies = {}
+                for it, cid, url in posted:
+                    for fp in it["fps"]:   # 항목의 fps **전원**을 기록한다
+                        # 배치 안에서도 first-write-wins — merge_state 가 디스크 기존 키를
+                        # 우선하므로(keep-first) 1회차 전문 반박 앵커가 요약으로 밀리지 않는다.
+                        fp_replies.setdefault(fp, {"reply_id": cid, "reply_url": url})
+                merge_state(cwd, a.pr, {"fp_replies": fp_replies, "repo": a.repo})
+                print(f"fp_replies 기록 {len(fp_replies)}건 (keep-first — 이미 있는 fp 는 덮지 않는다)")
 
-    # 상태 기록은 **모든 게시가 끝난 뒤 일괄**이다 — 게시 루프 중간에 상태 접근으로 죽으면
-    # "일부 게시·일부 미기록"이 된다. branch_dir 가드가 먼저다: state_path() 는 red-team
-    # 미발견 시 sys.exit 하므로, 가드 없이 부르면 경고가 아니라 게시 직후 즉사가 된다.
-    if posted:
-        if fetch_comments.branch_dir is None:
-            print("⚠ red-team 을 찾지 못해 fp_replies 를 기록하지 못했다 — 게시는 끝났다.\n"
-                  "  다음 fetch 에서 이 fp 가 fp_replied 아님으로 보이면 과거 회신을 수동 "
-                  "앵커하고 상태를 백필한다 (pr-triage/SKILL.md 7절).")
-        else:
-            fp_replies = {}
-            for it, cid, url in posted:
-                for fp in it["fps"]:   # 항목의 fps **전원**을 기록한다
-                    # 배치 안에서도 first-write-wins — merge_state 가 디스크 기존 키를
-                    # 우선하므로(keep-first) 1회차 전문 반박 앵커가 요약으로 밀리지 않는다.
-                    fp_replies.setdefault(fp, {"reply_id": cid, "reply_url": url})
-            merge_state(cwd, a.pr, {"fp_replies": fp_replies, "repo": a.repo})
-            print(f"fp_replies 기록 {len(fp_replies)}건 (keep-first — 이미 있는 fp 는 덮지 않는다)")
-
+    if id_missing:
+        print(f"⚠ id 없는 성공 응답(비-JSON) {len(id_missing)}건 — fp_replies 에 기록하지 못했다: "
+              + ", ".join(f"[{i}]" for i in id_missing))
     if react_fails:
         print(f"⚠ 리액션 실패 {len(react_fails)}건 — 회신 게시와는 별개다. 필요하면 수동으로 단다:")
         for i, msg in react_fails:

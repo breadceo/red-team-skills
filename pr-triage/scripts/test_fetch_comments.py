@@ -28,6 +28,9 @@ INLINE = [
     {"id": 102, "user": {"login": "human-reviewer"}, "created_at": "2026-08-05T02:00:00Z",
      "body": f"🤖 재게시.\n<!-- hermes:fp={FP_A} -->\n<!-- hermes:fp={FP_B} -->",
      "path": "src/gone.ts", "line": None, "side": "RIGHT", "html_url": "http://c/102"},
+    {"id": 107, "user": {"login": "human-reviewer"}, "created_at": "2026-08-05T02:05:00Z",
+     "body": "중복 마커.\n<!-- hermes:fp=dup-fp --><!-- hermes:fp=dup-fp -->",
+     "path": "src/a.ts", "line": 10, "side": "RIGHT", "html_url": "http://c/107"},
     {"id": 104, "user": {"login": "reviewer2"}, "created_at": "2026-08-05T02:10:00Z",
      "body": "왼쪽 라인 지적", "path": "src/a.ts", "line": 5, "side": "LEFT",
      "html_url": "http://c/104"},
@@ -58,11 +61,14 @@ def fake_gh(*args, check=True):
 
 
 FILES_CALLS = [0]
+FILES_FAIL = [False]   # 토글 — True 면 files API 조회가 실패한 것처럼 None 을 돌려준다
 
 
-def fake_gh_json(path):
+def fake_gh_json(path, check=True):
     if path.endswith("/files"):
         FILES_CALLS[0] += 1
+        if FILES_FAIL[0]:
+            return None   # gh_json(check=False) 가 실패 시 돌려주는 값
         return FILES
     if "/pulls/5/comments" in path:
         return INLINE
@@ -104,6 +110,11 @@ assert fc.is_bot(f"산문으로 시작.\n<!-- hermes:fp={FP_A} -->", "🤖"), "�
 assert fc.is_bot("🤖 자동 리뷰", "🤖") and fc.is_bot("<!-- x-pr-auto-review:v1 -->\n지적", "🤖")
 assert not fc.is_bot(f"> <!-- hermes:fp={FP_A} -->\n\n지적이 맞습니다", "🤖"), \
     "내 회신의 인용이 봇으로 뒤집혔다"
+# 코드펜스 안 마커도 인용과 같은 취급이다 — 제3자가 펜스로 봇 코멘트를 그대로 인용하면
+# 마커가 있다는 이유만으로 그 사람이 봇으로 오판정되면 안 된다
+fenced = f"설명입니다.\n```\n<!-- hermes:fp={FP_A} -->\n```\n본문 계속"
+assert fc.fp_markers(fenced) == [], "코드펜스 안 마커가 걷어내지지 않았다"
+assert not fc.is_bot(fenced, "🤖"), "펜스 인용만으로 봇 판정됐다"
 
 # ── 2) 수집 — fps 스키마·seq·diff 플래그 ──────────────────────────────────
 stdout, by_id = fetch()
@@ -117,6 +128,11 @@ assert e["fp_seq"] == 1 and e["fp_first_id"] == 101 and not e["fp_replied"] \
 # 한 코멘트 마커 2개 — fp 별 seq 독립
 assert {x["fp"]: x["fp_seq"] for x in c102["fps"]} == {FP_A: 2, FP_B: 1}, "fp 별 seq 독립 실패"
 assert {x["fp"]: x["fp_first_id"] for x in c102["fps"]} == {FP_A: 101, FP_B: 102}
+# 같은 코멘트 안의 동일 마커 2회 — 그 코멘트에서는 1회 등장으로 세고 fps 에도 1건만 남는다
+c107 = by_id[107]
+assert {x["fp"]: x["fp_seq"] for x in c107["fps"]} == {"dup-fp": 1}, \
+    "같은 코멘트 안의 중복 마커가 seq 를 2번 올렸다"
+assert len(c107["fps"]) == 1, "중복 마커가 dedup 되지 않아 fps 에 2번 들어갔다"
 # 내 회신은 파싱하지 않는다 (인용 마커 제외)
 assert c103["is_my_reply"] and c103["fps"] == [], "내 회신 인용이 fps 로 파싱됐다"
 # diff 플래그 — inline 한정, null 규칙 (line null / side LEFT / patch 부재)
@@ -175,6 +191,16 @@ assert st["fp_replies"][FP_A]["reply_url"] == "http://c/103", \
 assert st["fp_replies"]["new-fp"]["reply_url"] == "u7"
 assert "z:1" in st["repost_logged"] and f"{FP_A}:108" in st["repost_logged"], "리스트 합집합 실패"
 
-print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외), 사람 계정 fp 봇 판정, "
-      "diff 플래그 null 규칙, files 1회 호출, 필터 전 fp_seq, 재게시 기록·dedup·crossing, "
-      "merge_state keep-first 모두 정상")
+# ── 7) files API 실패 — 죽지 않고 플래그 전부 null 로 강등, 경고 1줄 ───────────
+FILES_FAIL[0] = True
+stdout, by_id = fetch()
+assert "변경 파일 목록 조회 실패" in stdout, "files API 실패 경고가 안 보인다"
+assert by_id[101]["in_diff"] is None and by_id[101]["line_in_hunk"] is None, \
+    "files API 실패 후에도 diff 플래그가 계산됐다"
+stdout = run("--show-files")
+assert "조회 실패" in stdout, "--show-files 가 조회 실패를 표기하지 않았다"
+FILES_FAIL[0] = False
+
+print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
+      "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "
+      "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first 모두 정상")

@@ -117,5 +117,43 @@ assert r5.count("### code-1 에서 반영 (요약") == 1, "요약 마커가 중�
 assert "### code-2 에서 반영 (요약" in r5, "code-2 가 오래된 블록이 됐는데 접히지 않았다"
 assert "버튼 A 가 죽어 있었다" in r5 and "대비 미달" in r5, "접힌 식별자가 유실됐다"
 
+# --- resume 게이트: coverage=partial 인 GO 는 다음 라운드로 넘기지 않는다 ---
+# unparsed(PARSE-FAIL) 만으로 partial 이 된 라운드도 skipped 와 똑같이 막혀야 한다.
+import json, os, subprocess, tempfile
+
+with tempfile.TemporaryDirectory() as home:
+    # resume 는 cwd 의 git remote·브랜치로 runs/<repo>/<branch> 를 찾는다 — 그 조건을 만들어 준다
+    repo = pathlib.Path(home) / "wt"
+    repo.mkdir()
+    for cmd in (["init", "-q", "-b", "branch"],
+                ["remote", "add", "origin", "https://example.com/org/repo.git"],
+                ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                 "--allow-empty", "-m", "seed"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    rd = pathlib.Path(home) / "runs" / "repo" / "branch" / "code-1"
+    rd.mkdir(parents=True)
+    (rd / "context.md").write_text(CTX)
+    (rd / "decisions.md").write_text("## 반영\n\n- 없음\n\n## 보류\n\n")
+    (rd / "round.json").write_text(json.dumps({
+        "gate": "code", "verdict": "GO", "coverage": "partial",
+        "skipped": [], "unparsed": ["b3-visibility"],
+        "reviewers": {"a-code": "GO", "b1-state-matrix": "GO", "b2-interaction": "GO",
+                      "b4-null-propagation": "GO", "b3-visibility": "PARSE-FAIL"},
+        "findings": [], "counts": {"regression_P1": 0, "regression_P2": 0, "non_regression": 0},
+        "repo_cwd": str(repo),
+    }, ensure_ascii=False))
+
+    env = dict(os.environ, RED_TEAM_HOME=home)
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "resume.py")],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    out = r.stdout
+    assert "게이트 통과가 아니다" in out, out
+    assert "b3-visibility" in out, out
+    assert "PARSE-FAIL" in out, "원인이 유예인지 파싱 실패인지 구분해서 알려야 한다\n" + out
+    # 막혔으므로 findings 처리·다음 게이트 안내로 넘어가지 않는다
+    assert "다음 할 일: 이 라운드의 findings" not in out, out
+    assert "--merge-into" in out and "--reviewers b3-visibility" in out, out
+
 print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
-      "오래된 반영 블록 접기(diet)·멱등 모두 정상")
+      "오래된 반영 블록 접기(diet)·멱등, PARSE-FAIL partial 차단 모두 정상")

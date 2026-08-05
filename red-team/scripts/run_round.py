@@ -525,9 +525,17 @@ def recompute(merged: dict) -> dict:
     # 축이 빠진 라운드의 GO 는 게이트 통과가 아니다 — 어떤 축이 빠졌는지를 라운드 자체에
     # 남겨야 resume.py 와 사람이 top-up 전에 GO 로 읽는 사고를 막는다. 병합(top-up)이
     # 리뷰어를 채우면 여기서 자동으로 full 로 돌아온다.
+    #
+    # 축이 빠지는 경로는 둘이고 **원인이 다르다** — 그래서 따로 남긴다.
+    #   skipped : 호출조차 안 된 축 (--lean/MoE 의 의도적 유예, --reviewers 로 좁힌 경우)
+    #   unparsed: 호출됐지만 결과를 파싱하지 못한 축 (PARSE-FAIL — 실행 사고)
+    # 둘 다 "그 축이 못 본 상태" 라 coverage 는 같이 partial 이지만, 치유 명령이 다르다
+    # (전자는 빠진 축 top-up, 후자는 그 축만 재실행해 병합). 안내 문구도 아래에서 갈린다.
     skipped = sorted(set(GATES.get(merged.get("gate"), {})) - set(merged["reviewers"]))
-    merged["coverage"] = "partial" if skipped else "full"
+    unparsed = sorted(r for r, v in merged["reviewers"].items() if v == "PARSE-FAIL")
+    merged["coverage"] = "partial" if (skipped or unparsed) else "full"
     merged["skipped"] = skipped
+    merged["unparsed"] = unparsed
     return merged
 
 
@@ -773,10 +781,17 @@ def main():
     if merged["verdict"] == "GO" and merged.get("coverage") == "partial":
         # 축을 빼는 것은 "생략"이 아니라 "유예"다 — 빠진 축이 못 본 결함은 GO 로 결론나면 안 된다.
         # 이 top-up 병합이 채워진 뒤의 verdict 만 게이트 판정이다 (resume.py 도 같은 규칙을 본다).
-        print(f"⚠ 축 {','.join(merged['skipped'])} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
-              f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
-              f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
-              f"      --merge-into {out} --reviewers {','.join(merged['skipped'])}")
+        if merged["skipped"]:
+            print(f"⚠ 축 {','.join(merged['skipped'])} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
+                  f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
+                  f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
+                  f"      --merge-into {out} --reviewers {','.join(merged['skipped'])}")
+        if merged["unparsed"]:
+            # 재실행 명령은 위 PARSE-FAIL 경고가 이미 안내했다 — 여기서는 그 GO 의 성격을 못 박는다.
+            # 경고문을 읽었는지에 의존하지 않으려고 coverage 로 남기는 것이 이 분기의 목적이다.
+            print(f"⚠ 축 {','.join(merged['unparsed'])} 가 결과를 내지 못한 GO 다 (coverage=partial) — "
+                  f"게이트 통과가 아니다.\n"
+                  f"  위 안내대로 그 축만 재실행해 이 라운드에 병합한 뒤의 verdict 가 판정이다.")
 
 
 if __name__ == "__main__":

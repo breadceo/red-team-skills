@@ -224,9 +224,23 @@ def main():
         m2 = dict(m, reviewers={k: "PARSE-FAIL" for k in m["reviewers"]}, findings=[])
         assert rr.recompute(m2)["verdict"] == "INVALID", m2["verdict"]
 
+        # 일부만 PARSE-FAIL 이면 verdict 는 GO 로 나오지만 그 축이 못 본 상태이므로 coverage=partial 이다
+        # (축이 빠진 GO 를 통과로 보지 않는 MoE 규칙과 같은 취급 — 경고문을 읽었는지에 의존하지 않는다)
+        m3 = rr.recompute(dict(m, findings=[],
+                               reviewers=dict(m["reviewers"], **{"b3-visibility": "PARSE-FAIL"})))
+        assert m3["verdict"] == "GO", m3["verdict"]
+        assert m3["coverage"] == "partial", m3
+        # 원인을 갈라 남긴다 — skipped(호출 안 됨) 와 unparsed(PARSE-FAIL) 는 치유 안내가 다르다
+        assert m3["unparsed"] == ["b3-visibility"] and m3["skipped"] == [], (m3["unparsed"], m3["skipped"])
+
+        # 그 축을 재실행해 결과가 들어오면 full 로 돌아온다 (top-up 과 같은 회복 경로)
+        m4 = rr.recompute(dict(m3, reviewers=dict(m3["reviewers"], **{"b3-visibility": "GO"})))
+        assert m4["coverage"] == "full" and m4["unparsed"] == [], m4
+
         # --- MoE: coverage / --lean / top-up ---
         # 전체 축 라운드는 full 로 기록된다 (위 e2e·병합 라운드)
-        assert m["coverage"] == "full" and m["skipped"] == [], (m.get("coverage"), m.get("skipped"))
+        assert m["coverage"] == "full" and m["skipped"] == [] and m["unparsed"] == [], \
+            (m.get("coverage"), m.get("skipped"), m.get("unparsed"))
 
         # 직전 라운드가 없으면 lean 도 전체 축(베이스라인)이다
         lr, _why = rr.lean_reviewers("code", td)

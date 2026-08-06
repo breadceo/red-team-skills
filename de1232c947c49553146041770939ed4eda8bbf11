@@ -1,0 +1,38 @@
+red-team/SKILL.md
+  dd8f51efd754c1e4 160-163,200-205,462-526
+pr-triage/SKILL.md
+  dd8f51efd754c1e4 52-53,57-58,446-477
+red-team/scripts/run_round.py
+  dd8f51efd754c1e4 368-369
+red-team/scripts/test_from_zax.py
+  dd8f51efd754c1e4 78-79,83-85
+CHANGELOG.md
+  dd8f51efd754c1e4 43-72
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "de1232c947c49553146041770939ed4eda8bbf11",
+  "prompts": {
+    "dd8f51efd754c1e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d61bdb59-4f59-41e1-9e55-4e5481cf5059",
+        "model": "claude-fable-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Read": 7,
+        "Bash": 8,
+        "ToolSearch": 2,
+        "Edit": 8,
+        "Agent": 1,
+        "EnterPlanMode": 1,
+        "ExitPlanMode": 1,
+        "SendMessage": 1
+      },
+      "total_additions": 166,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

@@ -127,6 +127,77 @@ def pending(decisions: str) -> str:
     return "\n".join(lines)
 
 
+PLAN_DOC_RE = re.compile(r"^plan.*\.(md|markdown)$", re.I)  # zax 는 PLAN.md, 초안은 plan.markdown 도 허용
+
+
+def _origin_paths(rdir: Path) -> set[str]:
+    """한 라운드의 regression P1 원인 경로 집합(저장소 루트 기준 상대 경로로 정규화).
+
+    경로 후보는 게이트별로 다르다 — 계획 게이트 finding 의 `file` 은 구조적으로
+    계획·컨텍스트 문서(plan-*.md, redteam-context.md 등)를 가리키므로 `origin_file` 만
+    쓰고, 코드 게이트만 `origin_file` 우선 + `file` 폴백이다. 어느 쪽이든 비어 있지 않은
+    문자열만 후보이고(LLM 의 계약 위반 방어), 계획 문서 basename 은 원인 파일이 아니므로
+    제외한다. 구조가 어긋난 기록은 호출부의 예외 격리가 라운드째 걷어낸다.
+    """
+    rj = json.loads((rdir / "round.json").read_text())
+    root = rj.get("repo_root")
+    if not root:  # 구계약 라운드 — repo_cwd 에서 파생 시도, git 실패 시 repo_cwd 폴백
+        cwd = rj.get("repo_cwd") or ""
+        root = (git(cwd, "rev-parse", "--show-toplevel") if cwd else "") or cwd
+    plan_gate = rdir.name.startswith("plan-")
+    paths = set()
+    for f in rj.get("findings", []):
+        if f.get("classification") != "regression" or f.get("severity") != "P1":
+            continue
+        cands = (f.get("origin_file"),) if plan_gate else (f.get("origin_file"), f.get("file"))
+        for v in cands:
+            if not (isinstance(v, str) and v.strip()):
+                continue
+            p = re.sub(r":\d+(?:[-:]\d+)?$", "", v.strip())  # `:줄`·`:줄-줄` 접미 제거
+            if os.path.isabs(p) and root:
+                try:
+                    p = str(Path(p).resolve().relative_to(Path(root).resolve()))
+                except ValueError:
+                    pass  # 저장소 밖 절대경로는 그대로 둔다
+            p = p.removeprefix("./")
+            if p and not PLAN_DOC_RE.fullmatch(Path(p).name):
+                paths.add(p)
+                break  # 유효 경로를 얻었을 때만 종료 — origin_file 이 계획 문서로 제외되면
+                       # 다음 후보(file)로 폴백해야 실제 코드 경로의 교집합이 유지된다
+    return paths
+
+
+def same_origin_p1(base: Path, gate: str) -> list[str]:
+    """같은 게이트 최근 3라운드에서 P1 이 전부 같은 파일이면 그 경로들 — 구조적 결합 신호.
+
+    비차단 경고 전용이라 어떤 실패도 resume 를 죽이면 안 된다: round.json 은 원자적
+    쓰기가 아니라 잘린 파일이 남을 수 있고(UnicodeDecodeError 포함 — ValueError 서브클래스),
+    수동 편집으로 구조가 어긋난 기록(AttributeError)도 실재한다. 읽을 수 없는 라운드가
+    최근 3개에 끼면 '3라운드 연속' 을 판정할 수 없으므로 경고만 생략한다.
+    """
+    try:
+        # '최근 3' 은 라운드 번호 순이다 — 번호가 곧 생성 순서다. mtime 을 쓰면
+        # 오래된 라운드의 --merge-into 재실행(round.json 재기록)이 그 라운드를 '최근' 으로
+        # 끌어올려 연속 판정이 왜곡된다(code-1 지적).
+        rounds = sorted((d for d in base.glob(f"{gate}-*")
+                         if re.fullmatch(rf"{gate}-\d+", d.name) and (d / "round.json").exists()),
+                        key=lambda d: int(d.name.rsplit("-", 1)[1]))[-3:]
+    except OSError:
+        return []
+    if len(rounds) < 3:
+        return []
+    sets = []
+    for d in rounds:
+        try:
+            s = _origin_paths(d)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return []  # 그 라운드를 판정에 쓸 수 없다 — 경고만 생략, resume 는 계속
+        if not s:
+            return []  # P1 없는 라운드가 끼면 '연속' 이 아니다
+        sets.append(s)
+    return sorted(set.intersection(*sets))
+
+
 PER_ROUND = ("## 리뷰 대상", "## 검증 상태")
 KEEP_FULL = 2  # '이미 반영된 지적'에서 전문을 유지할 최근 라운드 블록 수
 
@@ -217,6 +288,20 @@ def main():
 
     cwd = a.cwd or os.getcwd()
     base, mismatch = resolve_base(a.key, cwd)
+    # 중단 검사가 모든 안내·조기 return 보다 앞이다 — partial top-up·PARSE-FAIL 재실행·
+    # 준비만 된 라운드 실행·pending·--next 어느 것도 중단된 티켓에는 안내하지 않는다.
+    # 상태의 진실은 마커 파일 하나다(산문 파싱은 오인 부류가 끝이 없어 버렸다 — plan-3~7).
+    if (ab := base / "ABORTED").exists():
+        print(f"⛔ 이 티켓의 리뷰 루프는 중단됐다 — {ab}:")
+        # 존재가 곧 상태다 — 본문 읽기 실패(권한·비 UTF-8)가 차단 안내를 죽이면 안 된다
+        try:
+            body = ab.read_text().strip()
+        except (OSError, ValueError) as e:  # ValueError ⊇ UnicodeDecodeError
+            body = f"(본문을 읽을 수 없다: {e})"
+        if body:
+            print(body)  # 전체를 자르지 않는다 — 끝에 적힌 식별 정보(원격 URL·브랜치)가 잘리면 안 된다
+        print("  다음 라운드를 만들지 않는다. 재개하려면(사유가 해소됐을 때만) 그 파일을 지우고 다시 실행한다.")
+        return
     found = latest_round(base)
     if found is None:
         sys.exit(f"{base} 에 라운드가 없다.\n"
@@ -251,6 +336,10 @@ def main():
     print(f"경로     : {rd}")
     if counts:
         print(f"counts   : {counts}")
+    if (so := same_origin_p1(base, gate)):
+        print(f"⚠ P1 이 3라운드 연속 같은 파일에서 나온다: {', '.join(so)} — 구조적 결합 신호다.\n"
+              f"  표면을 더 고치지 말고 SKILL.md 루프 절의 same-origin P1 항목을 본다"
+              f"(어댑터 격리, 또는 생존성 7·8행 재심 → 중단/피벗).")
     if not ctx_path.exists():
         print("⚠ context.md 가 없다 — 이 라운드는 이어받을 수 없다.")
     if not ran:

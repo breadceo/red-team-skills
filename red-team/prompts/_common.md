@@ -87,6 +87,7 @@
       "severity": "P1 또는 P2",
       "classification": "regression 또는 pre-existing 또는 out-of-scope",
       "file": "경로:줄번호",
+      "origin_file": "선택 — 결함의 **원인**이 있는 코드 파일. `file`(finding 위치)이 계획 문서처럼 원인과 다른 파일을 가리킬 때만 채운다. 저장소 루트 기준 상대 경로(`:줄` 허용, 절대경로·`./` 접두 금지). 원인이 `file` 과 같으면 생략",
       "claim": "결함을 한 문장으로",
       "failure": "구체적 입력·상태 → 사용자가 겪는 잘못된 결과. 재현 경로를 쓴다",
       "evidence": "이 판단의 근거가 된 코드 (파일:줄 + 해당 표현식)",

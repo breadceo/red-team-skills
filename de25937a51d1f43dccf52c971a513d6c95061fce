@@ -1,0 +1,50 @@
+red-team/scripts/resume.py
+  4476686bb71652d0 130-200,287-304,331-342
+red-team/scripts/run_round.py
+  4476686bb71652d0 376,385-387,394-399,478-494,633-673,685-697,700-706,735-738,742-753,757-762,765-768,782-785,803-809
+red-team/scripts/test_from_zax.py
+  4476686bb71652d0 91-93,95
+red-team/scripts/test_abort_sameorigin.py
+  4476686bb71652d0 1-225
+red-team/prompts/_common.md
+  4476686bb71652d0 90
+red-team/prompts/b5-plan-ordering.md
+  4476686bb71652d0 14-22
+red-team/prompts/a-code.md
+  4476686bb71652d0 9-15
+red-team/prompts/a-plan.md
+  4476686bb71652d0 21-22,25-35
+red-team/SKILL.md
+  4476686bb71652d0 3,170-181,196,210-215,222-225,231,255-258,392-407,421-422,431-438,443-450,510-512,517-518,632-637
+README.md
+  4476686bb71652d0 7
+red-team/DESIGN.md
+  4476686bb71652d0 22-25,244-245
+CHANGELOG.md
+  4476686bb71652d0 43-72
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "de25937a51d1f43dccf52c971a513d6c95061fce",
+  "prompts": {
+    "4476686bb71652d0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "072bfb22-5271-4414-9757-1f6bae42aa20",
+        "model": "claude-fable-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Read": 27,
+        "Bash": 115,
+        "Edit": 197,
+        "Agent": 1,
+        "AskUserQuestion": 7,
+        "Write": 27
+      },
+      "total_additions": 2498,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

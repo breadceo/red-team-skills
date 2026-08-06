@@ -1,0 +1,45 @@
+pr-triage/scripts/fetch_comments.py
+  99fb40b2b5716776 143-146,152-155,160,216-219,352-360,364,385-388,495-501
+pr-triage/scripts/post_replies.py
+  99fb40b2b5716776 56-63,68-71,143-200
+pr-triage/scripts/test_fetch_comments.py
+  99fb40b2b5716776 31-33,61,64,67-68,70-71,113-117,131-135,194-206
+pr-triage/scripts/test_post_replies.py
+  99fb40b2b5716776 38-45,61-62,87-92,98-100,150-204
+CHANGELOG.md
+  99fb40b2b5716776 82-84
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "b23e894443bb856dc1cc8d3013d35e544ea13aa1",
+  "prompts": {
+    "99fb40b2b5716776": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "590d8dbe-7fff-48d7-9f9f-c6f84840997e",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall:red-team",
+          "ts": "2026-08-05T02:02:57.671Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 6,
+        "Bash": 27,
+        "Skill": 1,
+        "ToolSearch": 2,
+        "mcp__plugin_slack_slack__slack_read_thread": 1,
+        "Agent": 21,
+        "WebFetch": 1,
+        "AskUserQuestion": 7,
+        "Write": 3,
+        "Edit": 1
+      },
+      "total_additions": 380,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

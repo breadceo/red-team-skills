@@ -373,7 +373,7 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
     if gate == "plan":
         # 문서 6-구조 — B2C-52504 회고: 리뷰 32건 중 25건(78%)이 문서에서 예방 가능했고,
         # 그 빈칸이 이 여섯이다. 채우는 절차(누락 행의 AskUserQuestion clarify)는 SKILL.md 에 있다.
-        body.append("## 판정 기준 — 문서 6-구조 커버리지\n"
+        body.append("## 판정 기준 — 문서 6-구조 + 계획 생존성 커버리지\n"
                     "각 행을 PRD·계획서와 대조해 채운다 — `반영(어디 — 인용)` / `해당 없음(이유)` / `누락`.\n"
                     "인용 없는 `반영` 은 무효다. `누락` 은 라운드 전에 사용자에게 물어(clarify) 해소한다 (SKILL.md).\n\n"
                     "| 구조 | 판정 | 근거·인용 |\n|---|---|---|\n"
@@ -382,15 +382,21 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
                     "| 3. 신뢰 경계 (딥링크·params 중 믿을 값 vs 서버 권위값으로 덮을 값) | <반영/해당없음/누락> | |\n"
                     "| 4. 과도기 규정 (서버 반영 전 구간에 보여줄 것과 막을 것) | <반영/해당없음/누락> | |\n"
                     "| 5. 집계·이벤트 시점 (어느 상태 전이에서, FE/BE 중 누가 세나) | <반영/해당없음/누락> | |\n"
-                    "| 6. BE 계약 위반 시 FE 기대 (규격 밖 값을 막나 통과시키나) | <반영/해당없음/누락> | |")
+                    "| 6. BE 계약 위반 시 FE 기대 (규격 밖 값을 막나 통과시키나) | <반영/해당없음/누락> | |\n"
+                    "| 7. 설계 수명·로드맵 충돌 (변경·신설 코드가 딛는 토대에 삭제·대체 예정이 있나 — 있다면 이 계획은 그 이후에도 유효한가) | <반영/해당없음/누락> | |\n"
+                    "| 8. 통증 위치 대조 (티켓·사용자가 보고한 실제 통증 경로가 `스코프 밖` 과 겹치지 않나 — 겹치면 사용자가 승인했나) | <반영/해당없음/누락> | |")
     # 인벤토리는 초안이 만들 수 없다(호출부 grep 은 변경 대상을 알아야 한다) — 자리만 남긴다.
     body.append("## 변경 대상 인벤토리 (전수 주장)\n"
                 "`<이 목록을 뽑은 명령 — 예: grep -rn \"getUsersMe\" apps/>` 기준. "
                 "리뷰어가 이 명령을 다시 돌려 누락을 반증한다.\n\n"
                 "| 호출부·전송지점 | 이 변경이 무엇을 바꾸나 | 의도된 동작 |\n|---|---|---|\n"
                 "| <파일:줄> | <바뀌는 것> | <사용자가 무엇을 보나> |\n\n"
-                "의존하는 외부 신호(SDK 콜백·이벤트·응답 필드)는 보장하지 않는 것을 함께 적는다:\n"
-                "- `<신호>` = <보장하는 사건>. <보장하지 않는 사건>은 보장하지 않는다.")
+                "의존하는 외부 신호(SDK 콜백·이벤트·응답 필드)는 보장하지 않는 것을 함께 적는다. "
+                "근거 규칙(구현 경계 기준): 호출부 최근접 설치 사본이 그 동작을 구현하면 그 소스가 "
+                "최종 권위, 사본이 래퍼·바이너리 위임이면 위임 인용 + 버전 명시 공식 문서, "
+                "로컬 사본이 없는 외부 시스템이면 버전/날짜 명시 공식 문서(confidence 하향):\n"
+                "- `<신호>` = <보장하는 사건> (근거: <패키지명>@<설치버전> — <구현 사본 파일:줄 / "
+                "래퍼면 위임 인용 + 문서 URL>). <보장하지 않는 사건>은 보장하지 않는다.")
     body += ["## 스코프 밖 (지적 금지)\n"
             "<PLAN.md 범위의 '제외되는 것' 과 후속 티켓으로 분리한 것을 여기 옮긴다>"
             + (f"\n\n미확인으로 남은 것(리뷰어가 볼 지점):\n{unknown}" if unknown else ""),
@@ -467,6 +473,23 @@ def parse_output(engine: str, stdout: str, model: str | None):
                       "cost_usd": round(cost, 4) if cost is not None else None}
         return "".join(text), tokens
     return stdout, None
+
+
+def rel_to_root(v: str, root: str) -> str:
+    """절대경로 finding 을 저장소 루트 기준 상대경로로 정규화한다(`:줄` 접미 보존).
+
+    병합 라운드는 기존 repo_root 를 유지하므로(기존 findings 의 정규화 기준), 워크트리가
+    다른 경로에 재생성된 뒤 재실행 리뷰어가 계약을 어겨 절대경로를 내면 그 기준으로 풀 수
+    없다 — 저장 시점에 현재 루트로 미리 상대화한다. 루트 밖 경로는 그대로 둔다.
+    """
+    m = re.fullmatch(r"(.*?)((?::\d+(?:[-:]\d+)?)?)", v)
+    p, suf = m.group(1), m.group(2)
+    if os.path.isabs(p) and root:
+        try:
+            p = str(Path(p).resolve().relative_to(Path(root).resolve()))
+        except ValueError:
+            return v
+    return p + suf
 
 
 def extract_json(raw: str):
@@ -624,6 +647,30 @@ def main():
     if a.show_assignments:
         show_assignments()
         return
+    # 중단 선언된 티켓에 직접 실행으로 라운드·초안을 쌓는 실수를 조기에 알린다 — zax_draft
+    # 의 조기 return 과 출력 디렉토리 생성보다 앞이어야 어떤 직접 실행 경로에서도 경고가
+    # 우회되지 않는다(code-3 지적). 차단은 하지 않는다 — --out 실험·eval 흐름과 의도적
+    # 재실행을 막지 않는다(차단은 resume 의 몫).
+    def warn_if_aborted(marker: Path):
+        if marker.exists():
+            print(f"⚠ 이 티켓은 중단 선언돼 있다: {marker}\n"
+                  f"  재개 의사가 아니면 이 라운드는 낭비다 — 사유는 그 파일에 있고, "
+                  f"재개는 그 파일 삭제로만 한다.", flush=True)
+
+    # 경고가 검사하는 상태와 사용자가 실제로 바꾸는 라운드 상태가 같아야 한다 —
+    # 병합이면 병합 대상, --out 이면 그 부모(둘 다 브랜치 디렉토리)가 실제 대상이다
+    # (code-5·6 지적: cwd 만 보면 다른 브랜치를 가리키는 --merge-into/--out 이 경고를 우회한다).
+    markers = []
+    if a.merge_into:
+        markers.append(Path(a.merge_into).resolve().parent / "ABORTED")
+    else:
+        if a.cwd:
+            markers.append(branch_dir(a.cwd) / "ABORTED")
+        if a.out:
+            markers.append(Path(a.out).resolve().parent / "ABORTED")
+    for m in dict.fromkeys(markers):  # 같은 마커면 한 번만
+        warn_if_aborted(m)
+
     if a.from_zax:
         if a.context:
             ap.error("--from-zax 와 --context 는 함께 쓸 수 없다")
@@ -732,6 +779,10 @@ def main():
     # 배정 상세는 assignments 에 따로 남긴다.
     merged = prepared if prepared is not None else {
         "repo_cwd": str(Path(a.cwd).resolve()), "gate": a.gate,
+        # repo_root: 절대경로 findings 를 저장소 상대 경로로 정규화할 때의 기준.
+        # repo_cwd 는 --cwd 그대로라 저장소 하위 디렉토리일 수 있다 — 그걸 기준으로 삼으면
+        # 같은 파일이 라운드마다 다른 경로로 남는다(resume.py same-origin 감지의 미탐 원인).
+        "repo_root": git(a.cwd, "rev-parse", "--show-toplevel") or str(Path(a.cwd).resolve()),
         "engine": "+".join(engines),
         "assignments": {}, "reviewers": {}, "findings": [], "access_errors": {}}
     for r, parsed, lost, tokens in results:
@@ -749,6 +800,13 @@ def main():
         for f in (parsed or {}).get("findings", []):
             f.setdefault("axis", r)
             f["reviewer"] = r
+            if prepared is not None:
+                # 병합 라운드는 기존 repo_root 를 유지한다 — 새 findings 의 절대경로는
+                # 현재 워크트리 루트로 미리 상대화해야 resume 의 same-origin 정규화가 풀린다.
+                cur_root = git(a.cwd, "rev-parse", "--show-toplevel") if a.cwd else ""
+                for k in ("origin_file", "file"):
+                    if isinstance(f.get(k), str) and f[k].strip():
+                        f[k] = rel_to_root(f[k].strip(), cur_root)
             merged["findings"].append(f)
     recompute(merged)
     (out / "round.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2))

@@ -38,6 +38,24 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-08-06
+
+### 🐛 red-team — codex 리뷰어 프롬프트를 argv 대신 stdin 으로 전달
+
+큰 프롬프트를 argv 로 넘기면 `acpx … codex exec "<프롬프트>"` 가 SIGKILL 로 죽고 산출물이
+0바이트로 남았다(4회 재현). 임계는 프롬프트 크기가 아니라 argv 경로 자체다 — 실측으로
+ASCII 660B 는 통과, 한글 1.8KB·ASCII 5KB 는 결정적으로 사망. 리뷰 프롬프트는 컨텍스트에
+diff 스냅샷까지 붙어 100KB 를 넘으므로 codex 리뷰어는 항상 죽는 경로였다.
+
+- `engine_cmd()` 가 `(argv, env)` → `(argv, env, stdin)` 3-tuple 을 돌려준다. codex 는
+  `codex exec --file -` 로 argv 에서 프롬프트를 빼고 stdin 으로 넘긴다(acpx 0.11.2 확인).
+  claude 는 `-p` 유지, stdin 은 None.
+- `run()` 은 stdin 이 있으면 `subprocess.run(input=...)`, 없으면 기존대로
+  `stdin=DEVNULL`. 두 경로 모두 EOF 를 주므로 교착 방어는 그대로다.
+- 스모크: 112KB 프롬프트 → exit 0, 9.6s, 파싱·토큰 집계 정상(43.7k tok).
+- 테스트(`test_engine_config.py`): argv 에 프롬프트가 없고 stdin 으로 가는지 단정,
+  e2e 가짜 엔진이 stdin 마커를 grep 해 GO 를 내므로 argv 회귀 시 라운드가 PARSE-FAIL 로 무너진다.
+
 ## 2026-08-05
 
 ### ✨ pr-triage — 봇 fingerprint 추적·재게시 프로토콜·리액션

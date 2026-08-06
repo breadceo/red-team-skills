@@ -20,7 +20,8 @@ usage:
 `--out` 을 주면 그 경로를 그대로 쓴다(eval 용).
 
 리뷰어 id 는 prompts/<id>.md 의 파일명이다. 기본값은 게이트에 따라 정해진다.
-stdin 은 DEVNULL 로 고정한다 — codex 는 stdin 이 TTY 가 아니면 EOF 를 기다리며 교착한다.
+프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
+그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
 import argparse, json, os, re, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
@@ -80,9 +81,11 @@ ENGINES = ("codex", "claude")
 
 
 def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
-               effort: str | None) -> tuple[list[str], dict]:
-    """엔진별 (argv, env). 프롬프트 조립·JSON 추출·판정 병합은 엔진과 무관하므로,
-    엔진을 바꾸는 일은 여기 한 곳을 갈아끼우는 것으로 끝난다."""
+               effort: str | None) -> tuple[list[str], dict, str | None]:
+    """엔진별 (argv, env, stdin). 프롬프트 조립·JSON 추출·판정 병합은 엔진과 무관하므로,
+    엔진을 바꾸는 일은 여기 한 곳을 갈아끼우는 것으로 끝난다.
+
+    stdin 이 None 이 아니면 그 문자열을 자식 stdin 으로 흘려보낸다(프롬프트가 argv 에 없다)."""
     if engine == "codex":
         # effort 는 CODEX_CONFIG env 로 준다 — acpx 는 codex 의 `-c` 를 노출하지 않지만
         # codex-acp 어댑터가 이 env 의 JSON 을 세션 config 에 병합한다(어댑터 README).
@@ -97,9 +100,13 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
             env["CODEX_HOME"] = codex_home
         if effort:
             env["CODEX_CONFIG"] = json.dumps({"model_reasoning_effort": effort})
+        # 프롬프트는 argv 가 아니라 stdin 으로 준다. argv 로 주면 acpx/codex 가 SIGKILL 로
+        # 죽는다 — 실측: ASCII 660B 통과, 한글 1.8KB·ASCII 5KB 사망(결정적). 리뷰 프롬프트는
+        # 컨텍스트+diff 스냅샷까지 붙어 100KB 를 넘으므로 argv 경로는 항상 죽는 경로였다
+        # (산출물 0바이트, 4회 재현). `codex exec --file -` 가 stdin 을 읽는다(acpx 0.11.2 확인).
         return [ACPX, "--approve-all", "--non-interactive-permissions", "deny", "--cwd", cwd,
                 *(["--model", model] if model else []), "--format", "json",
-                "codex", "exec", prompt], env
+                "codex", "exec", "--file", "-"], env, prompt
     if engine == "claude":
         # hook·skill 을 끈다 — 리뷰어 세션에 다른 스킬의 프로토콜이 끼면 턴 하나를
         # 그쪽에 다 쓰고 리뷰가 밀린다(hipocampus FIRST RESPONSE RULE 로 실측).
@@ -109,7 +116,7 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
                 "--settings", '{"hooks":{}}', *(["--model", model] if model else []),
                 *(["--effort", effort] if effort else []),
                 "--output-format", "json",
-                "--allowedTools", "Read,Grep,Glob,Bash"], dict(os.environ)
+                "--allowedTools", "Read,Grep,Glob,Bash"], dict(os.environ), None
     sys.exit(f"모르는 엔진: {engine} — {'|'.join(ENGINES)} 중 하나여야 한다.")
 
 
@@ -480,11 +487,14 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
     engine, model, effort, _tier = assignment
     prompt = build(reviewer, context)
     (out / f"{reviewer}.prompt.md").write_text(prompt)
-    cmd, env = engine_cmd(engine, prompt, cwd, model, effort)
+    cmd, env, stdin_text = engine_cmd(engine, prompt, cwd, model, effort)
+    # 프롬프트를 stdin 으로 받는 엔진은 input= 으로 넘긴다 — 다 쓰면 파이프가 닫혀 EOF 가 된다.
+    # 아니면 DEVNULL 로 막는다(열어 두면 EOF 를 기다리며 교착한다).
+    stdio = {"input": stdin_text} if stdin_text is not None else {"stdin": subprocess.DEVNULL}
     stdout = ""
     try:
-        p = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=timeout, env=env)
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True,
+                           text=True, timeout=timeout, env=env, **stdio)
         stdout, raw = p.stdout, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
         raw = f"[TIMEOUT after {timeout}s]\n" + (e.stdout or "") + (e.stderr or "")

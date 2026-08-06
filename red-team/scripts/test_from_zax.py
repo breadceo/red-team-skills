@@ -1,5 +1,5 @@
 """--from-zax 어댑터 + 계획서 신선도 감지(대소문자 무시) 검증."""
-import os, pathlib, subprocess, sys, tempfile, time
+import os, pathlib, re, subprocess, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # 설치 위치를 가정하지 않는다
 RUNNER = pathlib.Path(__file__).resolve().parent / "run_round.py"
@@ -75,10 +75,17 @@ def main():
     assert "round:" not in r.stdout, "초안만 만들고 멈춰야 하는데 라운드가 돌았다"
 
     body = ctx.read_text()
-    for need in ("## 리뷰 대상", "## 이 변경이 하려는 것", "## 판정 기준 (Spec AC · Gherkin)",
+    for need in ("## 리뷰 대상", "## 티켓", "## 이 변경이 하려는 것",
+                 "## 판정 기준 (Spec AC · Gherkin)",
                  "## 스코프 밖 (지적 금지)", "## 이미 반영된 지적 (재제기 금지)",
                  "## 검증 상태", "## 계획 전문"):
         assert need in body, f"절 누락: {need}"
+    # 티켓 절은 빈 자리만 깔린다 — 식별자가 채워지기 전에는 외부 산출물 최신화가 꺼져 있어야 한다
+    assert body.index("## 리뷰 대상") < body.index("## 티켓") < body.index("## 이 변경이 하려는 것"), \
+        "티켓 절 위치가 어긋났다"
+    ticket_sec = body[body.index("## 티켓"):body.index("## 이 변경이 하려는 것")]
+    assert not re.search(r"[A-Z]{2,}-\d+|\S+/\S+#\d+", ticket_sec), \
+        "티켓 절 플레이스홀더에 키 형태 텍스트가 있다 — 미지정 상태가 지정으로 오인된다"
     assert "동의 캐시 동기화를 type 병합으로" in body, "PLAN 작업 분석이 안 실렸다"
     assert "selectUserJudgment" in body, "CONTEXT Architecture 합의가 안 실렸다"
     assert "동시 응답 순서 보장 여부" in body, "미확인 항목이 안 실렸다"

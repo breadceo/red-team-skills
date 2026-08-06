@@ -1,0 +1,43 @@
+pr-triage/SKILL.md
+  99fb40b2b5716776 106-120,124-125,150-174,258-263,355-359,377-412,426-432,548-552
+red-team/SKILL.md
+  99fb40b2b5716776 365-370
+red-team/prompts/a-plan.md
+  99fb40b2b5716776 27-28
+CHANGELOG.md
+  99fb40b2b5716776 41-98
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "b62fc5e5a640bd6ee456115b7438d6b3d42df172",
+  "prompts": {
+    "99fb40b2b5716776": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "590d8dbe-7fff-48d7-9f9f-c6f84840997e",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "recall:red-team",
+          "ts": "2026-08-05T02:02:57.671Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 6,
+        "Bash": 26,
+        "Skill": 1,
+        "ToolSearch": 2,
+        "mcp__plugin_slack_slack__slack_read_thread": 1,
+        "Agent": 18,
+        "WebFetch": 1,
+        "AskUserQuestion": 6,
+        "Write": 3,
+        "Edit": 1
+      },
+      "total_additions": 512,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

@@ -1,0 +1,32 @@
+red-team/scripts/run_round.py
+  15ebdce39cd4a7cc 23-24,84-88,103-106,109,119,490-493,496-497
+red-team/scripts/test_engine_config.py
+  15ebdce39cd4a7cc 120,123,127-131,136,139-140,142,194-198,202,246,265
+red-team/DESIGN.md
+  15ebdce39cd4a7cc 158,161-168
+CHANGELOG.md
+  15ebdce39cd4a7cc 41-58
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "a533f65510a6b09efaab0cfc2b42ea3baed9c342",
+  "prompts": {
+    "15ebdce39cd4a7cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33d75d79-c49a-4e45-bf88-49dd68dd1526",
+        "model": "claude-opus-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Read": 7,
+        "Bash": 11,
+        "Edit": 14,
+        "Agent": 1
+      },
+      "total_additions": 152,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

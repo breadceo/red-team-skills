@@ -117,25 +117,29 @@ def main():
         # 넘기지 않아 기본 ~/.codex를 쓴다.
         os.environ["CODEX_HOME"] = "/caller-should-not-leak"
         rr.CONFIG.write_text(json.dumps({"engines": ["codex"], "codex_home": "/vanilla-codex"}))
-        _, configured_env = rr.engine_cmd("codex", "P", "/repo", None, None)
+        _, configured_env, _ = rr.engine_cmd("codex", "P", "/repo", None, None)
         assert configured_env["CODEX_HOME"] == "/vanilla-codex", configured_env
         rr.CONFIG.write_text(json.dumps({"engines": ["codex"]}))
-        _, default_env = rr.engine_cmd("codex", "P", "/repo", None, None)
+        _, default_env, _ = rr.engine_cmd("codex", "P", "/repo", None, None)
         assert "CODEX_HOME" not in default_env, default_env
         del os.environ["CODEX_HOME"]
 
-        codex, env = rr.engine_cmd("codex", "PROMPT", "/repo", "gpt-5.6-sol", "high")
-        assert codex[-3:] == ["codex", "exec", "PROMPT"], codex
+        codex, env, codex_stdin = rr.engine_cmd("codex", "PROMPT", "/repo", "gpt-5.6-sol", "high")
+        # 프롬프트는 argv 가 아니라 stdin 으로 간다 — argv 로 주면 acpx/codex 가 SIGKILL 로 죽는다
+        assert codex[-4:] == ["codex", "exec", "--file", "-"], codex
+        assert "PROMPT" not in codex, codex
+        assert codex_stdin == "PROMPT", codex_stdin
         assert "--cwd" in codex and "/repo" in codex
         assert "--model" in codex and "gpt-5.6-sol" in codex, codex
         assert codex[codex.index("--format") + 1] == "json", codex  # 토큰 집계용 스트림
         assert json.loads(env["CODEX_CONFIG"]) == {"model_reasoning_effort": "high"}, env
-        _, env0 = rr.engine_cmd("codex", "P", "/repo", None, None)
+        _, env0, _ = rr.engine_cmd("codex", "P", "/repo", None, None)
         assert "CODEX_CONFIG" not in env0 or env0["CODEX_CONFIG"] == os.environ.get("CODEX_CONFIG")
 
-        # claude 는 프롬프트를 -p 로, effort 를 --effort 로 준다
-        claude, _ = rr.engine_cmd("claude", "PROMPT", "/repo", "opus", "high")
+        # claude 는 프롬프트를 -p 로, effort 를 --effort 로 준다 (stdin 은 쓰지 않는다)
+        claude, _, claude_stdin = rr.engine_cmd("claude", "PROMPT", "/repo", "opus", "high")
         assert claude[:3] == ["claude", "-p", "PROMPT"], claude
+        assert claude_stdin is None, claude_stdin
         assert "--model" in claude and "opus" in claude, claude
         assert claude[claude.index("--effort") + 1] == "high", claude
         assert claude[claude.index("--output-format") + 1] == "json", claude  # 토큰 집계용
@@ -187,12 +191,15 @@ def main():
         assert "verdict" in text and tok is None
 
         # e2e: 엔진을 가짜로 갈아끼우고 코드 게이트 한 라운드 — 혼합 배정이 round.json 에 남는가
-        fake = ("echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'")
-        rr.engine_cmd = lambda e, p, c, m, ef: (["/bin/sh", "-c", fake], dict(os.environ))
+        # 프롬프트가 stdin 으로 실제 도착했을 때만 GO 를 낸다 — argv 회귀(SIGKILL 경로)를
+        # 되돌리면 마커가 사라져 이 라운드가 PARSE-FAIL 로 무너진다
+        fake = ("grep -q STDIN-MARKER && "
+                "{ echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'; }")
+        rr.engine_cmd = lambda e, p, c, m, ef: (["/bin/sh", "-c", fake], dict(os.environ), p)
         rr.set_engine("codex,claude")
         out = Path(td) / "e2e"
         ctx = Path(td) / "ctx.md"
-        ctx.write_text("## 리뷰 대상\n(테스트)\n")
+        ctx.write_text("## 리뷰 대상\n(테스트) STDIN-MARKER\n")
         sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
                     "--gate", "code", "--out", str(out)]
         rr.main()
@@ -236,7 +243,7 @@ def main():
         good = "echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'"
         junk = "echo '리뷰 못 했습니다 (구조화 형식 아님)'"
         rr.engine_cmd = lambda e, prompt, c, m, ef: (
-            ["/bin/sh", "-c", junk if "`visibility`" in prompt else good], dict(os.environ))
+            ["/bin/sh", "-c", junk if "`visibility`" in prompt else good], dict(os.environ), None)
         out3 = Path(td) / "e2e-parsefail"
         sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
                     "--gate", "code", "--out", str(out3)]
@@ -255,7 +262,7 @@ def main():
         assert "--reviewers \n" not in s3, s3
 
         # 그 축을 정상 출력으로 재실행해 병합하면 coverage 가 full 로 돌아온다
-        rr.engine_cmd = lambda e, prompt, c, m, ef: (["/bin/sh", "-c", good], dict(os.environ))
+        rr.engine_cmd = lambda e, prompt, c, m, ef: (["/bin/sh", "-c", good], dict(os.environ), None)
         sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out3),
                     "--reviewers", "b3-visibility"]
         rr.main()

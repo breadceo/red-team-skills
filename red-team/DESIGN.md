@@ -155,11 +155,17 @@ base 는 `3554e550`(작업 시작 전).
 
 ```bash
 # 래퍼가 --ask-for-approval never --sandbox danger-full-access 를 이미 붙인다 (중복 지정 금지)
-codex exec "$(cat prompt.txt)" < /dev/null > out.txt 2>&1
+codex exec --file - < prompt.txt > out.txt 2>&1
 ```
 
-**`< /dev/null` 필수** — 백그라운드에서 stdin 이 TTY 가 아니면 EOF 를 기다리며 무한 대기한다
-(이번 세션에서 46분 낭비). 출력 파일 크기가 늘지 않으면 진행 중이 아니라 교착이다.
+**프롬프트를 argv 로 주지 않는다** — 큰 프롬프트를 argv 로 넘기면 acpx/codex 가 SIGKILL 로
+죽고 산출물이 0바이트로 남는다(실측: ASCII 660B 통과, 한글 1.8KB·ASCII 5KB 사망, 4회 재현).
+같은 162KB 프롬프트를 `--file -` 로 stdin 에 흘리면 exit 0 으로 정상 파싱된다.
+`run_round.py` 는 `subprocess.run(..., input=prompt)` 로 이 경로를 쓴다.
+
+**stdin 을 열어 둔 채 비우지 않는다** — 백그라운드에서 stdin 이 TTY 가 아니면 EOF 를
+기다리며 무한 대기한다(이번 세션에서 46분 낭비). `input=`(다 쓰면 파이프가 닫힌다)이나
+`< /dev/null` 로 EOF 를 준다. 출력 파일 크기가 늘지 않으면 진행 중이 아니라 교착이다.
 관련 지식: `codex-exec-background-needs-stdin-devnull`
 
 claude 엔진 쪽 함정은 다르다 — `--bare` 를 붙이면 인증 로딩까지 건너뛰어

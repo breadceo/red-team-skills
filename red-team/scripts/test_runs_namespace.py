@@ -61,6 +61,9 @@ assert rr.branch_key(lossy) != lossy and rr.branch_key(lossy).startswith(lossy +
 long_a, long_b = "x/" + "a" * 300, "x/" + "a" * 299 + "b"
 assert len(rr.branch_key(long_a)) <= 255
 assert rr.branch_key(long_a) != rr.branch_key(long_b)  # 절단 구간 밖 차이는 해시가 가른다
+# 대문자 hex 접미도 예약(code-4 P2) — APFS 비구분 파일시스템에서 소문자 키와 충돌 방지
+up = lossy[:-8] + lossy[-8:].upper()
+assert rr.branch_key(up) != up and rr.branch_key(up).startswith(up + "--")
 
 # ── 2b) repo_key: `__` 경계 모호성 (code-1 P1) ─────────────────────────────
 keys = []
@@ -182,13 +185,31 @@ rr.MIGRATE = False
 assert rr.branch_dir(str(repo_i)) == legacy_i, "dry-run 해석이 구 경로를 반환하지 않았다"
 assert legacy_i.is_dir(), "MIGRATE=False 인데 rename 이 일어났다"
 rr.MIGRATE = True
+# migrate=False 인자도 같은 무변경 해석(code-4 P1) — 마커 검사 등 경고용 파생이 쓴다
+assert rr.branch_dir(str(repo_i), migrate=False) == legacy_i
+assert legacy_i.is_dir(), "migrate=False 인데 rename 이 일어났다"
+assert rr.target_dir(str(repo_i)) == runs / "team-i__app" / lossy  # 표시용 순수 계산
 assert rr.branch_dir(str(repo_i)) == runs / "team-i__app" / lossy  # 실제 실행은 이전한다
+
+# 3k) 초장문 repo_cwd(code-4 P2) — Path.is_dir 의 OSError 도 판정 불가, 죽지 않는다
+repo_j = make_repo("j", "git@github.com:team-j/app.git", "feature/foo")
+legacy_j = runs / "app" / "feature-foo"
+(legacy_j / "code-1").mkdir(parents=True)
+(legacy_j / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": "/x/" + "y" * 5000}))
+new_j = runs / "team-j__app" / lossy
+assert rr.branch_dir(str(repo_j)) == new_j
+assert (new_j / "code-1").is_dir(), "초장문 repo_cwd 에서 이전이 죽었다"
 
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs
 hit, _mm = rs.resolve_base("team-a__app/feature-foo", str(repo_a))  # parent/name 매칭(code-3 P2)
 assert hit == new_a, hit
+# name 우선(code-4 P2) — 티켓 키가 repo 키에도 걸려 다중 후보가 되지 않는다
+(runs / "TICKET-9__x" / "main").mkdir(parents=True)
+(runs / "org__app" / "TICKET-9").mkdir(parents=True)
+hit2, _ = rs.resolve_base("ticket-9", str(repo_a))
+assert hit2 == runs / "org__app" / "TICKET-9", hit2
 
 print("test_runs_namespace: ok")
 shutil.rmtree(TMP)

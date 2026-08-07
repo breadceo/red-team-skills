@@ -40,10 +40,12 @@ def resolve_base(key: str | None, cwd: str):
         return derived, None
     runs = RUNS
     k = key.lower()
-    # parent/name 도 매칭한다 — 다중 후보 안내가 `owner__repo/branch` 를 보여주는데
-    # 검색이 d.name 만 보면 그 값을 그대로 입력해도 못 찾는다(code-3 P2).
-    hits = sorted(d for d in runs.glob("*/*") if d.is_dir()
-                  and (k in d.name.lower() or k in f"{d.parent.name}/{d.name}".lower()))
+    # 브랜치 디렉토리명 우선, 무히트일 때만 parent/name 폴백 — 다중 후보 안내의
+    # `owner__repo/branch` 값을 그대로 입력할 수 있게 하되(code-3 P2), 폴백을 항상 켜면
+    # 티켓 키가 repo 키에도 걸려 전에는 유일하던 검색이 다중 후보로 깨진다(code-4 P2).
+    dirs = [d for d in runs.glob("*/*") if d.is_dir()]
+    hits = sorted(d for d in dirs if k in d.name.lower()) or \
+        sorted(d for d in dirs if k in f"{d.parent.name}/{d.name}".lower())
     if not hits:
         avail = sorted(f"{d.parent.name}/{d.name}" for d in runs.glob("*/*") if d.is_dir())
         sys.exit(f"'{key}' 에 맞는 라운드 디렉토리가 없다.\n  있는 것: "
@@ -418,7 +420,12 @@ def main():
     out = base / f"{a.next_gate}-{n}"
     new_ctx = carry_forward(ctx_path.read_text(), dec, rd.name)
     if a.dry_run:
-        print(f"\n[dry-run] 생성할 경로: {out}")
+        # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
+        # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
+        shown = out
+        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base:
+            shown = tgt / out.name
+        print(f"\n[dry-run] 생성할 경로: {shown}")
         for h, _ in sections(new_ctx):
             if h:
                 print("  ", h)

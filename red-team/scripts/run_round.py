@@ -254,7 +254,9 @@ def slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-") or "unknown"
 
 
-_RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$")  # 해시 접미 자리 — 이 패턴은 무접미 키로 쓰지 않는다
+# 해시 접미 자리 — 이 패턴은 무접미 키로 쓰지 않는다. re.I: APFS 같은 대소문자 비구분
+# 파일시스템에서 `--87171AD4` 브랜치가 소문자 접미 키와 같은 inode 를 얻는다(code-4 P2).
+_RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$", re.I)
 
 
 def _suffixed(rendered: str, raw: str) -> str:
@@ -348,8 +350,13 @@ def _worktree_repo_cwds(d: Path):
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue
         p = data.get("repo_cwd") if isinstance(data, dict) else None
-        if isinstance(p, str) and p and Path(p).is_dir() and git(p, "rev-parse", "--show-toplevel"):
-            yield p
+        try:
+            # is_dir 는 ENOENT 류만 삼킨다 — ENAMETOOLONG 같은 OSError 는 여기서 잡아
+            # 판정 불가로 넘긴다. 안 잡으면 branch_dir 전 소비처가 죽는다(code-4 P2).
+            if isinstance(p, str) and p and Path(p).is_dir() and git(p, "rev-parse", "--show-toplevel"):
+                yield p
+        except OSError:
+            continue
 
 
 def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
@@ -368,10 +375,13 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
         # 전환기 스쿼팅 감지(code-3 P1): 구 기록이 남았는데 새 키 자리가 이미 차 있다 —
         # basename 에 `__` 를 담은 다른 저장소의 구 레이아웃일 수 있다. 남의 살아 있는
         # 디렉토리일 수 있으므로 자동 해소는 없다 — 소유가 어긋나 보이면 경고만 한다.
-        if (p := next(_worktree_repo_cwds(new), None)) and repo_key(p) != new.parent.name:
-            print(f"⚠ 새 키 위치 {new} 에 다른 저장소의 기록이 있는 것으로 보인다\n"
-                  f"  (그 기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 수동 정리 전에는 "
-                  f"두 작업의 라운드가 섞인다)", flush=True)
+        # 첫 기록만 보면 혼합 디렉토리(내 기록 뒤에 남의 기록)를 놓친다(code-4 P2) — 전수 순회.
+        for p in _worktree_repo_cwds(new):
+            if repo_key(p) != new.parent.name:
+                print(f"⚠ 새 키 위치 {new} 에 다른 저장소의 기록이 있는 것으로 보인다\n"
+                      f"  (그 기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 수동 정리 전에는 "
+                      f"두 작업의 라운드가 섞인다)", flush=True)
+                break
         return
     for p in _worktree_repo_cwds(legacy):
         if repo_key(p) != new.parent.name:
@@ -392,19 +402,38 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
 MIGRATE = True  # resume --dry-run 이 끈다 — dry-run 은 무변경으로 구 경로를 그대로 읽는다(code-3 P1)
 
 
-def branch_dir(cwd: str) -> Path:
+def _current_branch(cwd: str) -> str:
+    branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch in ("", "HEAD"):  # detached
+        branch = git(cwd, "rev-parse", "--short", "HEAD") or "detached"
+    return branch
+
+
+def target_dir(cwd: str) -> Path:
+    """이전이 끝난 뒤 실제로 쓰일 새 키 경로 — 순수 계산, 부수효과 없음.
+
+    dry-run 이 '읽기는 legacy, 표시는 target' 을 갈라야 할 때 쓴다(code-4 P1) —
+    무변경 해석(branch_dir migrate=False)은 legacy 를 돌려주는데, 실제 실행은 이전 후
+    이 경로 아래에 만들기 때문이다.
+    """
+    return HOME_DIR / "runs" / repo_key(cwd) / branch_key(_current_branch(cwd))
+
+
+def branch_dir(cwd: str, migrate: bool = True) -> Path:
     """~/.red-team/runs/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
 
     **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
     작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
     resume.py·pr-triage 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
     구 레이아웃(basename/slug) 기록이 보이면 여기서 1회 이전한다 — 세 소비처가 같이 혜택을 본다.
+
+    migrate=False 는 무변경 해석이다 — 이전하지 않고, 새 경로가 없으면 구 경로를 그대로
+    읽는다. ABORTED 마커 검사처럼 **경고만 하는 파생**이 rename 부수효과로 명시적
+    `--context`/`--out` 경로를 파괴하면 안 되는 자리에서 쓴다(code-4 P1).
     """
-    branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch in ("", "HEAD"):  # detached
-        branch = git(cwd, "rev-parse", "--short", "HEAD") or "detached"
+    branch = _current_branch(cwd)
     new = HOME_DIR / "runs" / repo_key(cwd) / branch_key(branch)
-    if MIGRATE:
+    if MIGRATE and migrate:
         _migrate_legacy(cwd, branch, new)
     elif not new.exists() and (legacy := _legacy_branch_dir(cwd, branch)).is_dir():
         return legacy  # 읽기 전용 해석 — 이전은 실제 실행에서만 일어난다
@@ -428,7 +457,9 @@ def lean_reviewers(gate: str, cwd: str) -> tuple[list[str], str]:
     GO 는 coverage=partial 로 기록되어 top-up 병합 전에는 게이트 통과가 아니다.
     """
     axes = GATES[gate]
-    rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd).glob(f"{gate}-*")
+    # migrate=False: 축 선택은 순수 읽기다 — moe 가 켜진 명시적 --out 실행에서 여기가
+    # 이전을 일으키면 마커 검사와 같은 경로 파괴가 난다(code-4 P1 과 동일 계열).
+    rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd, migrate=False).glob(f"{gate}-*")
               if re.fullmatch(rf"{gate}-\d+", d.name) and (rj := d / "round.json").exists()]
     if not rounds:
         return list(axes), "직전 라운드 없음 — 전체 축(베이스라인)"
@@ -809,7 +840,10 @@ def main():
         markers.append(Path(a.merge_into).resolve().parent / "ABORTED")
     else:
         if a.cwd:
-            markers.append(branch_dir(a.cwd) / "ABORTED")
+            # 경고용 파생은 순수 읽기다 — 여기서 이전이 일어나면 명시적 --context/--out 이
+            # 구 레이아웃을 가리키는 직접 실행이 자기 입력 경로를 잃는다(code-4 P1).
+            # 실제 이전은 resolve_out 경유 정상 경로의 branch_dir 이 한다.
+            markers.append(branch_dir(a.cwd, migrate=False) / "ABORTED")
         if a.out:
             markers.append(Path(a.out).resolve().parent / "ABORTED")
     for m in dict.fromkeys(markers):  # 같은 마커면 한 번만

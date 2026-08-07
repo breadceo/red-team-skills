@@ -1,0 +1,60 @@
+red-team/references/zax.md
+  4779d2bf146c3cde 1-90
+red-team/references/moe.md
+  4779d2bf146c3cde 1-29
+red-team/references/external-sync.md
+  4779d2bf146c3cde 1-125
+red-team/references/evidence.md
+  4779d2bf146c3cde 1-132
+red-team/assets/context-template.md
+  4779d2bf146c3cde 1-39
+red-team/references/design.md
+  4779d2bf146c3cde 1-305
+tools/check_skill_docs.py
+  4779d2bf146c3cde 1-68
+red-team/references/engines.md
+  4779d2bf146c3cde 1-111
+red-team/references/plan-coverage.md
+  4779d2bf146c3cde 1-65
+red-team/references/recovery.md
+  4779d2bf146c3cde 1-58
+red-team/references/plan-drift.md
+  4779d2bf146c3cde 1-24
+red-team/assets/decisions-template.md
+  4779d2bf146c3cde 1-10
+pr-triage/references/measurement.md
+  4779d2bf146c3cde 1-131
+pr-triage/references/edge-cases.md
+  4779d2bf146c3cde 1-182
+CLAUDE.md
+  4779d2bf146c3cde 1-38
+README.md
+  4779d2bf146c3cde 73-75
+CHANGELOG.md
+  4779d2bf146c3cde 43-64
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "842bac2e9748196b16658d3a9648b81d415807b9",
+  "prompts": {
+    "4779d2bf146c3cde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc3fc3a0-952a-42e5-8776-c63a85c529e0",
+        "model": "claude-fable-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Read": 11,
+        "Bash": 73,
+        "Write": 23,
+        "Edit": 119,
+        "Agent": 4,
+        "AskUserQuestion": 1
+      },
+      "total_additions": 17412,
+      "total_deletions": 0,
+      "overriden_lines": 450
+    }
+  }
+}

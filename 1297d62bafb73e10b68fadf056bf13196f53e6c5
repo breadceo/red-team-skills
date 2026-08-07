@@ -1,0 +1,34 @@
+pr-triage/SKILL.md
+  dd8f51efd754c1e4 497-507
+CHANGELOG.md
+  dd8f51efd754c1e4 74-77
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "1297d62bafb73e10b68fadf056bf13196f53e6c5",
+  "prompts": {
+    "dd8f51efd754c1e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d61bdb59-4f59-41e1-9e55-4e5481cf5059",
+        "model": "claude-fable-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Read": 14,
+        "Bash": 54,
+        "ToolSearch": 2,
+        "Edit": 57,
+        "Agent": 2,
+        "EnterPlanMode": 1,
+        "ExitPlanMode": 1,
+        "SendMessage": 1,
+        "Write": 6,
+        "AskUserQuestion": 7
+      },
+      "total_additions": 15,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

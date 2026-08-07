@@ -254,15 +254,28 @@ def slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-") or "unknown"
 
 
+_RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$")  # 해시 접미 자리 — 이 패턴은 무접미 키로 쓰지 않는다
+
+
+def _suffixed(rendered: str, raw: str) -> str:
+    return f"{rendered}--{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
+
+
 def branch_key(branch: str) -> str:
     """브랜치 → 디렉토리명. 필요한 성질은 가역이 아니라 **단사**다 — 디렉토리명을
     브랜치로 되돌리는 소비처는 없고, resume.py 의 워크트리 매칭도 브랜치→키 방향으로
     이 함수를 적용해 비교한다. slug 가 뭉갠 브랜치(`feature/foo`)에만 원문 해시를
     접미해 `feature-foo` 브랜치와의 충돌을 없앤다. 무손실 브랜치는 키가 그대로라
     마이그레이션 대상도 아니다.
+
+    접미 패턴 `--<hex8>` 은 **예약**이다 — 그 패턴으로 끝나는 무손실 브랜치도 강제로
+    해시를 받아, lossy 키가 문자 그대로의 브랜치명과 겹칠 수 없다(code-1 P1).
+    잔여 충돌은 sha1 32bit 접두 충돌뿐이다.
     """
     s = slug(branch)
-    return s if s == branch else f"{s}-{hashlib.sha1(branch.encode()).hexdigest()[:8]}"
+    if s == branch and not _RESERVED_SUF.search(s):
+        return s
+    return _suffixed(s, branch)
 
 
 def repo_key(cwd: str) -> str:
@@ -272,16 +285,25 @@ def repo_key(cwd: str) -> str:
     URL(https·ssh·scp형)에서 host 뒤 마지막 두 path segment 를 owner/repo 로 본다.
     owner 가 안 나오는 origin(로컬 경로, host 직결 단일 segment)은 basename,
     origin 이 없으면 toplevel 디렉토리명 — 구 키와 같다.
+
+    구분자 `__` 는 owner·repo 안에도 올 수 있어 경계가 모호해진다(`a__b/c` 와
+    `a/b__c` — code-1 P1). 렌더링을 다시 split 해 원문 쌍이 유일 복원될 때만
+    무접미로 쓰고, 아니면(slug 손실 포함) 원문 `owner/repo` 해시를 접미한다.
     """
     origin = git(cwd, "remote", "get-url", "origin")
     if not origin:
-        return slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+        name = Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name
+        return branch_key(name)  # 단일 이름 폴백 — 브랜치와 같은 단사 규칙을 태운다
     m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
     if m:
         parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
         if len(parts) >= 2:
-            return f"{slug(parts[-2])}__{slug(parts[-1])}"
-    return slug(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+            owner, repo = parts[-2], parts[-1]
+            rendered = f"{slug(owner)}__{slug(repo)}"
+            if rendered.split("__") == [owner, repo] and not _RESERVED_SUF.search(rendered):
+                return rendered
+            return _suffixed(rendered, f"{owner}/{repo}")
+    return branch_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
 
 
 def _legacy_branch_dir(cwd: str, branch: str) -> Path:
@@ -297,26 +319,30 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
 
     옮기지 않으면 라운드 번호·컨텍스트 이관·latest_round 가 조용히 리셋된다.
     단, 구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) —
-    라운드 기록(round.json 의 repo_cwd)으로 origin 을 대조해 불일치면 두고 간다.
-    판정 불가(기록 없음·워크트리 소실)면 옮긴다 — 단일 저장소 사용이 압도적이다.
+    라운드 기록(round.json 의 repo_cwd) **전부**를 대조해 하나라도 불일치면 두고 간다 —
+    첫 일치에서 멈추면 뒤에 섞인 남의 기록까지 가져간다(code-1 P2).
+    판정 불가(기록 없음·워크트리 소실·손상 기록)면 옮긴다 — 단일 저장소 사용이 압도적이다.
     """
     legacy = _legacy_branch_dir(cwd, branch)
     if legacy == new or new.exists() or not legacy.is_dir():
         return
-    for rj in sorted(legacy.glob("*/round.json")):
+    for rj in legacy.glob("*/round.json"):
         try:
             p = json.loads(rj.read_text()).get("repo_cwd")
-        except (json.JSONDecodeError, OSError):
-            continue
-        if p and Path(p).is_dir():
-            if repo_key(p) != new.parent.name:
-                print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
-                      f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
-                      flush=True)
-                return
-            break  # 첫 유효 기록이 일치 — 이전한다
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue  # 손상 기록(잘린 UTF-8 포함)은 판정 불가 — 마이그레이션을 죽이지 않는다
+        if p and Path(p).is_dir() and repo_key(p) != new.parent.name:
+            print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
+                  f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
+                  flush=True)
+            return
     new.parent.mkdir(parents=True, exist_ok=True)
-    legacy.rename(new)
+    try:
+        legacy.rename(new)
+    except OSError:
+        if new.exists():  # 동시 branch_dir() 호출 경합 — 다른 소비처가 먼저 이전했다
+            return
+        raise
     print(f"runs/ 키 갱신(issue #8) — 라운드 기록 이전: {legacy} → {new}", flush=True)
 
 

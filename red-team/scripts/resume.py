@@ -20,7 +20,7 @@ import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_round import branch_dir, branch_key, git, GATES  # 경로 파생은 한 곳에서만 한다
+from run_round import branch_dir, branch_key, git, slug, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
@@ -70,7 +70,10 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
         if line.startswith("worktree "):
             path = line[len("worktree "):]
         elif line.startswith("branch ") and path:
-            if branch_key(line[len("branch refs/heads/"):]) == base.name:
+            br = line[len("branch refs/heads/"):]
+            # slug 비교는 구 레이아웃 호환이다 — round.json 없이 준비만 된 구 디렉토리는
+            # ② 를 못 타는데, 새 키로만 비교하면 실존 워크트리를 못 찾는다(code-1 P2).
+            if branch_key(br) == base.name or slug(br) == base.name:
                 return path, "git worktree list"
     return None, None
 
@@ -309,6 +312,12 @@ def main():
                  f"  `resume.py <티켓키>` 로 준다. 첫 라운드는 SKILL.md 의 '라운드 실행'부터 시작한다.")
     rd, gate, ran = found
     repo_cwd, how = worktree_for(base, cwd, rd)
+    # 키로 구 레이아웃 디렉토리를 선택했으면 **여기서** 선행 이전한다 — 뒤에서 만들
+    # context.md·--out 경로가 구 디렉토리를 가리키면, 안내된 run_round 가 실행 시작
+    # 시점의 자동 이전으로 그 경로를 날려 즉시 실패한다(code-1 P2, 리뷰어 실측 exit 1).
+    if repo_cwd and (derived := branch_dir(repo_cwd)) != base \
+            and not base.exists() and derived.is_dir():
+        rd, base = derived / rd.name, derived
     if mismatch is not None:
         print(f"⚠ 현재 디렉토리는 {mismatch.name} 인데 '{a.key}' 는 {base.name} 이다.")
         print(f"  {'구현·리뷰는 다음 워크트리에서 해야 한다: ' + repo_cwd if repo_cwd else '해당 워크트리를 못 찾았다 — 그 워크트리로 이동해 다시 실행한다.'}\n")

@@ -52,13 +52,17 @@ basename 만 써서 `team-a/app` 과 `team-b/app` 이 같은 `runs/app/` 을 공
 - **repo 키에 owner 가 들어간다** — `runs/team-a__app/...`. origin URL(https·ssh·scp형)에서
   owner/repo 를 뽑고, 못 뽑는 origin(로컬 경로 등)은 기존 basename 폴백.
 - **브랜치 키가 단사가 된다** — slug 가 문자를 뭉갠 브랜치(`feature/foo`)에만 원문
-  sha1 8자를 접미한다(`feature-foo-87171ad4`). 무손실 브랜치는 키가 그대로다.
+  sha1 8자를 접미한다(`feature-foo--87171ad4`). 무손실 브랜치는 키가 그대로다.
   가역 인코딩 대신 단사로 충분하다 — 디렉토리명→브랜치 역방향 소비처가 없고,
-  resume 의 워크트리 매칭도 브랜치→키 방향으로 같은 함수를 쓴다.
+  resume 의 워크트리 매칭도 브랜치→키 방향으로 같은 함수를 쓴다. 접미 패턴
+  `--<hex8>` 은 예약이라, 그 패턴으로 끝나는 실존 브랜치·`__` 경계가 모호한
+  owner/repo(`a__b/c` vs `a/b__c`)도 해시로 갈린다 — 잔여 충돌은 sha1 32bit 뿐이다.
 - **구 레이아웃은 자동 이전된다** — `branch_dir()` 가 새 경로가 비어 있고 구 경로가
-  있으면 1회 rename 한다. 구 디렉토리의 라운드 기록(round.json 의 repo_cwd)이 다른
-  저장소의 origin 을 가리키면 — 바로 그 충돌 케이스 — 건드리지 않고 경고만 한다.
-  경로 파생이 `branch_dir()` 한 곳이라 resume·pr-triage 도 자동으로 따라온다.
+  있으면 1회 rename 한다. 구 디렉토리의 라운드 기록(round.json 의 repo_cwd) **전부**를
+  대조해 하나라도 다른 저장소의 origin 을 가리키면 — 바로 그 충돌 케이스 — 건드리지
+  않고 경고만 한다. 경로 파생이 `branch_dir()` 한 곳이라 resume·pr-triage 도 자동으로
+  따라오고, 키로 구 디렉토리를 선택한 `resume.py` 는 안내 명령을 만들기 전에 선행
+  이전해 경로가 도중에 사라지지 않는다.
 
 ### ✨ red-team·pr-triage — 게이트 통과 시 외부 산출물(티켓·이슈·PR 본문) 최신화 프로토콜 (#5)
 

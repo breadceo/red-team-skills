@@ -40,6 +40,28 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ## 2026-08-07
 
+### 📚 red-team·pr-triage — 스킬 문서가 가벼워졌다: 필요한 순간에만 읽는 구조 (#6)
+
+**스킬이 트리거될 때 컨텍스트에 들어가는 문서가 각 ~14k → ~5k 토큰(1/3)이 됐다.**
+매 호출의 컨텍스트 비용이 그만큼 줄고, 본문은 매번 필요한 절차와 판단 기준만 담아
+따라가기 쉬워졌다. **지워진 규칙·근거는 없다** — 전부 필요한 순간에 읽는 자리로 옮겼다.
+
+- **조건부 상황은 그때만 읽는다.** 엔진 최초 설정·배정 조정, 부분 실패(`PARSE-FAIL`·
+  `partial`) 복구, 계획 게이트 첫 라운드 전 clarify, 게이트 GO 후 티켓/이슈 최신화,
+  zax 병행, MoE, docs-only PR·fp 봇 재게시 같은 edge-case 는 각 스킬의 `references/`
+  문서로 내려갔고, SKILL.md 의 새 `## 참고 문서` 절이 **언제 읽는지**를 안내한다.
+- **실측 근거·회고는 `evidence.md`(red-team)·`measurement.md`(pr-triage)로.** 규칙이
+  의심되거나 완화·변경하려 할 때만 읽으면 된다 — 근거의 무게는 그대로다.
+- **context.md·decisions.md 를 이제 `assets/` 템플릿에서 복사한다** — 본문에서 코드블록을
+  긁어내던 방식보다 빠르고 어긋나지 않는다.
+- **`DESIGN.md` 가 `references/design.md` 로 들어와 SKILL.md 에서 참조된다** — 참조 0건
+  고아 문서라 모델이 존재를 몰랐던 문제가 사라졌다.
+- **동작 변화는 없다.** frontmatter `description`(트리거)·스크립트·리뷰어 프롬프트
+  무변경, 스크립트 테스트 8개 통과, 구/신 문서 블라인드 A/B(30문항 분류)로 판정 품질
+  회귀 없음을 확인했다.
+- **이 구조는 유지된다** — `tools/check_skill_docs.py` 가 토큰 예산(≤5k)·미참조
+  리소스·고아 .md 를 검사하고, 저장소 `CLAUDE.md` 가 이후 편집에서 검사 실행을 요구한다.
+
 ### 🐛 red-team — runs/ 키 네임스페이스 개선: 디렉토리 충돌 제거 (#8)
 
 라운드 키 `runs/<repo>/<branch>` 가 두 축에서 충돌할 수 있었다 — `<repo>` 는 origin

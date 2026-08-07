@@ -70,7 +70,9 @@ python3 ~/.claude/skills/red-team/scripts/resume.py
   GO 는 언제나 전체 축 top-up 후에만 확정된다. 생략이 아니라 유예라 커버리지가 줄지 않는다.
 
 자세한 사용법은 각 스킬의 `SKILL.md` 를, `red-team` 의 설계 판단과 측정 기록은
-[`red-team/DESIGN.md`](red-team/DESIGN.md) 를 본다.
+[`red-team/references/design.md`](red-team/references/design.md) 를 본다. 두 SKILL.md 는
+progressive disclosure 구조다 — 상시 규칙만 본문에 있고, 조건부 절차·실측 근거는 각
+스킬의 `references/` 에 있으며 SKILL.md 의 「참고 문서」 절이 언제 읽는지를 안내한다.
 
 ## 측정 도구는 있고, 채점 데이터는 없다
 

@@ -254,6 +254,26 @@ rr._git_toplevel_state = _real_state
 assert rr.branch_dir(str(repo_n), migrate=True) == runs2 / "team-n__app" / lossy
 assert not legacy_n.exists(), "확인 복구 후에도 이전되지 않았다"
 
+# 3o) origin owner 변경(pair→pair) 승계 — 양성 소유 증거가 있을 때만(code-11 P1)
+repo_o = make_repo("o", "git@github.com:team-o1/app.git", "main")
+old_o = runs2 / "team-o1__app" / "main"
+(old_o / "code-1").mkdir(parents=True)
+(old_o / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_o)}))
+sh(repo_o, "remote", "set-url", "origin", "git@github.com:team-o2/app.git")  # fork 전환
+new_o = runs2 / "team-o2__app" / "main"
+assert rr.branch_dir(str(repo_o)) == old_o, "무변경 해석이 v2 전신을 못 봤다"
+assert rr.branch_dir(str(repo_o), migrate=True) == new_o
+assert (new_o / "code-1").is_dir(), "origin 변경 후 v2 기록이 승계되지 않았다"
+assert not old_o.exists()
+# 음성: 양성 증거 없는(기록 없는) 남의 v2 디렉토리는 절대 가져가지 않는다
+repo_p = make_repo("p", "git@github.com:team-p/app.git", "main")
+stranger = runs2 / "stranger__x" / "main"
+(stranger / "plan-1").mkdir(parents=True)                # round.json 없음 — 판정 불가
+new_p = runs2 / "team-p__app" / "main"
+assert rr.branch_dir(str(repo_p), migrate=True) == new_p
+assert (stranger / "plan-1").is_dir(), "증거 없는 남의 v2 디렉토리를 가져갔다"
+assert not new_p.exists()
+
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs

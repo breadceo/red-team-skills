@@ -350,9 +350,12 @@ def main():
         # '기록이 없다'와 '거부된 구 기록이 있다'를 가른다(code-10 P1) — 외부 소유(또는
         # 확인 실패)로 이전이 거부된 상태를 침묵하면 사용자는 기록이 사라졌다고 오인한다.
         blocked = ""
-        if not a.key and (f := run_round.migration_blocked(cwd)):
-            blocked = (f"\n  ⚠ 구 레이아웃에 다른 저장소 소유로 보이는(또는 소유 확인에 실패한) "
-                       f"기록이 있어\n    이전이 거부된 상태다 — 기록의 워크트리: {f}\n"
+        if not a.key and (bk := run_round.migration_blocked(cwd)):
+            state, f = bk
+            why = ("다른 저장소 소유로 보이는" if state == "foreign"
+                   else "소유 확인(git)에 실패한")  # 확인 실패를 불일치로 단정하지 않는다(code-11 P1)
+            blocked = (f"\n  ⚠ 구 레이아웃에 {why} 기록이 있어 이전이 거부된 상태다"
+                       f" — 기록의 워크트리: {f}\n"
                        f"    필요하면 그 기록을 수동 정리한 뒤 다시 실행한다.")
         sys.exit(f"{base} 에 라운드가 없다.{blocked}\n"
                  f"  여기가 맞는 저장소인지 확인하고(현재: {cwd}), 티켓 이름으로 찾으려면\n"

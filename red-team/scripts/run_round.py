@@ -420,27 +420,52 @@ def _pick_legacy(cwd: str, branch: str, parent_name: str):
     첫 일치에서 멈추지 않는 이유는 code-1 P2(혼합 기록), 판정 불가(기록 없음·워크트리
     소실·손상)면 이전 — 단일 저장소 사용이 압도적이다.
     """
-    first_foreign = None
+    first_blocked = None
     for legacy in _legacy_candidates(cwd, branch):
         if not legacy.is_dir():
             continue
-        f = next((p for state, p in _record_owners(legacy)
-                  if state == "error" or repo_key(p) != parent_name), None)
-        if f:
-            first_foreign = first_foreign or f
+        blocked = next((("unverified" if state == "error" else "foreign", p)
+                        for state, p in _record_owners(legacy)
+                        if state == "error" or repo_key(p) != parent_name), None)
+        if blocked:
+            first_blocked = first_blocked or blocked
             continue
         return legacy, None
-    return None, first_foreign
+    return None, first_blocked
+
+
+def _v2_predecessor(cwd: str, new: Path):
+    """origin 변경으로 키가 바뀐 같은 저장소의 이전 v2 디렉토리 — **양성 소유 증거** 필수.
+
+    구 세대(gen0·gen1)와 달리 판정 불가를 이전 근거로 삼지 않는다 — v2 아래에는 여러
+    저장소가 같은 브랜치명(main 등)으로 공존하는 것이 정상이라, 증거 없는 이전은 남의
+    기록을 가져간다. 기록의 워크트리 전부가 현재 키로 파생 확인될 때만 승계한다
+    (code-11 P1: fork 전환 등 origin owner 변경 시 라운드·triage 커서의 조용한 초기화 방지).
+    """
+    for d in sorted(RUNS_DIR.glob(f"*/{new.name}")):
+        if d == new or not d.is_dir():
+            continue
+        owners = list(_record_owners(d))
+        oks = [p for s, p in owners if s == "ok"]
+        if oks and len(oks) == len(owners) \
+                and all(repo_key(p) == new.parent.name for p in oks):
+            return d
+    return None
 
 
 def _migration_state(cwd: str, branch: str, new: Path):
-    """(이전할 구 디렉토리, 거부 사유가 된 외부 워크트리) — 부수효과 없는 판정.
+    """(이전할 구 디렉토리, 거부 사유 (상태, 워크트리)) — 부수효과 없는 판정.
 
-    _migrate_legacy 와 dry-run 표시, 그리고 무변경 해석(branch_dir)이 같은 선택을
-    공유한다 — 갈라지면 읽는 곳과 옮기는 곳이 서로 다른 디렉토리를 가리킨다(code-7·8).
+    거부 상태는 'foreign'(origin 불일치)과 'unverified'(소유 확인 실패)를 가른다 —
+    합치면 확인 실패를 다른 저장소 기록이라고 단정하는 안내가 나간다(code-11 P1).
+    _migrate_legacy 와 dry-run 표시, 무변경 해석(branch_dir)이 같은 선택을 공유한다 —
+    갈라지면 읽는 곳과 옮기는 곳이 서로 다른 디렉토리를 가리킨다(code-7·8).
     """
     if not new.exists():
-        return _pick_legacy(cwd, branch, new.parent.name)
+        src, blocked = _pick_legacy(cwd, branch, new.parent.name)
+        if src is None and blocked is None:
+            src = _v2_predecessor(cwd, new)
+        return src, blocked
     return None, None
 
 
@@ -451,11 +476,14 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     v2 루트는 구 루트와 경로 공간이 분리돼 있어 new 가 있으면 항상 v2 코드가 만든
     정당한 기록이다 — 스쿼팅 검사(code-3·4·7 의 경고들)가 필요 없어졌다.
     """
-    src, foreign = _migration_state(cwd, branch, new)
-    if foreign:
-        print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다\n"
-              f"  (기록의 워크트리 {foreign} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
-              flush=True)
+    src, blocked = _migration_state(cwd, branch, new)
+    if blocked:
+        state, p = blocked
+        why = (f"기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전"
+               if state == "foreign" else
+               f"기록의 워크트리 {p} 의 소유 확인에 실패했다(권한·I/O 등) — "
+               f"불일치로 단정하지 않는다. 확인 가능해지면 다시 시도된다")
+        print(f"⚠ 구 라운드 디렉토리를 두고 간다\n  ({why})", flush=True)
         return
     if src is None:
         return
@@ -473,10 +501,11 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
 
 
 def migration_blocked(cwd: str):
-    """이전이 외부 소유(또는 확인 실패) 기록 때문에 거부된 상태면 그 워크트리 경로.
+    """이전이 거부된 상태면 ('foreign'|'unverified', 워크트리 경로) — 아니면 None.
 
     resume 가 '라운드가 없다'와 '거부된 구 기록이 있다'를 갈라 안내하는 데 쓴다
-    (code-10 P1) — 부수효과 없음.
+    (code-10 P1). 상태를 보존해 확인 실패를 불일치로 단정하지 않는다(code-11 P1).
+    부수효과 없음.
     """
     branch = _current_branch(cwd)
     new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
@@ -534,10 +563,11 @@ def branch_dir(cwd: str, migrate: bool = False) -> Path:
     if MIGRATE and migrate:
         _migrate_legacy(cwd, branch, new)
     elif not new.exists():
-        # 무변경 해석 — 기록이 현재 사는 곳을 가리킨다. 마이그레이션과 같은 후보 선택을
-        # 공유해 외부 소유 gen1 을 읽는 오독을 막는다(code-8 P2). 이 소유 검사 비용은
+        # 무변경 해석 — 기록이 현재 사는 곳을 가리킨다. 마이그레이션과 같은 판정
+        # (_migration_state: 구 세대 + v2 전신)을 공유해 외부 소유 gen1 오독(code-8 P2)과
+        # origin 변경 후 v2 전신 미인식(code-11 P1)을 막는다. 이 소유 검사 비용은
         # 전환기(new 부재)에만 발생한다.
-        src, _ = _pick_legacy(cwd, branch, new.parent.name)
+        src, _ = _migration_state(cwd, branch, new)
         if src:
             return src
     return new

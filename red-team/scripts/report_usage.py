@@ -13,14 +13,15 @@ cheap 축의 findings 0 은 낭비가 아니라 커버리지 보험이다 — �
 import json, os, sys
 from pathlib import Path
 
-RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
+_HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")  # v2 루트 + 아직 이전 안 된 구 루트
 
 
 def rows(filt: str | None):
     """리뷰어 실행 단위로 평탄화. (구버전 라운드 수, 행 목록, decisions 있는 라운드 수, 라운드 수)"""
     legacy, out, decided, rounds = 0, [], 0, 0
-    for rj in sorted(RUNS.glob("*/*/*/round.json")):
-        rel = rj.relative_to(RUNS)
+    for root, rj in sorted((r, rj) for r in RUNS_ROOTS for rj in r.glob("*/*/*/round.json")):
+        rel = rj.relative_to(root)
         if filt and filt not in str(rel.parent):
             continue
         try:
@@ -64,7 +65,8 @@ def main():
     filt = sys.argv[1] if len(sys.argv) > 1 else None
     legacy, data, decided, rounds = rows(filt)
     if not data:
-        sys.exit(f"집계할 라운드가 없다 ({RUNS}" + (f", 필터={filt}" if filt else "") + "). "
+        sys.exit(f"집계할 라운드가 없다 ({' · '.join(map(str, RUNS_ROOTS))}"
+                 + (f", 필터={filt}" if filt else "") + "). "
                  + (f"구버전 라운드 {legacy}건은 assignments 가 없어 집계 불가다." if legacy else ""))
 
     def group(keyf):

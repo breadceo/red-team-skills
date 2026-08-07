@@ -33,9 +33,10 @@ for _c in RED_TEAM_CANDIDATES:
         sys.path.insert(0, str(_c))
         break
 try:
-    from run_round import branch_dir  # 경로 파생은 red-team 과 한 규칙을 쓴다
+    # 경로 파생은 red-team 과 한 규칙을 쓴다
+    from run_round import branch_dir, note_owner, migration_blocked
 except ImportError:
-    branch_dir = None
+    branch_dir = note_owner = migration_blocked = None
 
 RED_TEAM_MISSING = (
     "`red-team` 스킬이 필요하다 — pr-triage 는 그 위에서 돈다.\n"
@@ -56,7 +57,16 @@ RED_TEAM_MISSING = (
 def state_path(cwd: str, pr: int) -> Path:
     if branch_dir is None:
         sys.exit(RED_TEAM_MISSING)
-    return branch_dir(cwd) / f"pr-{pr}-triage.json"
+    p = branch_dir(cwd) / f"pr-{pr}-triage.json"
+    if not p.parent.exists() and migration_blocked is not None \
+            and (bk := migration_blocked(cwd)) and bk[0] == "unverified":
+        # 소유 확인 실패로 red-team 이전이 보류된 상태 — 여기서 새 경로에 상태를 쓰면
+        # 복구 후에도 기존 커서를 승계할 수 없게 된다(red-team code-14 P1).
+        sys.exit(f"red-team 구 기록의 소유 확인에 실패해 이전이 보류된 상태다 — 지금 새 상태\n"
+                 f"  경로를 만들면 복구 후 기존 triaged/notified 커서를 승계할 수 없게 된다.\n"
+                 f"  확인 실패 지점: {bk[1]}\n"
+                 f"  접근 문제(권한·마운트)를 해결한 뒤 다시 실행한다.")
+    return p
 
 
 def load_state(cwd: str, pr: int) -> dict:
@@ -72,8 +82,25 @@ def load_state(cwd: str, pr: int) -> dict:
 def save_state(cwd: str, pr: int, st: dict) -> Path:
     p = state_path(cwd, pr)
     p.parent.mkdir(parents=True, exist_ok=True)
+    if note_owner is not None:
+        # 커서 전용 디렉토리(round.json 없음)도 origin 변경 승계의 양성 증거를 가진다
+        # (red-team code-12 P1) — 없으면 owner 변경 시 triaged/notified 가 조용히 초기화된다.
+        note_owner(p.parent, cwd)
     st["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     p.write_text(json.dumps(st, ensure_ascii=False, indent=2))
+    # 쓰는 사이 red-team 이 구 레이아웃을 새 키로 이전(rename)했을 수 있다 — 경로를
+    # 재파생해 달라졌으면 새 위치로 옮겨 쓴다. 안 하면 상태가 구·신 위치로 갈라져 처리
+    # 완료가 미처리로 되살아난다(red-team code-7 P1). 이 쓰기가 최신 병합본이므로
+    # 이전된 사본은 덮는다. ms 단위 잔여 창은 수용한다(문서 프로토콜로 못 닫는 매체 한계).
+    cur = state_path(cwd, pr)
+    if cur != p:
+        cur.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            p.replace(cur)
+        except FileNotFoundError:
+            if not cur.exists():  # rename 이 파일까지 옮겼다면 이미 원하는 위치다(code-8 P2)
+                raise
+        p = cur
     return p
 
 

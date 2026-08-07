@@ -38,7 +38,38 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
-## 2026-08-06
+## 2026-08-07
+
+### 🐛 red-team — runs/ 키 네임스페이스 개선: 디렉토리 충돌 제거 (#8)
+
+라운드 키 `runs/<repo>/<branch>` 가 두 축에서 충돌할 수 있었다 — `<repo>` 는 origin
+basename 만 써서 `team-a/app` 과 `team-b/app` 이 같은 `runs/app/` 을 공유했고,
+`<branch>` 는 비가역 slug 라 `feature/foo` 와 `feature-foo` 가 같은 디렉토리가 됐다.
+충돌하면 라운드 번호·컨텍스트 이관·`latest_round`·ABORTED 마커가 전부 섞였다.
+
+**달라지는 것**
+
+- **라운드 루트가 `runs2/` 로 분리된다** — 구 키는 slug 산출물 전체라, 새 키를 아무리
+  단사로 설계해도 같은 루트 안에서는 이미 디스크에 있는 구 디렉토리가 새 키 자리를
+  선점하는 전환기 충돌을 막을 수 없었다(코드 게이트 7라운드의 실측 결론). 루트가 다르면
+  `runs2/` 아래는 새 코드가 만든 것뿐이라 그 클래스가 통째로 사라진다.
+- **repo 키에 owner 가 들어간다** — `runs2/team-a__app/...`. origin URL(https·ssh·scp형)에서
+  owner/repo 를 뽑고, 못 뽑는 origin(로컬 경로 등)은 basename 폴백(단, `__` 를 담은
+  이름은 pair 키와 겹치지 않게 해시로 가른다).
+- **브랜치 키가 단사가 된다** — slug 가 문자를 뭉갠 브랜치(`feature/foo`)에만 원문
+  sha1 8자를 접미한다(`feature-foo--87171ad4`). 무손실 브랜치는 키가 그대로다.
+  가역 인코딩 대신 단사로 충분하다 — 디렉토리명→브랜치 역방향 소비처가 없고,
+  resume 의 워크트리 매칭도 브랜치→키 방향으로 같은 함수를 쓴다. 접미 패턴
+  `--<hex8>` 은 예약이라, 그 패턴으로 끝나는 실존 브랜치·`__` 경계가 모호한
+  owner/repo(`a__b/c` vs `a/b__c`)도 해시로 갈린다 — 잔여 충돌은 sha1 32bit 뿐이다.
+- **구 레이아웃은 자동 이전된다** — 새 경로가 비어 있고 구 경로가 있으면 1회 rename.
+  구 디렉토리의 라운드 기록(round.json 의 repo_cwd) **전부**를 대조해 하나라도 다른
+  저장소의 origin 을 가리키면 — 바로 그 충돌 케이스 — 건드리지 않고 경고만 한다.
+  경로 파생이 `branch_dir()` 한 곳이라 resume·pr-triage 도 자동으로 따라온다.
+- **이전(rename)은 쓰기 지점 두 곳에서만 일어난다** — 라운드 생성(resolve_out)과 resume
+  의 대상 확정 후 선행 이전. 조회·감시·비교·dry-run 은 전부 무변경 해석이 기본값이라,
+  pr-triage 감시나 다른 티켓 키 조회가 디렉토리를 옮기는 부수효과가 없다. dry-run 은
+  읽기는 구 경로에서 하되 표시는 실제 실행이 만들 경로를 보여준다.
 
 ### ✨ red-team·pr-triage — 게이트 통과 시 외부 산출물(티켓·이슈·PR 본문) 최신화 프로토콜 (#5)
 

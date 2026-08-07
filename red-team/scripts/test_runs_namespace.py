@@ -1,0 +1,428 @@
+"""issue #8 — runs/ 키 네임스페이스 검증.
+
+repo 키의 owner 포함, 브랜치 키의 단사성, 구 레이아웃 마이그레이션 3분기
+(일치 → 이전 / 불일치 → 거부 / 판정 불가 → 이전)를 확인한다.
+"""
+import json, os, pathlib, subprocess, sys, tempfile
+
+TMP = tempfile.mkdtemp(prefix="rt-ns-")
+os.environ["RED_TEAM_HOME"] = str(pathlib.Path(TMP) / "home")  # import 전에 고정해야 한다
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import run_round as rr
+
+
+def sh(cwd, *args):
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+
+def make_repo(name, origin, branch):
+    d = pathlib.Path(TMP) / name
+    d.mkdir()
+    sh(d, "init", "-b", "main")
+    sh(d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x")
+    if origin:
+        sh(d, "remote", "add", "origin", origin)
+    if branch != "main":
+        sh(d, "checkout", "-b", branch)
+    return d
+
+
+# ── 1) repo_key: URL 형태별 owner 포함 ─────────────────────────────────────
+repo_a = make_repo("a", "git@github.com:team-a/app.git", "feature/foo")
+assert rr.repo_key(str(repo_a)) == "team-a__app", rr.repo_key(str(repo_a))
+
+for url, want in [
+    ("https://github.com/team-b/app.git", "team-b__app"),
+    ("https://github.com/team-b/app", "team-b__app"),
+    ("ssh://git@github.com/team-c/app.git", "team-c__app"),
+    ("ssh://git@github.com:22/team-c/app.git", "team-c__app"),  # 명시 포트는 키가 아니다(code-9 P2)
+    ("ssh://git@example.com:22/app.git", "app"),                # 포트 소비 후 단일 세그먼트 → basename
+]:
+    sh(repo_a, "remote", "set-url", "origin", url)
+    assert rr.repo_key(str(repo_a)) == want, (url, rr.repo_key(str(repo_a)))
+
+sh(repo_a, "remote", "set-url", "origin", "/local/bare/app.git")  # 로컬 경로 — basename 폴백
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "../remotes/team/app.git")  # 상대 경로도 동일(code-2 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "file://localhost/x/team/app.git")  # file:// 도 로컬(code-8 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+for url in ["C:/team/app.git", "C:\\team\\app.git", "file:///C:/team/app.git"]:  # Windows 드라이브(code-10 P2)
+    sh(repo_a, "remote", "set-url", "origin", url)
+    assert rr.repo_key(str(repo_a)) == "app", (url, rr.repo_key(str(repo_a)))
+sh(repo_a, "remote", "set-url", "origin", "ssh://git@[2001:db8::1]/app.git")  # IPv6 host 직결(code-10 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "ssh://git@[::1]:2222/team-v6/app.git")
+assert rr.repo_key(str(repo_a)) == "team-v6__app", rr.repo_key(str(repo_a))
+
+no_origin = make_repo("standalone", None, "main")  # origin 없음 — 디렉토리명 폴백
+assert rr.repo_key(str(no_origin)) == "standalone", rr.repo_key(str(no_origin))
+
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team-a/app.git")  # 원복
+
+# ── 2) branch_key: 단사성 ──────────────────────────────────────────────────
+assert rr.branch_key("feature-foo") == "feature-foo"          # 무손실 — 구 키 그대로
+lossy = rr.branch_key("feature/foo")
+assert lossy.startswith("feature-foo--") and len(lossy) == len("feature-foo--") + 8
+assert lossy != rr.branch_key("feature foo")                  # 같은 slug, 다른 원문 → 다른 키
+assert rr.branch_key("feature/foo") == lossy                  # 결정적
+# 예약 접미(code-1 P1): lossy 키와 같은 문자열의 실존 브랜치는 강제 해시 — 출력 공간 분리
+assert rr.branch_key(lossy) != lossy and rr.branch_key(lossy).startswith(lossy + "--")
+# 길이 상한(code-2 P1): 접미가 붙어도 NAME_MAX(255) 이내, 절단 뒤에도 단사
+long_a, long_b = "x/" + "a" * 300, "x/" + "a" * 299 + "b"
+assert len(rr.branch_key(long_a)) <= 255
+assert rr.branch_key(long_a) != rr.branch_key(long_b)  # 절단 구간 밖 차이는 해시가 가른다
+# 대문자 hex 접미도 예약(code-4 P2) — APFS 비구분 파일시스템에서 소문자 키와 충돌 방지
+up = lossy[:-8] + lossy[-8:].upper()
+assert rr.branch_key(up) != up and rr.branch_key(up).startswith(up + "--")
+
+# ── 2b) repo_key: `__` 경계 모호성 (code-1 P1) ─────────────────────────────
+keys = []
+for url in ["git@github.com:a__b/c.git", "git@github.com:a/b__c.git"]:
+    sh(repo_a, "remote", "set-url", "origin", url)
+    keys.append(rr.repo_key(str(repo_a)))
+assert keys[0] != keys[1], keys                                # 경계가 다르면 키도 다르다
+assert all(k.startswith("a__b__c--") for k in keys), keys      # 둘 다 해시로 갈린다
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team_/app.git")  # 경계 인접 `_`
+k1 = rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team/_app.git")
+assert k1 != rr.repo_key(str(repo_a)), (k1, rr.repo_key(str(repo_a)))
+
+# ── 2c) _single_key: 폴백 키와 pair 키의 출력 공간 분리 (code-3 P1) ────────
+sh(repo_a, "remote", "set-url", "origin", "/local/bare/team__app.git")
+k_fallback = rr.repo_key(str(repo_a))
+assert k_fallback != "team__app" and k_fallback.startswith("team__app--"), k_fallback
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team/app.git")
+assert rr.repo_key(str(repo_a)) == "team__app"          # pair 키는 무접미 그대로
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:" + "o" * 155 + "/" + "r" * 99 + ".git")
+assert len(rr.repo_key(str(repo_a))) <= 255              # 무손실 pair 도 길이 상한(code-3 P2)
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team-a/app.git")  # 원복
+
+# ── 3) branch_dir: 새 키 + 마이그레이션 ────────────────────────────────────
+runs = pathlib.Path(os.environ["RED_TEAM_HOME"]) / "runs"    # 구 루트 (레거시 픽스처)
+runs2 = pathlib.Path(os.environ["RED_TEAM_HOME"]) / "runs2"  # v2 루트 (신 키 전용)
+new_a = runs2 / "team-a__app" / lossy
+
+# 3a) 일치 — 구 기록의 repo_cwd 가 같은 origin 을 가리키면 rename
+legacy = runs / "app" / "feature-foo"
+(legacy / "code-1").mkdir(parents=True)
+(legacy / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+assert rr.branch_dir(str(repo_a), migrate=True) == new_a
+assert (new_a / "code-1" / "round.json").exists(), "구 라운드가 이전되지 않았다"
+assert not legacy.exists()
+
+# 3b) 새 경로가 이미 있으면 구 디렉토리를 건드리지 않는다
+(legacy / "code-9").mkdir(parents=True)
+assert rr.branch_dir(str(repo_a), migrate=True) == new_a
+assert (legacy / "code-9").exists(), "새 경로가 있는데 구 디렉토리를 옮겼다"
+(legacy / "code-9").rmdir(); legacy.rmdir()
+
+# 3c) 불일치 — 다른 저장소(team-b/app)의 기록이면 두고 간다
+repo_b = make_repo("b", "git@github.com:team-b/app.git", "feature/foo")
+(legacy / "code-1").mkdir(parents=True)
+(legacy / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+new_b = runs2 / "team-b__app" / lossy
+assert rr.branch_dir(str(repo_b), migrate=True) == new_b
+assert (legacy / "code-1" / "round.json").exists(), "남의 기록을 가져갔다"
+assert not new_b.exists()
+
+# 3d) 판정 불가 — round.json 이 없으면(준비만 된 라운드) 이전한다
+import shutil; shutil.rmtree(legacy)
+repo_c = make_repo("c", "git@github.com:team-c/app.git", "feature/foo")
+legacy_c = runs / "app" / "feature-foo"
+(legacy_c / "plan-1").mkdir(parents=True)
+new_c = runs2 / "team-c__app" / lossy
+assert rr.branch_dir(str(repo_c), migrate=True) == new_c
+assert (new_c / "plan-1").is_dir(), "판정 불가 케이스가 이전되지 않았다"
+
+# 3e) 혼합 기록(code-1 P2) — 하나라도 다른 저장소면 전체를 두고 간다 (첫 일치 break 금지)
+repo_d = make_repo("d", "git@github.com:team-d/app.git", "feature/foo")
+legacy_d = runs / "app" / "feature-foo"
+(legacy_d / "code-1").mkdir(parents=True)
+(legacy_d / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_d)}))  # 일치
+(legacy_d / "code-2").mkdir()
+(legacy_d / "code-2" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))  # 불일치
+rr.branch_dir(str(repo_d), migrate=True)
+assert (legacy_d / "code-1").exists() and (legacy_d / "code-2").exists(), \
+    "혼합 기록인데 통째로 가져갔다"
+assert not (runs2 / "team-d__app" / lossy).exists()
+
+# 3f) 잘린 UTF-8 round.json(code-1 P2) — 판정 불가로 취급, 죽지 않고 이전한다
+shutil.rmtree(legacy_d)
+repo_e = make_repo("e", "git@github.com:team-e/app.git", "feature/foo")
+legacy_e = runs / "app" / "feature-foo"
+(legacy_e / "code-1").mkdir(parents=True)
+(legacy_e / "code-1" / "round.json").write_bytes('{"repo_cwd": "가나다'.encode()[:-1])
+new_e = runs2 / "team-e__app" / lossy
+assert rr.branch_dir(str(repo_e), migrate=True) == new_e
+assert (new_e / "code-1").is_dir(), "잘린 UTF-8 기록에서 이전이 죽었다"
+
+# 3g) 비 dict 유효 JSON(null·[])·비문자열 repo_cwd(code-2 P2) — 판정 불가, 죽지 않는다
+repo_f = make_repo("f", "git@github.com:team-f/app.git", "feature/foo")
+legacy_f = runs / "app" / "feature-foo"
+for i, body in enumerate(["null", "[]", '{"repo_cwd": []}'], 1):
+    (legacy_f / f"code-{i}").mkdir(parents=True)
+    (legacy_f / f"code-{i}" / "round.json").write_text(body)
+new_f = runs2 / "team-f__app" / lossy
+assert rr.branch_dir(str(repo_f), migrate=True) == new_f
+assert (new_f / "code-3").is_dir(), "비 dict 기록에서 이전이 죽었다"
+
+# 3h) repo_cwd 디렉토리가 git 워크트리가 아니면 판정 불가 — 오판 거부 없이 이전(code-3 P2)
+repo_g = make_repo("g", "git@github.com:team-g/app.git", "feature/foo")
+legacy_g = runs / "app" / "feature-foo"
+plain = pathlib.Path(TMP) / "plain-dir"; plain.mkdir()   # git 아님
+(legacy_g / "code-1").mkdir(parents=True)
+(legacy_g / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(plain)}))
+new_g = runs2 / "team-g__app" / lossy
+assert rr.branch_dir(str(repo_g), migrate=True) == new_g
+assert (new_g / "code-1").is_dir(), "비워크트리 repo_cwd 가 이전을 오판 거부했다"
+
+# 3i) v2 루트의 구조적 스쿼팅 배제(code-7 P1) — 구 루트의 리터럴 `team__app2` 디렉토리
+# (basename 에 `__` 를 담은 다른 저장소의 gen0, 또는 gen1)가 새 키와 이름이 같아도,
+# 루트가 달라 새 키 자리를 선점할 수 없다. gen1 마이그레이션도 여기서 함께 확인한다.
+repo_h = make_repo("h", "git@github.com:team/app2.git", "main")
+gen1_h = runs / "team__app2" / "main"                    # gen1 (미출시 중간 레이아웃) 픽스처
+(gen1_h / "code-9").mkdir(parents=True)
+(gen1_h / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_h)}))
+new_h = runs2 / "team__app2" / "main"
+assert rr.branch_dir(str(repo_h), migrate=True) == new_h
+assert (new_h / "code-9").is_dir(), "gen1 레이아웃이 v2 루트로 이전되지 않았다"
+assert not gen1_h.exists()
+
+# 3j) dry-run 읽기 전용 해석(code-3 P1) — MIGRATE=False 면 rename 없이 구 경로를 반환
+shutil.rmtree(new_h.parent)
+repo_i = make_repo("i", "git@github.com:team-i/app.git", "feature/foo")
+legacy_i = runs / "app" / "feature-foo"
+(legacy_i / "code-1").mkdir(parents=True)
+rr.MIGRATE = False
+assert rr.branch_dir(str(repo_i), migrate=True) == legacy_i, "dry-run 해석이 구 경로를 반환하지 않았다"
+assert legacy_i.is_dir(), "MIGRATE=False 인데 rename 이 일어났다"
+rr.MIGRATE = True
+# migrate=False 인자도 같은 무변경 해석(code-4 P1) — 마커 검사 등 경고용 파생이 쓴다
+assert rr.branch_dir(str(repo_i), migrate=False) == legacy_i
+assert legacy_i.is_dir(), "migrate=False 인데 rename 이 일어났다"
+# 기본값이 무변경(code-6 P1) — 조회 소비처(pr-triage 등)는 인자 없이 불러도 순수하다
+assert rr.branch_dir(str(repo_i)) == legacy_i
+assert legacy_i.is_dir(), "기본 호출인데 rename 이 일어났다"
+assert rr.target_dir(str(repo_i)) == runs2 / "team-i__app" / lossy  # 표시용 순수 계산
+assert rr.branch_dir(str(repo_i), migrate=True) == runs2 / "team-i__app" / lossy  # 실제 실행은 이전한다
+
+# 3k) 초장문 repo_cwd(code-4 P2) — Path.is_dir 의 OSError 도 판정 불가, 죽지 않는다
+repo_j = make_repo("j", "git@github.com:team-j/app.git", "feature/foo")
+legacy_j = runs / "app" / "feature-foo"
+(legacy_j / "code-1").mkdir(parents=True)
+(legacy_j / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": "/x/" + "y" * 5000}))
+new_j = runs2 / "team-j__app" / lossy
+assert rr.branch_dir(str(repo_j), migrate=True) == new_j
+assert (new_j / "code-1").is_dir(), "초장문 repo_cwd 에서 이전이 죽었다"
+
+# 3l) 외부 소유 gen1 을 건너뛰고 자기 gen0 을 이전한다(code-8 P2) — 무변경 해석도 동일 선택
+repo_l = make_repo("l", "git@github.com:team/appx.git", "main")
+gen1_l = runs / "team__appx" / "main"                    # 외부(repo_a) 소유의 gen1 자리
+(gen1_l / "code-9").mkdir(parents=True)
+(gen1_l / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+gen0_l = runs / "appx" / "main"                          # 자기 gen0 기록
+(gen0_l / "code-7").mkdir(parents=True)
+(gen0_l / "code-7" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_l)}))
+assert rr.branch_dir(str(repo_l)) == gen0_l, "무변경 해석이 외부 gen1 을 반환했다"
+new_l = runs2 / "team__appx" / "main"
+assert rr.branch_dir(str(repo_l), migrate=True) == new_l
+assert (new_l / "code-7").is_dir(), "외부 gen1 에 막혀 자기 gen0 을 이전하지 못했다"
+assert (gen1_l / "code-9").is_dir(), "외부 gen1 을 건드렸다"
+
+# 3m) v2 폴백→pair 승계(code-10 P1) — origin 이 나중에 생기면 **양성 증거로만** 승계한다
+repo_m = make_repo("m", None, "main")                    # origin 없이 시작
+fb_m = runs2 / "m" / "main"                              # 폴백 키(디렉토리명) 자리
+(fb_m / "code-1").mkdir(parents=True)
+(fb_m / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_m)}))
+sh(repo_m, "remote", "add", "origin", "git@github.com:team-m/app.git")  # origin 승격
+new_m = runs2 / "team-m__app" / "main"
+assert rr.branch_dir(str(repo_m)) == fb_m, "무변경 해석이 폴백 세대를 못 봤다"
+assert rr.branch_dir(str(repo_m), migrate=True) == new_m
+assert (new_m / "code-1").is_dir(), "폴백 키 기록이 pair 키로 승계되지 않았다"
+# 음성(code-12 P1): 증거 없는 남의 v2 폴백 디렉토리(같은 디렉토리명)는 가져가지 않는다
+victim = runs2 / "m2" / "main"
+(victim / "plan-1").mkdir(parents=True)                  # 준비만 됨 — 기록 없음
+repo_m2 = make_repo("m2", "git@github.com:team-m2/other.git", "main")  # 디렉토리명 m2
+assert rr.branch_dir(str(repo_m2), migrate=True) == runs2 / "team-m2__other" / "main"
+assert (victim / "plan-1").is_dir(), "증거 없는 v2 폴백 디렉토리를 가져갔다"
+
+# 3n) git 소유 확인 실패는 판정 불가가 아니라 이전 거부(code-10 P1) — 보수적
+repo_n = make_repo("n", "git@github.com:team-n/app.git", "feature/foo")
+legacy_n = runs / "app" / "feature-foo"
+(legacy_n / "code-1").mkdir(parents=True)
+(legacy_n / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_n)}))
+_real_state = rr._git_toplevel_state
+rr._git_toplevel_state = lambda p: ("error", None)       # 확인 실패 강제
+assert rr.branch_dir(str(repo_n), migrate=True) == runs2 / "team-n__app" / lossy
+assert (legacy_n / "code-1").is_dir(), "확인 실패인데 이전을 감행했다"
+rr._git_toplevel_state = _real_state
+assert rr.branch_dir(str(repo_n), migrate=True) == runs2 / "team-n__app" / lossy
+assert not legacy_n.exists(), "확인 복구 후에도 이전되지 않았다"
+
+# 3o) origin owner 변경(pair→pair) 승계 — 양성 소유 증거가 있을 때만(code-11 P1)
+repo_o = make_repo("o", "git@github.com:team-o1/app.git", "main")
+old_o = runs2 / "team-o1__app" / "main"
+(old_o / "code-1").mkdir(parents=True)
+(old_o / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_o)}))
+sh(repo_o, "remote", "set-url", "origin", "git@github.com:team-o2/app.git")  # fork 전환
+new_o = runs2 / "team-o2__app" / "main"
+assert rr.branch_dir(str(repo_o)) == old_o, "무변경 해석이 v2 전신을 못 봤다"
+assert rr.branch_dir(str(repo_o), migrate=True) == new_o
+assert (new_o / "code-1").is_dir(), "origin 변경 후 v2 기록이 승계되지 않았다"
+assert not old_o.exists()
+# 음성: 양성 증거 없는(기록 없는) 남의 v2 디렉토리는 절대 가져가지 않는다
+repo_p = make_repo("p", "git@github.com:team-p/app.git", "main")
+stranger = runs2 / "stranger__x" / "main"
+(stranger / "plan-1").mkdir(parents=True)                # round.json 없음 — 판정 불가
+new_p = runs2 / "team-p__app" / "main"
+assert rr.branch_dir(str(repo_p), migrate=True) == new_p
+assert (stranger / "plan-1").is_dir(), "증거 없는 남의 v2 디렉토리를 가져갔다"
+assert not new_p.exists()
+# 판정 불가 혼재(code-12 P2): ok 기록 + null 기록 공존 시 승계 탈락
+repo_q = make_repo("q", "git@github.com:team-q1/app.git", "main")
+mix = runs2 / "team-q1__app" / "main"
+(mix / "code-1").mkdir(parents=True)
+(mix / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_q)}))
+(mix / "code-2").mkdir()
+(mix / "code-2" / "round.json").write_text("null")
+sh(repo_q, "remote", "set-url", "origin", "git@github.com:team-q2/app.git")
+assert rr.branch_dir(str(repo_q), migrate=True) == runs2 / "team-q2__app" / "main"
+assert (mix / "code-1").is_dir(), "판정 불가가 섞인 v2 후보를 승계했다"
+# owner.json 증거(code-12 P1): 커서 전용 디렉토리도 owner 변경 승계가 된다
+repo_r = make_repo("r", "git@github.com:team-r1/app.git", "main")
+cur_only = runs2 / "team-r1__app" / "main"
+rr.note_owner(cur_only, str(repo_r))
+(cur_only / "pr-7-triage.json").write_text('{"pr": 7, "triaged": [101], "notified": []}')
+sh(repo_r, "remote", "set-url", "origin", "git@github.com:team-r2/app.git")
+new_r = runs2 / "team-r2__app" / "main"
+assert rr.branch_dir(str(repo_r), migrate=True) == new_r
+assert (new_r / "pr-7-triage.json").exists(), "커서 전용 디렉토리가 승계되지 않았다"
+# 외부 gen0 이 있어도 양성 검증된 v2 전신이 우선(code-12 P1)
+repo_s = make_repo("s", "git@github.com:team-s1/app.git", "main")
+old_s = runs2 / "team-s1__app" / "main"
+rr.note_owner(old_s, str(repo_s))
+(old_s / "code-3").mkdir(parents=True)
+(old_s / "code-3" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_s)}))
+foreign_gen0 = runs / "app" / "main"
+(foreign_gen0 / "code-1").mkdir(parents=True)
+(foreign_gen0 / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+sh(repo_s, "remote", "set-url", "origin", "git@github.com:team-s2/app.git")
+new_s = runs2 / "team-s2__app" / "main"
+assert rr.branch_dir(str(repo_s)) == old_s, "무변경 해석이 외부 gen0 에 막혀 전신을 못 봤다"
+assert rr.branch_dir(str(repo_s), migrate=True) == new_s
+assert (new_s / "code-3").is_dir(), "외부 gen0 이 v2 전신 승계를 차단했다"
+assert (foreign_gen0 / "code-1").is_dir()
+shutil.rmtree(foreign_gen0)
+
+# 3p) unverified 보류 상태에서 새 라운드 생성 차단(code-13 P1) — 복구 후 승계 보전
+repo_t = make_repo("t", "git@github.com:team-t/app.git", "feature/foo")
+legacy_t = runs / "app" / "feature-foo"
+(legacy_t / "code-1").mkdir(parents=True)
+(legacy_t / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_t)}))
+_real_state2 = rr._git_toplevel_state
+rr._git_toplevel_state = lambda p: ("error", None)       # 확인 실패 강제
+try:
+    rr.resolve_out(str(repo_t), "code")
+    assert False, "unverified 보류인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+assert not (runs2 / "team-t__app" / lossy).exists(), "차단됐는데 새 경로가 생겼다"
+rr._git_toplevel_state = _real_state2
+out_t = rr.resolve_out(str(repo_t), "code")              # 복구 후엔 이전 + code-2
+assert out_t == runs2 / "team-t__app" / lossy / "code-2", out_t
+assert (runs2 / "team-t__app" / lossy / "code-1").is_dir(), "복구 후 승계가 안 됐다"
+
+# 3q) 기록 파일 읽기 실패(EACCES)도 보류(code-14 P1) — 복구 후 승계 보전
+repo_u = make_repo("u", "git@github.com:team-u/app.git", "feature/foo")
+legacy_u = runs / "app" / "feature-foo"
+(legacy_u / "code-1").mkdir(parents=True)
+rj_u = legacy_u / "code-1" / "round.json"
+rj_u.write_text(json.dumps({"repo_cwd": str(repo_u)}))
+rj_u.chmod(0)                                            # 읽기 실패 강제
+try:
+    rr.resolve_out(str(repo_u), "code")
+    assert False, "기록 읽기 실패인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+rj_u.chmod(0o644)
+out_u = rr.resolve_out(str(repo_u), "code")              # 복구 후 이전 + code-2
+assert out_u == runs2 / "team-u__app" / lossy / "code-2", out_u
+
+# 3r) legacy 커서 전용 + owner.json 증거(code-14 P2) — 다른 저장소가 못 가져간다
+repo_v = make_repo("v", "git@github.com:team-v/app.git", "main")
+legacy_v = runs / "app" / "main"
+rr.note_owner(legacy_v, str(repo_a))                     # repo_a 소유의 커서 전용 legacy
+(legacy_v / "pr-9-triage.json").write_text('{"pr": 9, "triaged": [1], "notified": []}')
+new_v = runs2 / "team-v__app" / "main"
+rr.branch_dir(str(repo_v), migrate=True)
+assert (legacy_v / "pr-9-triage.json").exists(), "owner.json 증거를 무시하고 커서를 가져갔다"
+assert not new_v.exists()
+shutil.rmtree(legacy_v)
+
+# 3s) legacy 디렉토리 열거 실패(권한)도 보류(code-15 P2) — 남의 기록을 못 가져간다
+repo_w = make_repo("w", "git@github.com:team-w/app.git", "feature/foo")
+legacy_w = runs / "app" / "feature-foo"
+(legacy_w / "code-1").mkdir(parents=True)
+(legacy_w / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))  # 남의 것
+legacy_w.chmod(0o311)                                    # 열거 불가
+try:
+    rr.resolve_out(str(repo_w), "code")
+    assert False, "열거 실패인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+legacy_w.chmod(0o755)
+shutil.rmtree(legacy_w)
+
+# 3t) 양성 증거 + 손상 기록 혼재 전신은 탈락이 아니라 보류(code-15 P1)
+repo_x = make_repo("x", "git@github.com:team-x1/app.git", "main")
+mixp = runs2 / "team-x1__app" / "main"
+(mixp / "code-1").mkdir(parents=True)
+(mixp / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_x)}))
+(mixp / "code-2").mkdir()
+(mixp / "code-2" / "round.json").write_text("null")
+sh(repo_x, "remote", "set-url", "origin", "git@github.com:team-x2/app.git")
+try:
+    rr.resolve_out(str(repo_x), "code")
+    assert False, "혼재 전신인데 새 이력을 시작했다"
+except SystemExit:
+    pass
+(mixp / "code-2" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_x)}))  # 손상 복구
+out_x = rr.resolve_out(str(repo_x), "code")
+assert out_x == runs2 / "team-x2__app" / "main" / "code-3", out_x  # 복구 후 승계
+
+# ── 4) resume 정합 ─────────────────────────────────────────────────────────
+assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
+import resume as rs
+hit, _mm = rs.resolve_base("team-a__app/feature-foo", str(repo_a))  # parent/name 매칭(code-3 P2)
+assert hit == new_a, hit
+# name 우선(code-4 P2) — 티켓 키가 repo 키에도 걸려 다중 후보가 되지 않는다
+(runs / "TICKET-9__x" / "main").mkdir(parents=True)
+(runs / "org__app" / "TICKET-9").mkdir(parents=True)
+hit2, _ = rs.resolve_base("ticket-9", str(repo_a))
+assert hit2 == runs / "org__app" / "TICKET-9", hit2
+# 완전 일치 우선(code-5 P2) — 안내된 구 경로 식별자 재입력이 새 경로와 또 겹치지 않는다
+(runs / "appq" / "feature-q").mkdir(parents=True)
+(runs / "t__appq" / "feature-q--12345678").mkdir(parents=True)
+hit3, _ = rs.resolve_base("appq/feature-q", str(repo_a))
+assert hit3 == runs / "appq" / "feature-q", hit3
+# 워크트리 파생 동등성(code-5 P2) — 같은 브랜치명의 다른 저장소 워크트리를 거른다
+wt, _how = rs.worktree_for(new_a, str(repo_b), None)
+assert wt is None, wt                                      # repo_b(feature/foo)는 new_a 소속이 아니다
+wt, _how = rs.worktree_for(new_a, str(repo_a), None)
+assert wt == str(repo_a)
+# 키 조회의 무부수효과(code-5 P2) — 다른 작업 조회가 cwd 의 구 라운드를 이전시키지 않는다
+repo_k = make_repo("k", "git@github.com:team-k/app.git", "feature/foo")
+legacy_k = runs / "app" / "feature-foo"
+(legacy_k / "code-1").mkdir(parents=True)
+rs.resolve_base("appq/feature-q", str(repo_k))
+assert legacy_k.is_dir(), "키 조회가 cwd 의 구 라운드를 이전시켰다"
+# 3부 식별자(code-8 P1) — 두 루트에 같은 parent/name 이 공존해도 루트 포함 키로 유일 선택
+(runs / "dup__x" / "br").mkdir(parents=True)
+(runs2 / "dup__x" / "br").mkdir(parents=True)
+h_new, _ = rs.resolve_base("runs2/dup__x/br", str(repo_a))
+h_old, _ = rs.resolve_base("runs/dup__x/br", str(repo_a))
+assert h_new == runs2 / "dup__x" / "br" and h_old == runs / "dup__x" / "br", (h_new, h_old)
+
+print("test_runs_namespace: ok")
+shutil.rmtree(TMP)

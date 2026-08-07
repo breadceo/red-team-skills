@@ -15,7 +15,7 @@ usage:
 (없으면 첫 엔진으로 폴백). `--model`/`--effort` 는 전 리뷰어 강제 override 다.
 배정 결과는 round.json 의 `assignments` 에 남는다.
 
-산출물은 기본적으로 저장소 밖 `~/.red-team/runs/<repo>/<branch>/<gate>-<n>/` 에 쌓인다 —
+산출물은 기본적으로 저장소 밖 `~/.red-team/runs2/<owner>__<repo>/<branch키>/<gate>-<n>/` 에 쌓인다 —
 리뷰 대상 저장소를 오염시키지 않고, 라운드 간 컨텍스트가 보존되어 다음 라운드가 이어진다.
 `--out` 을 주면 그 경로를 그대로 쓴다(eval 용).
 
@@ -23,13 +23,19 @@ usage:
 프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
 그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
-import argparse, json, os, re, shutil, subprocess, sys, time
+import argparse, errno, hashlib, json, os, re, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+# v2 라운드 루트. 구 루트(runs/)와 **경로 공간을 통째로 분리**한 이유(issue #8 code-7):
+# 구 레이아웃의 키는 slug 산출물 전체라, 새 키를 아무리 단사로 설계해도 이미 디스크에 있는
+# 구 디렉토리가 새 키 자리를 선점하는 전환기 충돌(스쿼팅)을 막을 수 없었다. 루트가 다르면
+# runs2/ 아래는 v2 코드가 만든 것뿐이라 그 클래스가 통째로 사라진다.
+RUNS_DIR = HOME_DIR / "runs2"
+LEGACY_RUNS = HOME_DIR / "runs"
 # why 는 --show-assignments 가 "이 축은 어떤 일을 하니 무엇을 추천하나"로 출력한다.
 # core: --lean(MoE) 중간 라운드에서도 항상 도는 축. core 가 아닌 축은 "생략"이 아니라
 # "유예"다 — coverage 가 partial 인 GO 는 게이트 통과가 아니고, top-up 병합으로 채워야 확정된다.
@@ -254,25 +260,434 @@ def slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-") or "unknown"
 
 
-def branch_dir(cwd: str) -> Path:
-    """~/.red-team/runs/<repo>/<branch> — 저장소 위치에서 결정된다.
+# 해시 접미 자리 — 이 패턴은 무접미 키로 쓰지 않는다. re.I: APFS 같은 대소문자 비구분
+# 파일시스템에서 `--87171AD4` 브랜치가 소문자 접미 키와 같은 inode 를 얻는다(code-4 P2).
+_RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$", re.I)
 
-    **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
-    작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
-    resume.py 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
+
+def _suffixed(rendered: str, raw: str) -> str:
+    # rendered 는 slug 산출물(ASCII)이라 문자수 == 바이트수다. NAME_MAX(255) 안에 접미
+    # 10자 자리를 남겨 245자로 자른다 — 해시는 절단 전 원문 전체로 계산하므로 단사성은
+    # 유지된다(code-2 P1: 246자 브랜치가 변경 전엔 되다가 접미 10자로 mkdir 이 죽었다).
+    return f"{rendered[:245]}--{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
+
+
+def branch_key(branch: str) -> str:
+    """브랜치 → 디렉토리명. 필요한 성질은 가역이 아니라 **단사**다 — 디렉토리명을
+    브랜치로 되돌리는 소비처는 없고, resume.py 의 워크트리 매칭도 브랜치→키 방향으로
+    이 함수를 적용해 비교한다. slug 가 뭉갠 브랜치(`feature/foo`)에만 원문 해시를
+    접미해 `feature-foo` 브랜치와의 충돌을 없앤다. 무손실 브랜치는 키가 그대로라
+    마이그레이션 대상도 아니다.
+
+    접미 패턴 `--<hex8>` 은 **예약**이다 — 그 패턴으로 끝나는 무손실 브랜치도 강제로
+    해시를 받아, lossy 키가 문자 그대로의 브랜치명과 겹칠 수 없다(code-1 P1).
+    잔여 충돌은 sha1 32bit 접두 충돌뿐이다.
     """
+    s = slug(branch)
+    if s == branch and not _RESERVED_SUF.search(s) and len(s) <= 255:
+        return s
+    return _suffixed(s, branch)
+
+
+def _single_key(name: str) -> str:
+    """owner 가 없는 repo 키(로컬 경로 origin·origin 부재 폴백).
+
+    pair 키(`owner__repo`)와 출력 공간이 겹치면 안 된다 — basename 이 `team__app` 인
+    저장소가 `team/app` 의 pair 키와 같은 디렉토리를 얻는다(code-3 P1). 그래서
+    `__` 를 담은 이름은 branch_key 규칙에 더해 해시로 가른다.
+    """
+    s = slug(name)
+    if s == name and "__" not in s and not _RESERVED_SUF.search(s) and len(s) <= 255:
+        return s
+    return _suffixed(s, name)
+
+
+def repo_key(cwd: str) -> str:
+    """origin 의 `owner/repo` → `owner__repo`. basename 만 쓰면 `team-a/app` 과
+    `team-b/app` 이 같은 `runs/app/` 을 공유한다(issue #8).
+
+    URL(https·ssh·scp형)에서 host 뒤 마지막 두 path segment 를 owner/repo 로 본다.
+    owner 가 안 나오는 origin(로컬 경로, host 직결 단일 segment)은 basename,
+    origin 이 없으면 toplevel 디렉토리명 — 구 키와 같다.
+
+    구분자 `__` 는 owner·repo 안에도 올 수 있어 경계가 모호해진다(`a__b/c` 와
+    `a/b__c` — code-1 P1). 렌더링을 다시 split 해 원문 쌍이 유일 복원될 때만
+    무접미로 쓰고, 아니면(slug 손실 포함) 원문 `owner/repo` 해시를 접미한다.
+    """
+    origin = git(cwd, "remote", "get-url", "origin")
+    if not origin:
+        return _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+    if origin.startswith("file://") or re.match(r"^[A-Za-z]:[\\/]", origin) \
+            or (not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin)):
+        # 로컬 경로 origin(절대·상대·file://·Windows 드라이브) — URL 로 오인하면
+        # `../x/team/app.git` 은 team__app, `/abs/x/team/app.git` 은 app 이 되어 같은
+        # 저장소가 표기별로 갈린다(code-2 P2). file://(code-8 P2)·`C:/`(code-10 P2, SCP
+        # 오인)도 같은 로컬 디스크다. 원격 scheme·SCP형만 URL 이고 나머지는 basename 폴백.
+        tail = re.sub(r"\.git[\\/]?$", "", origin.rstrip("/\\"))
+        return _single_key(re.split(r"[\\/]", tail)[-1])
+    url = origin
+    if re.match(r"^\w+://", url):
+        # scheme 형의 명시 포트는 키가 아니다 — `ssh://host:22/app.git` 의 22 가 경로
+        # 세그먼트로 새면 `22__app` 이 된다(code-9 P2). SCP 형은 건드리지 않는다 —
+        # 숫자만으로 된 owner(`host:123/repo`)가 포트로 오인되면 안 된다.
+        url = re.sub(r"^(\w+://[^/]+?):\d+(/)", r"\1\2", url)
+    # host 는 bracketed IPv6 도 된다 — `[2001:db8::1]` 내부 콜론을 경로 구분자로 읽으면
+    # host 직결 저장소에 가짜 owner 가 생긴다(code-10 P2).
+    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?(?:\[[^\]]+\]|[^/:]+)[:/](.+)$", url)
+    if m:
+        parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
+        if len(parts) >= 2:
+            owner, repo = parts[-2], parts[-1]
+            rendered = f"{slug(owner)}__{slug(repo)}"
+            if rendered.split("__") == [owner, repo] and not _RESERVED_SUF.search(rendered) \
+                    and len(rendered) <= 255:  # 무접미 초과분은 절단+해시 경로로(code-3 P2)
+                return rendered
+            return _suffixed(rendered, f"{owner}/{repo}")
+    return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+
+
+def _legacy_branch_dir(cwd: str, branch: str) -> Path:
+    """issue #8 이전(gen0)의 키 규칙 — 마이그레이션·무변경 해석 판정에만 쓴다."""
     origin = git(cwd, "remote", "get-url", "origin")
     repo = slug(re.sub(r"\.git$", "", origin.rsplit("/", 1)[-1])) if origin else \
         slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+    return LEGACY_RUNS / repo / slug(branch)
+
+
+def _legacy_candidates(cwd: str, branch: str):
+    """구 세대 경로들 — 최신 세대 우선.
+
+    구 루트(runs/) 세대만 낸다 — v2 안의 이전 키(폴백→pair 승격·origin 변경)는 전부
+    `_v2_predecessor` 의 **양성 증거 규칙**으로만 승계한다. v2 디렉토리에 구 세대의
+    "판정 불가면 이전" 규칙을 적용하면 디렉토리명이 같은 다른 저장소의 준비 라운드를
+    가져간다(code-12 P1). gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래
+    owner__repo 키 — issue #8 개발 라운드에서만 생성됨), gen0 은 출시본(basename/slug)이다.
+    """
+    yield LEGACY_RUNS / repo_key(cwd) / branch_key(branch)  # gen1
+    yield _legacy_branch_dir(cwd, branch)                   # gen0
+
+
+def _git_toplevel_state(p: str):
+    """git 소유 확인의 3상태 — ('ok', toplevel) | ('not_repo', None) | ('error', None).
+
+    확인 **실패**(권한·I/O·타임아웃)를 '비워크트리(판정 불가)'와 같은 빈 값으로 뭉개면
+    외부 저장소 기록을 이전할 수 있다(code-10 P1) — 실패는 이전 거부 사유다.
+    """
+    try:
+        r = subprocess.run(["git", "-C", p, "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:
+        return "error", None
+    if r.returncode == 0:
+        return "ok", r.stdout.strip()
+    if "not a git repository" in (r.stderr or "").lower():
+        return "not_repo", None
+    return "error", None
+
+
+def _record_owners(d: Path):
+    """d 아래 라운드 기록들의 (확인 상태, repo_cwd) — 'ok'(워크트리 확인) 또는 'error'.
+
+    판정 불가는 내지 않는다 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열
+    repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
+    """
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        # 디렉토리 열거 실패(권한·마운트)는 '기록 없음'이 아니다(code-15 P2) — 빈 소유자
+        # 목록으로 뭉개면 남의 구 라운드를 판정 불가로 오인해 이전한다.
+        yield "error", str(d)
+        return
+    sources = []
+    for n in names:
+        rj = d / n / "round.json"
+        try:
+            if rj.is_file():
+                sources.append(rj)
+        except OSError:
+            yield "error", str(rj)
+    if "owner.json" in names:
+        sources.append(d / "owner.json")  # 커서 전용 디렉토리도 증거를 가진다(code-14 P2)
+    for rj in sources:
+        st, p = _read_repo_cwd(rj)
+        if st == "none":
+            continue
+        if st == "error":  # 존재·읽기 확인 실패 — 판정 불가가 아니라 거부 사유(code-13·14)
+            yield "error", p
+            continue
+        state, _top = _git_toplevel_state(p)
+        if state != "not_repo":
+            yield state, p
+
+
+def _pick_legacy(cwd: str, branch: str, parent_name: str):
+    """(소유 가능한 첫 구 후보, 못 쓴 첫 외부 워크트리) — 부수효과 없는 선택.
+
+    구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) — 후보의
+    기록 전부를 대조해 하나라도 불일치면 그 후보는 건너뛰고 **다음 세대를 계속 본다**.
+    외부 후보에서 멈추면 뒤 세대에 남은 자기 기록을 두고 새 라운드를 시작한다(code-8 P2).
+    첫 일치에서 멈추지 않는 이유는 code-1 P2(혼합 기록), 판정 불가(기록 없음·워크트리
+    소실·손상)면 이전 — 단일 저장소 사용이 압도적이다.
+    """
+    first_blocked = None
+    for legacy in _legacy_candidates(cwd, branch):
+        if not legacy.is_dir():
+            continue
+        blocked = next((("unverified" if state == "error" else "foreign", p)
+                        for state, p in _record_owners(legacy)
+                        if state == "error" or repo_key(p) != parent_name), None)
+        if blocked:
+            first_blocked = first_blocked or blocked
+            continue
+        return legacy, None
+    return None, first_blocked
+
+
+def _read_repo_cwd(f: Path):
+    """기록 파일(round.json·owner.json)의 repo_cwd — ('ok', p) | ('none', None) | ('error', p).
+
+    'none' 은 판정 불가 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열·경로
+    소실·초장문 ENAMETOOLONG(code-2·4 P2). 'error' 는 존재 확인 자체가 실패한 것
+    (권한·마운트 등) — 소유자 없음으로 오인해 이전하면 오귀속이다(code-13 P2).
+    """
+    try:
+        data = json.loads(f.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "none", None
+    except OSError as e:
+        # 기록 파일 자체를 읽지 못한 것(권한·마운트)은 '증거 없음'이 아니다(code-14 P1) —
+        # glob 직후 삭제된 ENOENT 경합만 판정 불가로 남긴다.
+        return ("none", None) if e.errno == errno.ENOENT else ("error", str(f))
+    p = data.get("repo_cwd") if isinstance(data, dict) else None
+    if not (isinstance(p, str) and p):
+        return "none", None
+    try:
+        return ("ok", p) if Path(p).is_dir() else ("none", None)
+    except OSError as e:
+        return ("none", None) if e.errno == errno.ENAMETOOLONG else ("error", p)
+
+
+def note_owner(bdir: Path, cwd: str) -> None:
+    """브랜치 디렉토리에 소유 증거(owner.json)를 남긴다 — 쓰기 지점에서 호출한다.
+
+    경로 파생의 두 번째 진실이 **아니다**(파생은 여전히 워크트리에서만 나온다) —
+    round.json 이 없는 디렉토리(준비만 된 라운드, pr-triage 커서 전용)도 origin 변경
+    승계(_v2_predecessor)의 양성 증거를 가질 수 있게 하는 판정 재료다(code-12 P1).
+    실패해도 라운드·상태 저장을 막지 않는다.
+    """
+    try:
+        bdir.mkdir(parents=True, exist_ok=True)
+        (bdir / "owner.json").write_text(
+            json.dumps({"repo_cwd": str(Path(cwd).resolve())}, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+def _v2_predecessor(cwd: str, new: Path):
+    """origin 변경으로 키가 바뀐 같은 저장소의 이전 v2 디렉토리 — **양성 소유 증거** 필수.
+
+    구 세대(gen0·gen1)와 달리 판정 불가를 이전 근거로 삼지 않는다 — v2 아래에는 여러
+    저장소가 같은 브랜치명(main 등)으로 공존하는 것이 정상이라, 증거 없는 이전은 남의
+    기록을 가져간다(code-11·12 P1). **모든 기록**(round.json 전부 + owner.json)이 판정
+    가능하고 전부 현재 키로 파생 확인될 때만 승계한다 — 판정 불가가 하나라도 섞이면
+    미검증 기록까지 새 이력으로 승계된다(code-12 P2).
+    """
+    blocked = None
+    for d in sorted(RUNS_DIR.glob(f"*/{new.name}")):
+        if d == new or not d.is_dir():
+            continue
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            # 열거 실패한 디렉토리는 '전신 없음'이 아니다(code-15 P2) — 새 이력이 선점하면
+            # 접근 복구 후에도 승계가 막힌다.
+            blocked = blocked or ("unverified", str(d))
+            continue
+        sources = []
+        errors = 0
+        for n in names:
+            rj = d / n / "round.json"
+            try:
+                if rj.is_file():
+                    sources.append(rj)
+            except OSError:
+                errors += 1
+        if "owner.json" in names:
+            sources.append(d / "owner.json")
+        if not sources and not errors:
+            continue
+        # 전 소스를 끝까지 훑어 집계한다 — 순서에 따라 판정이 갈리면 안 된다(code-15 P1).
+        pos = mismatch = undecidable = 0
+        for f in sources:
+            st, p = _read_repo_cwd(f)
+            if st == "error":
+                errors += 1
+            elif st == "none":
+                undecidable += 1
+            else:
+                g = _git_toplevel_state(p)[0]
+                if g == "error":
+                    errors += 1
+                elif g == "ok" and repo_key(p) == new.parent.name:
+                    pos += 1
+                else:
+                    mismatch += 1
+        if mismatch:
+            continue  # 다른 저장소의 v2 디렉토리 — 정상 공존, 보류 사유 아님
+        if errors or (undecidable and pos):
+            # 확인 실패, 또는 양성 증거가 있는데 손상 기록이 섞임 — '없음'으로 처리해
+            # 새 키를 선점하면 복구 가능한 이력이 영구 고아가 된다(code-15 P1·P2).
+            blocked = blocked or ("unverified", str(d))
+            continue
+        if pos:
+            return d, None
+    return None, blocked
+
+
+def _migration_state(cwd: str, branch: str, new: Path):
+    """(이전할 구 디렉토리, 거부 사유 (상태, 워크트리)) — 부수효과 없는 판정.
+
+    거부 상태는 'foreign'(origin 불일치)과 'unverified'(소유 확인 실패)를 가른다 —
+    합치면 확인 실패를 다른 저장소 기록이라고 단정하는 안내가 나간다(code-11 P1).
+    _migrate_legacy 와 dry-run 표시, 무변경 해석(branch_dir)이 같은 선택을 공유한다 —
+    갈라지면 읽는 곳과 옮기는 곳이 서로 다른 디렉토리를 가리킨다(code-7·8).
+    """
+    if not new.exists():
+        # 양성 검증된 v2 전신이 구 세대 선택보다 먼저다 — 외부 legacy 하나가 정당한
+        # 승계를 차단하면 owner 변경 후 기존 라운드가 고아가 된다(code-12 P1).
+        pred, pred_blocked = _v2_predecessor(cwd, new)
+        if pred:
+            return pred, None
+        src, blocked = _pick_legacy(cwd, branch, new.parent.name)
+        if src:
+            return src, None
+        # 전신 후보의 확인 실패도 보류로 전파한다 — 새 이력 선점을 막아야 복구 후
+        # 승계가 산다(code-14 P1, resolve_out 의 unverified 차단과 한 벌).
+        # unverified 가 foreign 보다 먼저다 — foreign 은 새 이력 진행을 허용하는 상태라
+        # 그것이 unverified 를 가리면 보류가 무력화된다(code-16 P2).
+        for b in (pred_blocked, blocked):
+            if b and b[0] == "unverified":
+                return None, b
+        return None, blocked or pred_blocked
+    return None, None
+
+
+def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
+    """구 레이아웃 라운드 기록을 v2 루트로 1회 rename — 새 경로가 아직 없을 때만.
+
+    옮기지 않으면 라운드 번호·컨텍스트 이관·latest_round 가 조용히 리셋된다.
+    v2 루트는 구 루트와 경로 공간이 분리돼 있어 new 가 있으면 항상 v2 코드가 만든
+    정당한 기록이다 — 스쿼팅 검사(code-3·4·7 의 경고들)가 필요 없어졌다.
+    """
+    src, blocked = _migration_state(cwd, branch, new)
+    if blocked:
+        state, p = blocked
+        why = (f"기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전"
+               if state == "foreign" else
+               f"기록의 워크트리 {p} 의 소유 확인에 실패했다(권한·I/O 등) — "
+               f"불일치로 단정하지 않는다. 확인 가능해지면 다시 시도된다")
+        print(f"⚠ 구 라운드 디렉토리를 두고 간다\n  ({why})", flush=True)
+        return
+    if src is None:
+        return
+    new.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        src.rename(new)
+    except OSError:
+        # 동시 branch_dir() 경합 — 같은 목적지끼리는 new 가 생겨 있고, 서로 다른 저장소가
+        # 판정 불가 legacy 를 각자의 키로 다투면 src 만 사라진다(code-5 P2). 어느 쪽이든
+        # "다른 소비처가 먼저 이전했다"이므로 정상 반환한다.
+        if new.exists() or not src.is_dir():
+            return
+        raise
+    print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
+
+
+def migration_blocked(cwd: str):
+    """이전이 거부된 상태면 ('foreign'|'unverified', 워크트리 경로) — 아니면 None.
+
+    resume 가 '라운드가 없다'와 '거부된 구 기록이 있다'를 갈라 안내하는 데 쓴다
+    (code-10 P1). 상태를 보존해 확인 실패를 불일치로 단정하지 않는다(code-11 P1).
+    부수효과 없음.
+    """
+    branch = _current_branch(cwd)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
+    return _migration_state(cwd, branch, new)[1]
+
+
+def migration_source(cwd: str):
+    """실제 실행(migrate=True)이 이전하게 될 구 디렉토리 — 없으면 None. 부수효과 없음.
+
+    dry-run 표시 전용: 존재 여부(bool)만 돌려주면 "이전은 일어나는데 **선택된 base 가
+    아닌 다른 세대**가 옮겨지는" 상태를 못 가른다(code-9 P2) — 호출자가 자기 base 와
+    동일한지 비교해야 표시 == 실제가 된다. 거부 상태(다른 저장소 기록 혼재)·새 경로
+    존재 시 None(code-7 P2).
+    """
+    branch = _current_branch(cwd)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
+    return _migration_state(cwd, branch, new)[0]
+
+
+MIGRATE = True  # resume --dry-run 이 끈다 — dry-run 은 무변경으로 구 경로를 그대로 읽는다(code-3 P1)
+
+
+def _current_branch(cwd: str) -> str:
     branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     if branch in ("", "HEAD"):  # detached
         branch = git(cwd, "rev-parse", "--short", "HEAD") or "detached"
-    return HOME_DIR / "runs" / repo / slug(branch)
+    return branch
+
+
+def target_dir(cwd: str) -> Path:
+    """이전이 끝난 뒤 실제로 쓰일 새 키 경로 — 순수 계산, 부수효과 없음.
+
+    dry-run 이 '읽기는 legacy, 표시는 target' 을 갈라야 할 때 쓴다(code-4 P1) —
+    무변경 해석(branch_dir migrate=False)은 legacy 를 돌려주는데, 실제 실행은 이전 후
+    이 경로 아래에 만들기 때문이다.
+    """
+    return RUNS_DIR / repo_key(cwd) / branch_key(_current_branch(cwd))
+
+
+def branch_dir(cwd: str, migrate: bool = False) -> Path:
+    """~/.red-team/runs2/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
+
+    **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
+    작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
+    resume.py·pr-triage 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
+
+    **기본은 무변경 해석이다** — 이전하지 않고, 새 경로가 없으면 구 경로를 그대로 읽는다.
+    구 레이아웃의 1회 이전(rename)은 migrate=True 를 명시한 **쓰기 지점 두 곳**에서만
+    일어난다: run_round 의 resolve_out(정상 라운드 생성)과 resume 의 대상 확정 후 선행
+    이전. 기본값이 이전이면 조회·감시 소비처가 하나 늘 때마다 부수효과 누수가 재발한다 —
+    pr-triage 의 상태 조회가 정확히 그 사례였다(code-6 P1).
+    """
+    branch = _current_branch(cwd)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
+    if MIGRATE and migrate:
+        _migrate_legacy(cwd, branch, new)
+    elif not new.exists():
+        # 무변경 해석 — 기록이 현재 사는 곳을 가리킨다. 마이그레이션과 같은 판정
+        # (_migration_state: 구 세대 + v2 전신)을 공유해 외부 소유 gen1 오독(code-8 P2)과
+        # origin 변경 후 v2 전신 미인식(code-11 P1)을 막는다. 이 소유 검사 비용은
+        # 전환기(new 부재)에만 발생한다.
+        src, _ = _migration_state(cwd, branch, new)
+        if src:
+            return src
+    return new
 
 
 def resolve_out(cwd: str, gate: str) -> Path:
     """다음 라운드 디렉토리 — `<gate>-<n>` 의 n 은 자동 증가."""
-    base = branch_dir(cwd)
+    base = branch_dir(cwd, migrate=True)  # 쓰기 지점 ① — 구 레이아웃 이전은 여기서 일어난다
+    if not base.exists() and (bk := migration_blocked(cwd)) and bk[0] == "unverified":
+        # 확인 실패로 이전이 **보류**된 상태에서 새 이력을 시작하면 new.exists() 가 복구
+        # 후의 승계까지 영구히 막는다(code-13 P1) — 여기서 멈추는 것이 유일한 가역 선택이다.
+        # foreign(불일치 확정)은 새 이력이 맞으므로 막지 않는다.
+        sys.exit(f"구 라운드 기록의 소유 확인에 실패해 이전이 보류됐다 — 지금 새 라운드를 만들면\n"
+                 f"  확인이 복구돼도 기존 기록을 승계할 수 없게 된다(새 경로가 선점됨).\n"
+                 f"  확인 실패 지점: {bk[1]}\n"
+                 f"  접근 가능해진 뒤 다시 실행하고, 남의 기록이 확실하면 그 구 디렉토리를 수동 정리한다.")
+    note_owner(base, cwd)
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{gate}-*")
                  if (m := re.fullmatch(rf"{gate}-(\d+)", d.name))), default=0)
     return base / f"{gate}-{n}"
@@ -287,6 +702,8 @@ def lean_reviewers(gate: str, cwd: str) -> tuple[list[str], str]:
     GO 는 coverage=partial 로 기록되어 top-up 병합 전에는 게이트 통과가 아니다.
     """
     axes = GATES[gate]
+    # 축 선택은 순수 읽기다(기본값) — moe 가 켜진 명시적 --out 실행에서 여기가
+    # 이전을 일으키면 마커 검사와 같은 경로 파괴가 난다(code-4 P1 과 동일 계열).
     rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd).glob(f"{gate}-*")
               if re.fullmatch(rf"{gate}-\d+", d.name) and (rj := d / "round.json").exists()]
     if not rounds:
@@ -613,7 +1030,7 @@ def main():
                     help="zax:task 산출물에서 컨텍스트를 잡는다 (~/.zb-task/<TASK>/). "
                          "초안이 없으면 만들고 멈춘다 — 검토 후 다시 실행한다")
     ap.add_argument("--gate", choices=list(GATES), default="code")
-    ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs/... 로 자동 결정")
+    ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs2/... 로 자동 결정")
     ap.add_argument("--merge-into", default=None, metavar="ROUND_DIR",
                     help="부분 재실행 결과를 그 라운드에 병합한다 (PARSE-FAIL·파일접근오류 치유). "
                          "--reviewers 필수. 이전 산출물은 *.superseded-* 로 남고 reruns 에 기록된다")
@@ -668,6 +1085,9 @@ def main():
         markers.append(Path(a.merge_into).resolve().parent / "ABORTED")
     else:
         if a.cwd:
+            # 경고용 파생은 순수 읽기다(기본값) — 여기서 이전이 일어나면 명시적
+            # --context/--out 이 구 레이아웃을 가리키는 직접 실행이 자기 입력 경로를
+            # 잃는다(code-4 P1). 실제 이전은 resolve_out 경유 정상 경로가 한다.
             markers.append(branch_dir(a.cwd) / "ABORTED")
         if a.out:
             markers.append(Path(a.out).resolve().parent / "ABORTED")
@@ -702,9 +1122,16 @@ def main():
         ap.error("--cwd 와 (--context 또는 --from-zax) 가 필요하다")
     engines = resolve_engines(a.engine)
 
+    # 컨텍스트는 resolve_out **전에** 읽는다 — resolve_out 의 이전(rename)이 --context 가
+    # 가리키는 구 경로를 옮기면, 뒤에서 읽을 때 FileNotFoundError 로 죽는다(code-7 P2).
+    # 신선도 경고의 입력(계획서 목록·mtime)도 같은 이유로 여기서 캡처한다.
+    ctx_src = Path(a.context)
+    context = ctx_src.read_text()
+    ctx_mtime = ctx_src.stat().st_mtime
+    plan_mtimes = sorted((p.name, p.stat().st_mtime) for p in ctx_src.parent.iterdir()
+                         if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
     out = Path(a.merge_into) if a.merge_into else (Path(a.out) if a.out else resolve_out(a.cwd, a.gate))
     out.mkdir(parents=True, exist_ok=True)
-    context = Path(a.context).read_text()
     if not a.merge_into:
         # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
         (out / "context.md").write_text(context)
@@ -732,12 +1159,9 @@ def main():
     # 판정한다 — 조용히 틀린 GO 가 나오는 경로라 라운드 시작 시점에 알린다.
     # 파일명 대소문자를 가리지 않는다 — zax:task 는 `PLAN.md`, 손으로 쓸 때는 `plan-1.md` 다.
     # (Python glob 은 대소문자를 구분하므로 `plan*.md` 만 보면 `PLAN.md` 를 놓친다)
-    ctx_src = Path(a.context)
-    plans = sorted(p for p in ctx_src.parent.iterdir()
-                   if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
-    for plan in plans:
-        if plan.stat().st_mtime > ctx_src.stat().st_mtime + 1:
-            print(f"⚠ {plan.name} 이 {ctx_src.name} 보다 새롭다.\n"
+    for plan_name, plan_mtime in plan_mtimes:  # 입력은 resolve_out 전에 캡처됨(code-7 P2)
+        if plan_mtime > ctx_mtime + 1:
+            print(f"⚠ {plan_name} 이 {ctx_src.name} 보다 새롭다.\n"
                   f"  계획을 고쳤다면 context.md 의 판정 기준(불변식·스코프 밖·확인 사항)도 같이 갱신했는지\n"
                   f"  확인한다. 계획서만 고치면 리뷰어가 낡은 기준으로 판정한다.", flush=True)
 

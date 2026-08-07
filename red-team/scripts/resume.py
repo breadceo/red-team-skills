@@ -8,7 +8,7 @@
     python3 .../resume.py --next code
 
 **포인터 파일을 두지 않는다.** 라운드의 키는 경로 자체이고
-(`~/.red-team/runs/<repo>/<branch>/`), 그건 저장소 위치에서 나온다.
+(`~/.red-team/runs2/<owner>__<repo>/<branch키>/`), 그건 저장소 위치에서 나온다.
 별도 포인터를 두면 (a) 어긋날 수 있는 두 번째 진실이 생기고
 (b) eval·실험 런이 진짜 작업 포인터를 덮는 사고가 난다(실제로 났다).
 
@@ -20,10 +20,14 @@ import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_round import branch_dir, git, slug, GATES  # 경로 파생은 한 곳에서만 한다
+import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE)를 끄기 위해
+from run_round import branch_dir, git, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
-RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
+# 검색은 v2 루트(runs2/)와 구 루트(runs/) 둘 다 본다 — 아직 이전되지 않은 작업도
+# 키로 찾을 수 있어야 하고, 발견 후의 이전은 대상 확정 후 선행 이전이 한다.
+_HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
 TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
 
 
@@ -34,20 +38,54 @@ def resolve_base(key: str | None, cwd: str):
     그 조각을 담은 브랜치 디렉토리를 찾는다 — 워크트리 밖에서도 진입할 수 있고,
     cwd 와 어긋나면 알려준다(엉뚱한 워크트리에서 구현하는 사고를 막는다).
     """
+    # 키 조회는 순수 읽기다(기본값) — 여기서 cwd 의 구 라운드가 이전되면 다른 작업을
+    # 조회만 해도 부수효과가 난다(code-5 P2). 이전은 대상 확정 후 선행 이전 한 곳에서만.
     derived = branch_dir(cwd)
     if not key:
         return derived, None
-    runs = RUNS
     k = key.lower()
-    hits = sorted(d for d in runs.glob("*/*") if d.is_dir() and k in d.name.lower())
+    # 검색 순서: 완전 일치(parent/name) → 브랜치명 substring → 전체키 substring.
+    # 완전 일치가 먼저여야 다중 후보 안내에 표시된 구 경로 식별자를 그대로 재입력했을 때
+    # 그 문자열을 substring 으로 담은 새 경로와 또 겹치지 않는다(code-5 P2).
+    # 폴백을 항상 켜면 티켓 키가 repo 키에도 걸려 유일하던 검색이 깨진다(code-4 P2).
+    dirs = [d for r in RUNS_ROOTS for d in r.glob("*/*") if d.is_dir()]
+    # 식별자는 루트 포함 3부(`runs2/owner__repo/branch키`)까지 exact 로 받는다 — 이전이
+    # 거부된 legacy 와 새 runs2 라운드가 같은 parent/name 으로 공존하면 2부 식별자로는
+    # 어느 쪽도 유일 선택할 수 없다(code-8 P1). 안내가 3부를 보여주므로 재입력이 항상 먹힌다.
+    hits = sorted(d for d in dirs if f"{d.parent.name}/{d.name}".lower() == k
+                  or _full_id(d).lower() == k) or \
+        sorted(d for d in dirs if k in d.name.lower()) or \
+        sorted(d for d in dirs if k in f"{d.parent.name}/{d.name}".lower())
     if not hits:
-        avail = sorted(f"{d.parent.name}/{d.name}" for d in runs.glob("*/*") if d.is_dir())
+        avail = sorted(_full_id(d) for d in dirs)
         sys.exit(f"'{key}' 에 맞는 라운드 디렉토리가 없다.\n  있는 것: "
                  + (", ".join(avail) if avail else "(없음)"))
     if len(hits) > 1:
-        sys.exit(f"'{key}' 가 여러 곳에 맞는다. 더 구체적으로 준다:\n  "
-                 + "\n  ".join(f"{d.parent.name}/{d.name}" for d in hits))
+        sys.exit(f"'{key}' 가 여러 곳에 맞는다. 더 구체적으로 준다(그대로 재입력 가능):\n  "
+                 + "\n  ".join(_full_id(d) for d in hits))
     return hits[0], (derived if hits[0] != derived else None)
+
+
+def _full_id(d: Path) -> str:
+    """루트 포함 3부 식별자 — 두 루트에 같은 parent/name 이 공존해도 유일하다(code-8 P1)."""
+    return f"{d.parent.parent.name}/{d.parent.name}/{d.name}"
+
+
+def _belongs(path: str, base: Path) -> bool:
+    """path 워크트리가 base 라운드 디렉토리의 주인인가 — 이름이 아니라 **파생 동등성**으로
+    판정한다. 이름만 비교하면 같은 브랜치명의 다른 저장소 워크트리를 확정해 남의 runs 를
+    오염시키고(code-5·6 P1), 새 키를 문자 그대로 이름으로 쓴 브랜치가 오선택된다.
+    구·신 경로가 공존하면 무변경 해석은 새 경로를 돌려주므로 legacy 키 동등성도 인정한다.
+    """
+    try:
+        if branch_dir(path) == base:
+            return True
+        # 구 세대(gen1·gen0) 키 동등성 — v2 경로가 이미 있으면 무변경 해석이 그쪽을
+        # 돌려주므로, 구 루트에 남은 base 는 세대별 키로 대조한다.
+        return any(c == base for c in
+                   run_round._legacy_candidates(path, run_round._current_branch(path)))
+    except OSError:
+        return False
 
 
 def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
@@ -55,22 +93,23 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
 
     ① 이미 그 워크트리 안이면 cwd ② 라운드 기록(round.json 의 repo_cwd)
     ③ 같은 저장소의 다른 체크아웃에서 `git worktree list` 로 조회.
+    ②·③ 모두 _belongs 소속 검증을 통과해야 한다 — ② 를 존재 여부만으로 믿으면 낡은
+    repo_cwd 가 무관한 저장소를 확정해 그쪽 legacy 를 선행 이전시킨다(code-6 P1).
     """
-    if branch_dir(cwd) == base:
+    if branch_dir(cwd) == base:  # 비교는 순수 읽기(기본값) — 이전은 선택 확정 후
         return cwd, "현재 디렉토리"
     if rounds_dir and (rj := rounds_dir / "round.json").exists():
         try:
-            if (p := json.loads(rj.read_text()).get("repo_cwd")) and Path(p).is_dir():
-                return p, "라운드 기록(round.json)"
+            p = json.loads(rj.read_text()).get("repo_cwd")
         except json.JSONDecodeError:
-            pass
+            p = None
+        if isinstance(p, str) and p and Path(p).is_dir() and _belongs(p, base):
+            return p, "라운드 기록(round.json)"
     out = git(cwd, "worktree", "list", "--porcelain")
-    path = None
     for line in out.splitlines():
         if line.startswith("worktree "):
             path = line[len("worktree "):]
-        elif line.startswith("branch ") and path:
-            if slug(line[len("branch refs/heads/"):]) == base.name:
+            if Path(path).is_dir() and _belongs(path, base):
                 return path, "git worktree list"
     return None, None
 
@@ -285,6 +324,10 @@ def main():
     ap.add_argument("--cwd", default=None, help="대상 저장소 (생략 시 현재 디렉토리)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    if a.dry_run:
+        # dry-run 은 무변경이어야 한다 — branch_dir 의 구 레이아웃 이전(rename)까지 끈다.
+        # 새 경로가 없으면 구 경로를 읽기 전용으로 해석한다(code-3 P1).
+        run_round.MIGRATE = False
 
     cwd = a.cwd or os.getcwd()
     base, mismatch = resolve_base(a.key, cwd)
@@ -304,15 +347,34 @@ def main():
         return
     found = latest_round(base)
     if found is None:
-        sys.exit(f"{base} 에 라운드가 없다.\n"
+        # '기록이 없다'와 '거부된 구 기록이 있다'를 가른다(code-10 P1) — 외부 소유(또는
+        # 확인 실패)로 이전이 거부된 상태를 침묵하면 사용자는 기록이 사라졌다고 오인한다.
+        blocked = ""
+        if not a.key and (bk := run_round.migration_blocked(cwd)):
+            state, f = bk
+            why = ("다른 저장소 소유로 보이는" if state == "foreign"
+                   else "소유 확인(git)에 실패한")  # 확인 실패를 불일치로 단정하지 않는다(code-11 P1)
+            blocked = (f"\n  ⚠ 구 레이아웃에 {why} 기록이 있어 이전이 거부된 상태다"
+                       f" — 기록의 워크트리: {f}\n"
+                       f"    필요하면 그 기록을 수동 정리한 뒤 다시 실행한다.")
+        sys.exit(f"{base} 에 라운드가 없다.{blocked}\n"
                  f"  여기가 맞는 저장소인지 확인하고(현재: {cwd}), 티켓 이름으로 찾으려면\n"
                  f"  `resume.py <티켓키>` 로 준다. 첫 라운드는 SKILL.md 의 '라운드 실행'부터 시작한다.")
     rd, gate, ran = found
     repo_cwd, how = worktree_for(base, cwd, rd)
+    # 키로 구 레이아웃 디렉토리를 선택했으면 **여기서** 선행 이전한다 — 뒤에서 만들
+    # context.md·--out 경로가 구 디렉토리를 가리키면, 안내된 run_round 가 실행 시작
+    # 시점의 자동 이전으로 그 경로를 날려 즉시 실패한다(code-1 P2, 리뷰어 실측 exit 1).
+    if repo_cwd and (derived := branch_dir(repo_cwd, migrate=True)) != base \
+            and not base.exists() and derived.is_dir():  # 쓰기 지점 ② — 대상 확정 후에만
+        rd, base = derived / rd.name, derived
     if mismatch is not None:
         print(f"⚠ 현재 디렉토리는 {mismatch.name} 인데 '{a.key}' 는 {base.name} 이다.")
         print(f"  {'구현·리뷰는 다음 워크트리에서 해야 한다: ' + repo_cwd if repo_cwd else '해당 워크트리를 못 찾았다 — 그 워크트리로 이동해 다시 실행한다.'}\n")
-    keysuf = f" {a.key}" if a.key else ""
+    # 안내 키는 사용자가 준 것이 아니라 **최종 base** 에서 다시 만든다 — 선행 이전으로
+    # 경로가 옮겨지면 원래 키는 더 이상 어떤 디렉토리와도 맞지 않는다(code-6 P1).
+    # 루트 포함 3부 식별자는 exact 검색 대상이라 두 루트가 겹쳐도 유일하다(code-8 P1).
+    keysuf = f" {_full_id(base)}" if a.key else ""
     dec_path, ctx_path = rd / "decisions.md", rd / "context.md"
     verdict, counts = "(미실행)", None
     if ran:
@@ -343,10 +405,17 @@ def main():
     if not ctx_path.exists():
         print("⚠ context.md 가 없다 — 이 라운드는 이어받을 수 없다.")
     if not ran:
-        print(f"\n▶ 이 라운드는 준비만 됐고 아직 실행되지 않았다.\n"
-              f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n"
-              f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-              f"    --cwd {repo_cwd or '<워크트리 경로>'} --gate {gate} --context {ctx_path} --out {rd}")
+        print("\n▶ 이 라운드는 준비만 됐고 아직 실행되지 않았다.")
+        if repo_cwd:
+            print(f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n"
+                  f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
+                  f"    --cwd {repo_cwd} --gate {gate} --context {ctx_path} --out {rd}")
+        else:
+            # 워크트리를 모르면 경로 박힌 명령을 내지 않는다 — 구 레이아웃이면 run_round 가
+            # 실행 시작 시점에 자동 이전해 그 경로가 사라진다(code-2 P1). 대상 워크트리에서
+            # 재실행하면 선행 이전 후 새 경로로 재계산된 명령이 나온다.
+            print("  워크트리를 못 찾아 실행 명령을 생략한다 — 대상 워크트리로 이동해\n"
+                  "  resume.py 를 다시 실행한다(경로가 자동 이전·재계산된다).")
         return
     # 축이 빠진 라운드(--lean 등)의 GO 는 coverage=partial 로 기록된다 — 빠진 축이 못 본
     # 결함이 있을 수 있으므로 top-up 병합으로 커버리지를 채운 뒤의 verdict 만 게이트 판정이다.
@@ -394,22 +463,38 @@ def main():
     out = base / f"{a.next_gate}-{n}"
     new_ctx = carry_forward(ctx_path.read_text(), dec, rd.name)
     if a.dry_run:
-        print(f"\n[dry-run] 생성할 경로: {out}")
+        # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
+        # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
+        shown = out
+        # 실제 실행이 **선택된 base 를** 이전하게 될 때만 target 을 표시한다 — 새 경로
+        # 존재(code-5 P2)·이전 거부(code-7 P2)는 물론, 다른 세대(gen1)가 옮겨지고 선택된
+        # gen0 는 남는 상태(code-9 P2)에서도 실제 생성은 base 쪽이다.
+        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base \
+                and run_round.migration_source(repo_cwd) == base:
+            shown = tgt / out.name
+        print(f"\n[dry-run] 생성할 경로: {shown}")
         for h, _ in sections(new_ctx):
             if h:
                 print("  ", h)
         return
     out.mkdir(parents=True, exist_ok=True)
+    if repo_cwd:
+        run_round.note_owner(base, repo_cwd)  # 준비만 된 라운드도 승계 증거를 가진다(code-12 P1)
     (out / "context.md").write_text(new_ctx)
     for extra in ("plan-", "impact-"):  # 계획서·아티팩트는 게이트를 넘어가도 참조된다
         for f in rd.glob(f"{extra}*"):
             shutil.copy2(f, out / f.name)
     print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/후속티켓을 이관했다.")
     print(f"   손으로 갱신할 절 2개만 남았다 ({TODO} 표시됨): '## 리뷰 대상', '## 검증 상태'")
+    if not repo_cwd:
+        # 위 준비-라운드 안내와 같은 이유(code-2 P1) — 낡을 수 있는 경로 명령을 내지 않는다
+        print("\n▶ 워크트리를 못 찾아 실행 명령을 생략한다 — 대상 워크트리로 이동해\n"
+              "  resume.py 를 다시 실행한다(경로가 자동 이전·재계산된다).")
+        return
     # --out 을 명시한다. 생략하면 run_round.py 가 자동번호로 다음 디렉토리를 새로 만들어
     # 준비한 컨텍스트와 결과가 다른 라운드로 갈라진다.
     print(f"\n▶ 갱신 후 실행:\n  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-          f"    --cwd {repo_cwd or '<워크트리 경로>'} --gate {a.next_gate} \\\n"
+          f"    --cwd {repo_cwd} --gate {a.next_gate} \\\n"
           f"    --context {out/'context.md'} --out {out}")
 
 

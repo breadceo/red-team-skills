@@ -300,7 +300,7 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
 ### 산출물은 저장소 밖에 쌓인다
 
 ```
-~/.red-team/runs/<repo>/<branch>/<gate>-<n>/
+~/.red-team/runs2/<owner>__<repo>/<branch키>/<gate>-<n>/
     context.md              ← 이 라운드에 실제로 쓴 컨텍스트 (복사본)
     <reviewer>.prompt.md    ← 실제로 보낸 프롬프트 전문
     <reviewer>.txt          ← 리뷰어 raw 출력
@@ -310,9 +310,17 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
     <reviewer>.superseded-<stamp>.*  ← 부분 재실행으로 교체된 이전 산출물 (지우지 않는다)
 ```
 
-**포인터 파일은 없다.** `<repo>/<branch>` 가 곧 키이고 그건 작업 중인 워크트리에서 나온다
-(`origin` basename + 현재 브랜치). 별도 포인터를 두면 어긋날 수 있는 두 번째 진실이 생기고,
-eval·실험 런이 진짜 작업 포인터를 덮는 사고가 난다 — 실제로 났다.
+**포인터 파일은 없다.** `<owner>__<repo>/<branch키>` 가 곧 키이고 그건 작업 중인 워크트리에서
+나온다 — `origin` 의 owner/repo(못 뽑으면 basename 폴백) + 현재 브랜치(slug 가 문자를 뭉갠
+브랜치만 원문 해시 8자 접미). owner 포함·해시 접미는 `team-a/app` 대 `team-b/app`,
+`feature/foo` 대 `feature-foo` 가 같은 디렉토리를 공유하던 충돌을 없앤다(issue #8).
+루트가 구 레이아웃(`runs/`)과 분리된 `runs2/` 인 이유도 같다 — 구 키는 slug 산출물 전체라,
+새 키를 아무리 단사로 설계해도 이미 디스크에 있는 구 디렉토리가 새 키 자리를 선점하는
+전환기 충돌은 같은 루트 안에서는 막을 수 없다. 구 기록은 라운드 생성·재개 시점에 1회
+자동 이전된다 — 단, 구 디렉토리가 다른 저장소의 기록으로 보이면(라운드 기록의 워크트리
+origin 불일치) 건드리지 않고 경고만 한다. 조회·감시는 이전을 일으키지 않는다(무변경 해석이
+기본값이다). 별도 포인터를 두면 어긋날 수 있는 두 번째 진실이 생기고, eval·실험 런이 진짜
+작업 포인터를 덮는 사고가 난다 — 실제로 났다.
 
 **저장소 안이 아닌 이유**: 리뷰 산출물이 `git status` 에 뜨면 리뷰 중 작업 트리가 흔들리고
 PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증가하므로 이전 라운드가 보존되고,
@@ -330,10 +338,12 @@ PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증�
 
 ```bash
 python3 ~/.claude/skills/red-team/scripts/run_round.py \
-  --gate code --merge-into ~/.red-team/runs/<repo>/<branch>/code-9 \
+  --gate code --merge-into ~/.red-team/runs2/<owner>__<repo>/<branch키>/code-9 \
   --reviewers b1-state-matrix
 ```
 
+경로를 손으로 조립하지 않는다 — `<branch키>` 는 해시 접미가 붙을 수 있으니 러너·`resume.py`
+가 출력한 `--merge-into` 명령을 그대로 쓴다.
 `--cwd` 와 `--context` 는 생략한다 — 그 라운드의 `repo_cwd` 와 `context.md` 를 쓴다.
 다른 컨텍스트를 주면 거절한다(라운드가 자체 재현성을 잃는다). 병합이 하는 일:
 
@@ -403,14 +413,16 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
 ### 티켓을 접을 때 — `ABORTED` 마커 파일
 
 GO 전에 리뷰 루프 자체를 끝내기로 결정했다면(설계 대상 소멸, 전제 붕괴 — 루프 절의 세 번째
-escape 참고) `runs/<repo>/<branch>/ABORTED` 파일에 사유를 쓴다. **이 파일의 존재가 곧 중단
+escape 참고) `runs2/<owner>__<repo>/<branch키>/ABORTED` 파일에 사유를 쓴다 — 정확한 브랜치
+디렉토리는 `resume.py` 출력의 `경로` 줄에서 확인한다. **이 파일의 존재가 곧 중단
 상태다** — `resume.py` 가 이후 어떤 진행 안내(다음 라운드, top-up, 재실행)도 거부하고,
 재개는 그 파일을 지우는 것으로만 한다. `run_round.py` 를 직접 실행하면 경고가 뜬다(차단은
 하지 않는다 — `--out` 실험·eval 흐름을 막지 않기 위해서다).
 
-- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — runs/ 키는
-  origin basename + 브랜치 slug 라 드물게 다른 작업과 디렉토리가 충돌할 수 있는데, 그때
-  안내에 표시되는 본문으로 어느 작업의 중단인지 즉시 식별된다.
+- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — runs2/ 키가
+  owner·브랜치 원문까지 반영하고 루트도 분리되어(issue #8) 충돌은 사실상 사라졌지만,
+  cross-host 동일 owner/repo(#10) 같은 잔여가 있고, 안내에 표시되는 본문으로 어느 작업의
+  중단인지 즉시 식별되는 가치는 그대로다.
 - decisions.md 에는 서사(사유·보존할 발견·재개 조건)를 남기는 것을 권장한다 — 단 그것은
   사람용이고, **기계가 읽는 것은 마커 파일뿐이다.** 산문을 판정 입력으로 삼지 않는 것이
   이 설계의 불변식이다(절 이름 파싱은 `## 중단 근거` 오인, fence 안 예시 오인 같은 엣지
@@ -454,7 +466,7 @@ diff 밖(티켓·PR 본문)에 두는 것을 우선 고려한다.
 - 매 라운드 P1 이 **같은 파일**에서 나온다(same-origin P1) → 개별 결함이 아니라 그 지점의
   구조적 결합 신호다. 표면을 더 고치지 말고 (a) 그 사용부를 얇은 어댑터 뒤로 격리하도록
   계획을 바꾸거나 (b) 생존성 7·8행(수명·통증 위치)을 재심해 사용자에게 **중단/피벗**을
-  올린다. 중단이면 `runs/<repo>/<branch>/ABORTED` 에 사유를 쓰고 끝낸다(findings 처리 절).
+  올린다. 중단이면 `runs2/<owner>__<repo>/<branch키>/ABORTED` 에 사유를 쓰고 끝낸다(findings 처리 절).
   `resume.py` 가 정확히 같은 파일이 3라운드 연속일 때 자동 경고한다 — 같은 모듈의 여러
   파일로 흩어지는 반복은 기계가 판정하지 않으므로 findings 를 읽는 사람이 같은 신호로
   취급한다. (B2C-52951 실측: plan-13~17 P1 전원이 단일 파일 출처였는데 아무도 그 신호를
@@ -465,7 +477,7 @@ diff 밖(티켓·PR 본문)에 두는 것을 우선 고려한다.
 **게이트를 통과한 순간이 곧 밖에 있는 산출물이 낡는 순간이다.** 계획 게이트를 도는 동안
 계획은 계속 고쳐지는데, 이 작업을 시작하게 만든 Jira 티켓 / GitHub issue 본문은 처음 쓴
 내용 그대로다 — 구현이 끝나면 티켓만 읽는 사람(QA·기획·다음 세션)은 틀린 계획을 읽는다.
-코드 게이트를 GO 로 통과해도 "무슨 AC 를 무엇으로 충족했는지"는 `~/.red-team/runs/` 안에만
+코드 게이트를 GO 로 통과해도 "무슨 AC 를 무엇으로 충족했는지"는 `~/.red-team/runs2/` 안에만
 있다. 그래서 게이트를 통과한 시점에 최신화 초안을 만들어 사용자 승인을 받고 게시한다.
 
 **트리거** — `verdict: GO` + `coverage` 가 partial 이 아님 + `round.json` 의
@@ -636,7 +648,7 @@ python3 ~/.claude/skills/red-team/scripts/resume.py TICKET-123    # 티켓 키�
 `git worktree list` 또는 라운드에 기록된 `repo_cwd` 로 찾는다. 엉뚱한 워크트리에서 구현하는
 사고를 막는 장치다.
 
-키를 생략하면 저장소 위치에서 `runs/<repo>/<branch>/` 를 파생한다. 그 안에서 가장 최근 라운드는
+키를 생략하면 저장소 위치에서 `runs2/<owner>__<repo>/<branch키>/` 를 파생한다. 그 안에서 가장 최근 라운드는
 `round.json` mtime 으로 고른다(없으면 `--next` 로 준비만 된 라운드). 번호·게이트 순서로 정렬하지
 않는다 — 코드 게이트를 돌다 계획으로 되돌아갈 수도 있다.
 

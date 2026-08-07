@@ -8,7 +8,7 @@ Claude Code 스킬 두 개. **커밋 전에 스스로 털고, PR 에 달린 리�
 | [`pr-triage`](pr-triage/) | 내 PR 에 달린 리뷰 코멘트를 감시·분류하고, 실제 결함만 고쳐 회신 초안까지 만든다 |
 
 두 스킬은 짝이다. `red-team` 이 라운드를 돌리며 결정 기록을 남기고, `pr-triage` 는 남이 남긴
-코멘트를 그 기록 위에서 판정한다. 같은 `~/.red-team/runs/<repo>/<branch>/` 경로 규칙을
+코멘트를 그 기록 위에서 판정한다. 같은 `~/.red-team/runs2/<repo>/<branch>/` 경로 규칙을
 공유하므로 **둘을 같은 위치에 설치한다** — 한쪽만 있으면 트리아지 커서와 리뷰 라운드가
 다른 디렉토리를 가리키고 "이미 처리한 코멘트" 가 조용히 사라진다.
 
@@ -57,7 +57,7 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
 python3 ~/.claude/skills/red-team/scripts/resume.py
 ```
 
-라운드 산출물은 **저장소 밖**(`~/.red-team/runs/`)에 쌓인다. 리뷰 산출물이 `git status` 에
+라운드 산출물은 **저장소 밖**(`~/.red-team/runs2/`)에 쌓인다. 리뷰 산출물이 `git status` 에
 뜨면 리뷰 중 작업 트리가 흔들리고 PR 에 섞여 들어가기 때문이다.
 
 비용 레버 세 개 (자세한 근거는 `red-team/SKILL.md`):

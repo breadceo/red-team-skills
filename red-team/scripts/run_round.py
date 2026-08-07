@@ -15,7 +15,7 @@ usage:
 (없으면 첫 엔진으로 폴백). `--model`/`--effort` 는 전 리뷰어 강제 override 다.
 배정 결과는 round.json 의 `assignments` 에 남는다.
 
-산출물은 기본적으로 저장소 밖 `~/.red-team/runs/<repo>/<branch>/<gate>-<n>/` 에 쌓인다 —
+산출물은 기본적으로 저장소 밖 `~/.red-team/runs/<owner>__<repo>/<branch>/<gate>-<n>/` 에 쌓인다 —
 리뷰 대상 저장소를 오염시키지 않고, 라운드 간 컨텍스트가 보존되어 다음 라운드가 이어진다.
 `--out` 을 주면 그 경로를 그대로 쓴다(eval 용).
 
@@ -23,7 +23,7 @@ usage:
 프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
 그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
-import argparse, json, os, re, shutil, subprocess, sys, time
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -254,20 +254,86 @@ def slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-") or "unknown"
 
 
-def branch_dir(cwd: str) -> Path:
-    """~/.red-team/runs/<repo>/<branch> — 저장소 위치에서 결정된다.
-
-    **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
-    작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
-    resume.py 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
+def branch_key(branch: str) -> str:
+    """브랜치 → 디렉토리명. 필요한 성질은 가역이 아니라 **단사**다 — 디렉토리명을
+    브랜치로 되돌리는 소비처는 없고, resume.py 의 워크트리 매칭도 브랜치→키 방향으로
+    이 함수를 적용해 비교한다. slug 가 뭉갠 브랜치(`feature/foo`)에만 원문 해시를
+    접미해 `feature-foo` 브랜치와의 충돌을 없앤다. 무손실 브랜치는 키가 그대로라
+    마이그레이션 대상도 아니다.
     """
+    s = slug(branch)
+    return s if s == branch else f"{s}-{hashlib.sha1(branch.encode()).hexdigest()[:8]}"
+
+
+def repo_key(cwd: str) -> str:
+    """origin 의 `owner/repo` → `owner__repo`. basename 만 쓰면 `team-a/app` 과
+    `team-b/app` 이 같은 `runs/app/` 을 공유한다(issue #8).
+
+    URL(https·ssh·scp형)에서 host 뒤 마지막 두 path segment 를 owner/repo 로 본다.
+    owner 가 안 나오는 origin(로컬 경로, host 직결 단일 segment)은 basename,
+    origin 이 없으면 toplevel 디렉토리명 — 구 키와 같다.
+    """
+    origin = git(cwd, "remote", "get-url", "origin")
+    if not origin:
+        return slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
+    if m:
+        parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
+        if len(parts) >= 2:
+            return f"{slug(parts[-2])}__{slug(parts[-1])}"
+    return slug(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+
+
+def _legacy_branch_dir(cwd: str, branch: str) -> Path:
+    """issue #8 이전의 키 규칙 — 마이그레이션 판정에만 쓴다."""
     origin = git(cwd, "remote", "get-url", "origin")
     repo = slug(re.sub(r"\.git$", "", origin.rsplit("/", 1)[-1])) if origin else \
         slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+    return HOME_DIR / "runs" / repo / slug(branch)
+
+
+def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
+    """구 레이아웃 라운드 기록을 새 키로 1회 rename — 새 경로가 아직 없을 때만.
+
+    옮기지 않으면 라운드 번호·컨텍스트 이관·latest_round 가 조용히 리셋된다.
+    단, 구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) —
+    라운드 기록(round.json 의 repo_cwd)으로 origin 을 대조해 불일치면 두고 간다.
+    판정 불가(기록 없음·워크트리 소실)면 옮긴다 — 단일 저장소 사용이 압도적이다.
+    """
+    legacy = _legacy_branch_dir(cwd, branch)
+    if legacy == new or new.exists() or not legacy.is_dir():
+        return
+    for rj in sorted(legacy.glob("*/round.json")):
+        try:
+            p = json.loads(rj.read_text()).get("repo_cwd")
+        except (json.JSONDecodeError, OSError):
+            continue
+        if p and Path(p).is_dir():
+            if repo_key(p) != new.parent.name:
+                print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
+                      f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
+                      flush=True)
+                return
+            break  # 첫 유효 기록이 일치 — 이전한다
+    new.parent.mkdir(parents=True, exist_ok=True)
+    legacy.rename(new)
+    print(f"runs/ 키 갱신(issue #8) — 라운드 기록 이전: {legacy} → {new}", flush=True)
+
+
+def branch_dir(cwd: str) -> Path:
+    """~/.red-team/runs/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
+
+    **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
+    작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
+    resume.py·pr-triage 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
+    구 레이아웃(basename/slug) 기록이 보이면 여기서 1회 이전한다 — 세 소비처가 같이 혜택을 본다.
+    """
     branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     if branch in ("", "HEAD"):  # detached
         branch = git(cwd, "rev-parse", "--short", "HEAD") or "detached"
-    return HOME_DIR / "runs" / repo / slug(branch)
+    new = HOME_DIR / "runs" / repo_key(cwd) / branch_key(branch)
+    _migrate_legacy(cwd, branch, new)
+    return new
 
 
 def resolve_out(cwd: str, gate: str) -> Path:

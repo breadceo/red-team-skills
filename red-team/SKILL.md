@@ -300,7 +300,7 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
 ### 산출물은 저장소 밖에 쌓인다
 
 ```
-~/.red-team/runs/<repo>/<branch>/<gate>-<n>/
+~/.red-team/runs/<owner>__<repo>/<branch키>/<gate>-<n>/
     context.md              ← 이 라운드에 실제로 쓴 컨텍스트 (복사본)
     <reviewer>.prompt.md    ← 실제로 보낸 프롬프트 전문
     <reviewer>.txt          ← 리뷰어 raw 출력
@@ -310,9 +310,14 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
     <reviewer>.superseded-<stamp>.*  ← 부분 재실행으로 교체된 이전 산출물 (지우지 않는다)
 ```
 
-**포인터 파일은 없다.** `<repo>/<branch>` 가 곧 키이고 그건 작업 중인 워크트리에서 나온다
-(`origin` basename + 현재 브랜치). 별도 포인터를 두면 어긋날 수 있는 두 번째 진실이 생기고,
-eval·실험 런이 진짜 작업 포인터를 덮는 사고가 난다 — 실제로 났다.
+**포인터 파일은 없다.** `<owner>__<repo>/<branch키>` 가 곧 키이고 그건 작업 중인 워크트리에서
+나온다 — `origin` 의 owner/repo(못 뽑으면 basename 폴백) + 현재 브랜치(slug 가 문자를 뭉갠
+브랜치만 원문 해시 8자 접미). owner 포함·해시 접미는 `team-a/app` 대 `team-b/app`,
+`feature/foo` 대 `feature-foo` 가 같은 디렉토리를 공유하던 충돌을 없앤다(issue #8).
+구 레이아웃 기록은 처음 발견될 때 자동 이전된다 — 단, 구 디렉토리가 다른 저장소의 기록으로
+보이면(라운드 기록의 워크트리 origin 불일치) 건드리지 않고 경고만 한다. 별도 포인터를 두면
+어긋날 수 있는 두 번째 진실이 생기고, eval·실험 런이 진짜 작업 포인터를 덮는 사고가 난다 —
+실제로 났다.
 
 **저장소 안이 아닌 이유**: 리뷰 산출물이 `git status` 에 뜨면 리뷰 중 작업 트리가 흔들리고
 PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증가하므로 이전 라운드가 보존되고,
@@ -408,9 +413,10 @@ escape 참고) `runs/<repo>/<branch>/ABORTED` 파일에 사유를 쓴다. **이 
 재개는 그 파일을 지우는 것으로만 한다. `run_round.py` 를 직접 실행하면 경고가 뜬다(차단은
 하지 않는다 — `--out` 실험·eval 흐름을 막지 않기 위해서다).
 
-- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — runs/ 키는
-  origin basename + 브랜치 slug 라 드물게 다른 작업과 디렉토리가 충돌할 수 있는데, 그때
-  안내에 표시되는 본문으로 어느 작업의 중단인지 즉시 식별된다.
+- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — runs/ 키가
+  owner·브랜치 원문까지 반영하게 되어(issue #8) 충돌은 사실상 사라졌지만, 로컬 경로
+  origin 처럼 basename 폴백이 남는 경우가 있고, 안내에 표시되는 본문으로 어느 작업의
+  중단인지 즉시 식별되는 가치는 그대로다.
 - decisions.md 에는 서사(사유·보존할 발견·재개 조건)를 남기는 것을 권장한다 — 단 그것은
   사람용이고, **기계가 읽는 것은 마커 파일뿐이다.** 산문을 판정 입력으로 삼지 않는 것이
   이 설계의 불변식이다(절 이름 파싱은 `## 중단 근거` 오인, fence 안 예시 오인 같은 엣지

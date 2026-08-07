@@ -20,7 +20,7 @@ import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_round import branch_dir, git, slug, GATES  # 경로 파생은 한 곳에서만 한다
+from run_round import branch_dir, branch_key, git, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
@@ -70,7 +70,7 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
         if line.startswith("worktree "):
             path = line[len("worktree "):]
         elif line.startswith("branch ") and path:
-            if slug(line[len("branch refs/heads/"):]) == base.name:
+            if branch_key(line[len("branch refs/heads/"):]) == base.name:
                 return path, "git worktree list"
     return None, None
 

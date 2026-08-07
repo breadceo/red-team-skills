@@ -175,7 +175,7 @@ def main():
     with tempfile.TemporaryDirectory() as home:
         home_p = pathlib.Path(home)
         repo = make_repo(home_p)
-        base = home_p / "runs" / "repo" / "branch"
+        base = home_p / "runs" / "org__repo" / "branch"  # issue #8 이후 키: owner 포함
         rd = write_round(base, "code-1", round_json(
             verdict="GO", coverage="partial", unparsed=["b3-visibility"],
             repo_cwd=str(repo)), 100)

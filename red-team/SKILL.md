@@ -411,7 +411,8 @@ python3 ~/.claude/skills/red-team/scripts/run_round.py \
 ### 티켓을 접을 때 — `ABORTED` 마커 파일
 
 GO 전에 리뷰 루프 자체를 끝내기로 결정했다면(설계 대상 소멸, 전제 붕괴 — 루프 절의 세 번째
-escape 참고) `runs/<repo>/<branch>/ABORTED` 파일에 사유를 쓴다. **이 파일의 존재가 곧 중단
+escape 참고) `runs2/<owner>__<repo>/<branch키>/ABORTED` 파일에 사유를 쓴다 — 정확한 브랜치
+디렉토리는 `resume.py` 출력의 `경로` 줄에서 확인한다. **이 파일의 존재가 곧 중단
 상태다** — `resume.py` 가 이후 어떤 진행 안내(다음 라운드, top-up, 재실행)도 거부하고,
 재개는 그 파일을 지우는 것으로만 한다. `run_round.py` 를 직접 실행하면 경고가 뜬다(차단은
 하지 않는다 — `--out` 실험·eval 흐름을 막지 않기 위해서다).
@@ -463,7 +464,7 @@ diff 밖(티켓·PR 본문)에 두는 것을 우선 고려한다.
 - 매 라운드 P1 이 **같은 파일**에서 나온다(same-origin P1) → 개별 결함이 아니라 그 지점의
   구조적 결합 신호다. 표면을 더 고치지 말고 (a) 그 사용부를 얇은 어댑터 뒤로 격리하도록
   계획을 바꾸거나 (b) 생존성 7·8행(수명·통증 위치)을 재심해 사용자에게 **중단/피벗**을
-  올린다. 중단이면 `runs/<repo>/<branch>/ABORTED` 에 사유를 쓰고 끝낸다(findings 처리 절).
+  올린다. 중단이면 `runs2/<owner>__<repo>/<branch키>/ABORTED` 에 사유를 쓰고 끝낸다(findings 처리 절).
   `resume.py` 가 정확히 같은 파일이 3라운드 연속일 때 자동 경고한다 — 같은 모듈의 여러
   파일로 흩어지는 반복은 기계가 판정하지 않으므로 findings 를 읽는 사람이 같은 신호로
   취급한다. (B2C-52951 실측: plan-13~17 P1 전원이 단일 파일 출처였는데 아무도 그 신호를
@@ -645,7 +646,7 @@ python3 ~/.claude/skills/red-team/scripts/resume.py TICKET-123    # 티켓 키�
 `git worktree list` 또는 라운드에 기록된 `repo_cwd` 로 찾는다. 엉뚱한 워크트리에서 구현하는
 사고를 막는 장치다.
 
-키를 생략하면 저장소 위치에서 `runs/<repo>/<branch>/` 를 파생한다. 그 안에서 가장 최근 라운드는
+키를 생략하면 저장소 위치에서 `runs2/<owner>__<repo>/<branch키>/` 를 파생한다. 그 안에서 가장 최근 라운드는
 `round.json` mtime 으로 고른다(없으면 `--next` 로 준비만 된 라운드). 번호·게이트 순서로 정렬하지
 않는다 — 코드 게이트를 돌다 계획으로 되돌아갈 수도 있다.
 

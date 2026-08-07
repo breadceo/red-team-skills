@@ -81,7 +81,11 @@ def save_state(cwd: str, pr: int, st: dict) -> Path:
     cur = state_path(cwd, pr)
     if cur != p:
         cur.parent.mkdir(parents=True, exist_ok=True)
-        p.replace(cur)
+        try:
+            p.replace(cur)
+        except FileNotFoundError:
+            if not cur.exists():  # rename 이 파일까지 옮겼다면 이미 원하는 위치다(code-8 P2)
+                raise
         p = cur
     return p
 

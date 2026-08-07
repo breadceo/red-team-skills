@@ -317,10 +317,12 @@ def repo_key(cwd: str) -> str:
     origin = git(cwd, "remote", "get-url", "origin")
     if not origin:
         return _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
-    if not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin):
-        # 로컬 경로 origin(절대·상대) — URL 로 오인하면 `../x/team/app.git` 은 team__app,
-        # `/abs/x/team/app.git` 은 app 이 되어 같은 저장소가 표기별로 갈린다(code-2 P2).
-        # scheme(`\w+://`)·SCP형(`host:path`)만 URL 이고 나머지는 전부 basename 폴백이다.
+    if origin.startswith("file://") \
+            or (not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin)):
+        # 로컬 경로 origin(절대·상대·file://) — URL 로 오인하면 `../x/team/app.git` 은
+        # team__app, `/abs/x/team/app.git` 은 app 이 되어 같은 저장소가 표기별로 갈린다
+        # (code-2 P2). file:// 도 같은 로컬 디스크라 표기(절대경로 vs file://)만 바뀌어도
+        # 키가 갈린다(code-8 P2). 원격 scheme·SCP형만 URL 이고 나머지는 basename 폴백이다.
         return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
     m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
     if m:
@@ -375,23 +377,36 @@ def _worktree_repo_cwds(d: Path):
             continue
 
 
+def _pick_legacy(cwd: str, branch: str, parent_name: str):
+    """(소유 가능한 첫 구 후보, 못 쓴 첫 외부 워크트리) — 부수효과 없는 선택.
+
+    구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) — 후보의
+    기록 전부를 대조해 하나라도 불일치면 그 후보는 건너뛰고 **다음 세대를 계속 본다**.
+    외부 후보에서 멈추면 뒤 세대에 남은 자기 기록을 두고 새 라운드를 시작한다(code-8 P2).
+    첫 일치에서 멈추지 않는 이유는 code-1 P2(혼합 기록), 판정 불가(기록 없음·워크트리
+    소실·손상)면 이전 — 단일 저장소 사용이 압도적이다.
+    """
+    first_foreign = None
+    for legacy in _legacy_candidates(cwd, branch):
+        if not legacy.is_dir():
+            continue
+        f = next((p for p in _worktree_repo_cwds(legacy)
+                  if repo_key(p) != parent_name), None)
+        if f:
+            first_foreign = first_foreign or f
+            continue
+        return legacy, None
+    return None, first_foreign
+
+
 def _migration_state(cwd: str, branch: str, new: Path):
     """(이전할 구 디렉토리, 거부 사유가 된 외부 워크트리) — 부수효과 없는 판정.
 
-    _migrate_legacy 와 dry-run 표시가 같은 판정을 공유한다 — 갈라지면 dry-run 이
-    실제 실행과 다른 경로를 보여준다(code-7 P2).
+    _migrate_legacy 와 dry-run 표시, 그리고 무변경 해석(branch_dir)이 같은 선택을
+    공유한다 — 갈라지면 읽는 곳과 옮기는 곳이 서로 다른 디렉토리를 가리킨다(code-7·8).
     """
     if not new.exists():
-        for legacy in _legacy_candidates(cwd, branch):
-            if not legacy.is_dir():
-                continue
-            # 구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) —
-            # 기록 전부를 대조해 하나라도 불일치면 거부. 첫 일치에서 멈추면 뒤에 섞인
-            # 남의 기록까지 가져간다(code-1 P2). 판정 불가(기록 없음·워크트리 소실·손상)면
-            # 이전 — 단일 저장소 사용이 압도적이다.
-            f = next((p for p in _worktree_repo_cwds(legacy)
-                      if repo_key(p) != new.parent.name), None)
-            return (None, f) if f else (legacy, None)
+        return _pick_legacy(cwd, branch, new.parent.name)
     return None, None
 
 
@@ -472,9 +487,12 @@ def branch_dir(cwd: str, migrate: bool = False) -> Path:
     if MIGRATE and migrate:
         _migrate_legacy(cwd, branch, new)
     elif not new.exists():
-        for legacy in _legacy_candidates(cwd, branch):
-            if legacy.is_dir():
-                return legacy  # 무변경 해석 — 기록이 현재 사는 곳을 그대로 가리킨다
+        # 무변경 해석 — 기록이 현재 사는 곳을 가리킨다. 마이그레이션과 같은 후보 선택을
+        # 공유해 외부 소유 gen1 을 읽는 오독을 막는다(code-8 P2). 이 소유 검사 비용은
+        # 전환기(new 부재)에만 발생한다.
+        src, _ = _pick_legacy(cwd, branch, new.parent.name)
+        if src:
+            return src
     return new
 
 

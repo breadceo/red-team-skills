@@ -43,6 +43,8 @@ sh(repo_a, "remote", "set-url", "origin", "/local/bare/app.git")  # 로컬 경�
 assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
 sh(repo_a, "remote", "set-url", "origin", "../remotes/team/app.git")  # 상대 경로도 동일(code-2 P2)
 assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "file://localhost/x/team/app.git")  # file:// 도 로컬(code-8 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
 
 no_origin = make_repo("standalone", None, "main")  # origin 없음 — 디렉토리명 폴백
 assert rr.repo_key(str(no_origin)) == "standalone", rr.repo_key(str(no_origin))
@@ -205,6 +207,20 @@ new_j = runs2 / "team-j__app" / lossy
 assert rr.branch_dir(str(repo_j), migrate=True) == new_j
 assert (new_j / "code-1").is_dir(), "초장문 repo_cwd 에서 이전이 죽었다"
 
+# 3l) 외부 소유 gen1 을 건너뛰고 자기 gen0 을 이전한다(code-8 P2) — 무변경 해석도 동일 선택
+repo_l = make_repo("l", "git@github.com:team/appx.git", "main")
+gen1_l = runs / "team__appx" / "main"                    # 외부(repo_a) 소유의 gen1 자리
+(gen1_l / "code-9").mkdir(parents=True)
+(gen1_l / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+gen0_l = runs / "appx" / "main"                          # 자기 gen0 기록
+(gen0_l / "code-7").mkdir(parents=True)
+(gen0_l / "code-7" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_l)}))
+assert rr.branch_dir(str(repo_l)) == gen0_l, "무변경 해석이 외부 gen1 을 반환했다"
+new_l = runs2 / "team__appx" / "main"
+assert rr.branch_dir(str(repo_l), migrate=True) == new_l
+assert (new_l / "code-7").is_dir(), "외부 gen1 에 막혀 자기 gen0 을 이전하지 못했다"
+assert (gen1_l / "code-9").is_dir(), "외부 gen1 을 건드렸다"
+
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs
@@ -231,6 +247,12 @@ legacy_k = runs / "app" / "feature-foo"
 (legacy_k / "code-1").mkdir(parents=True)
 rs.resolve_base("appq/feature-q", str(repo_k))
 assert legacy_k.is_dir(), "키 조회가 cwd 의 구 라운드를 이전시켰다"
+# 3부 식별자(code-8 P1) — 두 루트에 같은 parent/name 이 공존해도 루트 포함 키로 유일 선택
+(runs / "dup__x" / "br").mkdir(parents=True)
+(runs2 / "dup__x" / "br").mkdir(parents=True)
+h_new, _ = rs.resolve_base("runs2/dup__x/br", str(repo_a))
+h_old, _ = rs.resolve_base("runs/dup__x/br", str(repo_a))
+assert h_new == runs2 / "dup__x" / "br" and h_old == runs / "dup__x" / "br", (h_new, h_old)
 
 print("test_runs_namespace: ok")
 shutil.rmtree(TMP)

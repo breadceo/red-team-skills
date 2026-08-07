@@ -49,17 +49,26 @@ def resolve_base(key: str | None, cwd: str):
     # 그 문자열을 substring 으로 담은 새 경로와 또 겹치지 않는다(code-5 P2).
     # 폴백을 항상 켜면 티켓 키가 repo 키에도 걸려 유일하던 검색이 깨진다(code-4 P2).
     dirs = [d for r in RUNS_ROOTS for d in r.glob("*/*") if d.is_dir()]
-    hits = sorted(d for d in dirs if f"{d.parent.name}/{d.name}".lower() == k) or \
+    # 식별자는 루트 포함 3부(`runs2/owner__repo/branch키`)까지 exact 로 받는다 — 이전이
+    # 거부된 legacy 와 새 runs2 라운드가 같은 parent/name 으로 공존하면 2부 식별자로는
+    # 어느 쪽도 유일 선택할 수 없다(code-8 P1). 안내가 3부를 보여주므로 재입력이 항상 먹힌다.
+    hits = sorted(d for d in dirs if f"{d.parent.name}/{d.name}".lower() == k
+                  or _full_id(d).lower() == k) or \
         sorted(d for d in dirs if k in d.name.lower()) or \
         sorted(d for d in dirs if k in f"{d.parent.name}/{d.name}".lower())
     if not hits:
-        avail = sorted(f"{d.parent.name}/{d.name}" for d in dirs)
+        avail = sorted(_full_id(d) for d in dirs)
         sys.exit(f"'{key}' 에 맞는 라운드 디렉토리가 없다.\n  있는 것: "
                  + (", ".join(avail) if avail else "(없음)"))
     if len(hits) > 1:
-        sys.exit(f"'{key}' 가 여러 곳에 맞는다. 더 구체적으로 준다:\n  "
-                 + "\n  ".join(f"{d.parent.name}/{d.name}" for d in hits))
+        sys.exit(f"'{key}' 가 여러 곳에 맞는다. 더 구체적으로 준다(그대로 재입력 가능):\n  "
+                 + "\n  ".join(_full_id(d) for d in hits))
     return hits[0], (derived if hits[0] != derived else None)
+
+
+def _full_id(d: Path) -> str:
+    """루트 포함 3부 식별자 — 두 루트에 같은 parent/name 이 공존해도 유일하다(code-8 P1)."""
+    return f"{d.parent.parent.name}/{d.parent.name}/{d.name}"
 
 
 def _belongs(path: str, base: Path) -> bool:
@@ -354,8 +363,8 @@ def main():
         print(f"  {'구현·리뷰는 다음 워크트리에서 해야 한다: ' + repo_cwd if repo_cwd else '해당 워크트리를 못 찾았다 — 그 워크트리로 이동해 다시 실행한다.'}\n")
     # 안내 키는 사용자가 준 것이 아니라 **최종 base** 에서 다시 만든다 — 선행 이전으로
     # 경로가 옮겨지면 원래 키는 더 이상 어떤 디렉토리와도 맞지 않는다(code-6 P1).
-    # parent/name 전체 키는 완전 일치 검색이 1순위라 항상 유효하다.
-    keysuf = f" {base.parent.name}/{base.name}" if a.key else ""
+    # 루트 포함 3부 식별자는 exact 검색 대상이라 두 루트가 겹쳐도 유일하다(code-8 P1).
+    keysuf = f" {_full_id(base)}" if a.key else ""
     dec_path, ctx_path = rd / "decisions.md", rd / "context.md"
     verdict, counts = "(미실행)", None
     if ran:

@@ -422,30 +422,31 @@ def target_dir(cwd: str) -> Path:
     return HOME_DIR / "runs" / repo_key(cwd) / branch_key(_current_branch(cwd))
 
 
-def branch_dir(cwd: str, migrate: bool = True) -> Path:
+def branch_dir(cwd: str, migrate: bool = False) -> Path:
     """~/.red-team/runs/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
 
     **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
     작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
     resume.py·pr-triage 도 이 함수를 쓴다(각자 계산하면 조용히 다른 디렉토리를 가리킬 수 있다).
-    구 레이아웃(basename/slug) 기록이 보이면 여기서 1회 이전한다 — 세 소비처가 같이 혜택을 본다.
 
-    migrate=False 는 무변경 해석이다 — 이전하지 않고, 새 경로가 없으면 구 경로를 그대로
-    읽는다. ABORTED 마커 검사처럼 **경고만 하는 파생**이 rename 부수효과로 명시적
-    `--context`/`--out` 경로를 파괴하면 안 되는 자리에서 쓴다(code-4 P1).
+    **기본은 무변경 해석이다** — 이전하지 않고, 새 경로가 없으면 구 경로를 그대로 읽는다.
+    구 레이아웃의 1회 이전(rename)은 migrate=True 를 명시한 **쓰기 지점 두 곳**에서만
+    일어난다: run_round 의 resolve_out(정상 라운드 생성)과 resume 의 대상 확정 후 선행
+    이전. 기본값이 이전이면 조회·감시 소비처가 하나 늘 때마다 부수효과 누수가 재발한다 —
+    pr-triage 의 상태 조회가 정확히 그 사례였다(code-6 P1).
     """
     branch = _current_branch(cwd)
     new = HOME_DIR / "runs" / repo_key(cwd) / branch_key(branch)
     if MIGRATE and migrate:
         _migrate_legacy(cwd, branch, new)
     elif not new.exists() and (legacy := _legacy_branch_dir(cwd, branch)).is_dir():
-        return legacy  # 읽기 전용 해석 — 이전은 실제 실행에서만 일어난다
+        return legacy  # 무변경 해석 — 기록이 현재 사는 곳을 그대로 가리킨다
     return new
 
 
 def resolve_out(cwd: str, gate: str) -> Path:
     """다음 라운드 디렉토리 — `<gate>-<n>` 의 n 은 자동 증가."""
-    base = branch_dir(cwd)
+    base = branch_dir(cwd, migrate=True)  # 쓰기 지점 ① — 구 레이아웃 이전은 여기서 일어난다
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{gate}-*")
                  if (m := re.fullmatch(rf"{gate}-(\d+)", d.name))), default=0)
     return base / f"{gate}-{n}"
@@ -460,9 +461,9 @@ def lean_reviewers(gate: str, cwd: str) -> tuple[list[str], str]:
     GO 는 coverage=partial 로 기록되어 top-up 병합 전에는 게이트 통과가 아니다.
     """
     axes = GATES[gate]
-    # migrate=False: 축 선택은 순수 읽기다 — moe 가 켜진 명시적 --out 실행에서 여기가
+    # 축 선택은 순수 읽기다(기본값) — moe 가 켜진 명시적 --out 실행에서 여기가
     # 이전을 일으키면 마커 검사와 같은 경로 파괴가 난다(code-4 P1 과 동일 계열).
-    rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd, migrate=False).glob(f"{gate}-*")
+    rounds = [(rj.stat().st_mtime, str(rj), rj) for d in branch_dir(cwd).glob(f"{gate}-*")
               if re.fullmatch(rf"{gate}-\d+", d.name) and (rj := d / "round.json").exists()]
     if not rounds:
         return list(axes), "직전 라운드 없음 — 전체 축(베이스라인)"
@@ -843,10 +844,10 @@ def main():
         markers.append(Path(a.merge_into).resolve().parent / "ABORTED")
     else:
         if a.cwd:
-            # 경고용 파생은 순수 읽기다 — 여기서 이전이 일어나면 명시적 --context/--out 이
-            # 구 레이아웃을 가리키는 직접 실행이 자기 입력 경로를 잃는다(code-4 P1).
-            # 실제 이전은 resolve_out 경유 정상 경로의 branch_dir 이 한다.
-            markers.append(branch_dir(a.cwd, migrate=False) / "ABORTED")
+            # 경고용 파생은 순수 읽기다(기본값) — 여기서 이전이 일어나면 명시적
+            # --context/--out 이 구 레이아웃을 가리키는 직접 실행이 자기 입력 경로를
+            # 잃는다(code-4 P1). 실제 이전은 resolve_out 경유 정상 경로가 한다.
+            markers.append(branch_dir(a.cwd) / "ABORTED")
         if a.out:
             markers.append(Path(a.out).resolve().parent / "ABORTED")
     for m in dict.fromkeys(markers):  # 같은 마커면 한 번만

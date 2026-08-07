@@ -35,9 +35,9 @@ def resolve_base(key: str | None, cwd: str):
     그 조각을 담은 브랜치 디렉토리를 찾는다 — 워크트리 밖에서도 진입할 수 있고,
     cwd 와 어긋나면 알려준다(엉뚱한 워크트리에서 구현하는 사고를 막는다).
     """
-    # 키 조회는 순수 읽기다 — 여기서 cwd 의 구 라운드가 이전되면 다른 작업을 조회만 해도
-    # 부수효과가 난다(code-5 P2). 이전은 대상 확정 후의 선행 이전 한 곳에서만 일어난다.
-    derived = branch_dir(cwd, migrate=not key)
+    # 키 조회는 순수 읽기다(기본값) — 여기서 cwd 의 구 라운드가 이전되면 다른 작업을
+    # 조회만 해도 부수효과가 난다(code-5 P2). 이전은 대상 확정 후 선행 이전 한 곳에서만.
+    derived = branch_dir(cwd)
     if not key:
         return derived, None
     runs = RUNS
@@ -60,30 +60,42 @@ def resolve_base(key: str | None, cwd: str):
     return hits[0], (derived if hits[0] != derived else None)
 
 
+def _belongs(path: str, base: Path) -> bool:
+    """path 워크트리가 base 라운드 디렉토리의 주인인가 — 이름이 아니라 **파생 동등성**으로
+    판정한다. 이름만 비교하면 같은 브랜치명의 다른 저장소 워크트리를 확정해 남의 runs 를
+    오염시키고(code-5·6 P1), 새 키를 문자 그대로 이름으로 쓴 브랜치가 오선택된다.
+    구·신 경로가 공존하면 무변경 해석은 새 경로를 돌려주므로 legacy 키 동등성도 인정한다.
+    """
+    try:
+        if branch_dir(path) == base:
+            return True
+        return run_round._legacy_branch_dir(path, run_round._current_branch(path)) == base
+    except OSError:
+        return False
+
+
 def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
     """이 브랜치의 워크트리 경로를 찾는다 — run_round.py 의 --cwd 로 쓸 값이다.
 
     ① 이미 그 워크트리 안이면 cwd ② 라운드 기록(round.json 의 repo_cwd)
     ③ 같은 저장소의 다른 체크아웃에서 `git worktree list` 로 조회.
+    ②·③ 모두 _belongs 소속 검증을 통과해야 한다 — ② 를 존재 여부만으로 믿으면 낡은
+    repo_cwd 가 무관한 저장소를 확정해 그쪽 legacy 를 선행 이전시킨다(code-6 P1).
     """
-    if branch_dir(cwd, migrate=False) == base:  # 비교는 순수 읽기 — 이전은 선택 확정 후
+    if branch_dir(cwd) == base:  # 비교는 순수 읽기(기본값) — 이전은 선택 확정 후
         return cwd, "현재 디렉토리"
     if rounds_dir and (rj := rounds_dir / "round.json").exists():
         try:
-            if (p := json.loads(rj.read_text()).get("repo_cwd")) and Path(p).is_dir():
-                return p, "라운드 기록(round.json)"
+            p = json.loads(rj.read_text()).get("repo_cwd")
         except json.JSONDecodeError:
-            pass
+            p = None
+        if isinstance(p, str) and p and Path(p).is_dir() and _belongs(p, base):
+            return p, "라운드 기록(round.json)"
     out = git(cwd, "worktree", "list", "--porcelain")
     for line in out.splitlines():
         if line.startswith("worktree "):
             path = line[len("worktree "):]
-            # 브랜치명 비교가 아니라 **파생 동등성**으로 판정한다 — 이름만 비교하면
-            # 같은 브랜치명의 다른 저장소 워크트리를 대상으로 확정해 남의 runs 를
-            # 오염시키고(code-5 P2), 새 키를 문자 그대로 이름으로 쓴 브랜치가 순서에
-            # 따라 오선택된다(code-5 P2). 구 레이아웃 base 는 migrate=False 해석이
-            # legacy 를 돌려줘 그대로 일치한다(code-1 P2 의 slug 폴백을 대체).
-            if Path(path).is_dir() and branch_dir(path, migrate=False) == base:
+            if Path(path).is_dir() and _belongs(path, base):
                 return path, "git worktree list"
     return None, None
 
@@ -329,13 +341,16 @@ def main():
     # 키로 구 레이아웃 디렉토리를 선택했으면 **여기서** 선행 이전한다 — 뒤에서 만들
     # context.md·--out 경로가 구 디렉토리를 가리키면, 안내된 run_round 가 실행 시작
     # 시점의 자동 이전으로 그 경로를 날려 즉시 실패한다(code-1 P2, 리뷰어 실측 exit 1).
-    if repo_cwd and (derived := branch_dir(repo_cwd)) != base \
-            and not base.exists() and derived.is_dir():
+    if repo_cwd and (derived := branch_dir(repo_cwd, migrate=True)) != base \
+            and not base.exists() and derived.is_dir():  # 쓰기 지점 ② — 대상 확정 후에만
         rd, base = derived / rd.name, derived
     if mismatch is not None:
         print(f"⚠ 현재 디렉토리는 {mismatch.name} 인데 '{a.key}' 는 {base.name} 이다.")
         print(f"  {'구현·리뷰는 다음 워크트리에서 해야 한다: ' + repo_cwd if repo_cwd else '해당 워크트리를 못 찾았다 — 그 워크트리로 이동해 다시 실행한다.'}\n")
-    keysuf = f" {a.key}" if a.key else ""
+    # 안내 키는 사용자가 준 것이 아니라 **최종 base** 에서 다시 만든다 — 선행 이전으로
+    # 경로가 옮겨지면 원래 키는 더 이상 어떤 디렉토리와도 맞지 않는다(code-6 P1).
+    # parent/name 전체 키는 완전 일치 검색이 1순위라 항상 유효하다.
+    keysuf = f" {base.parent.name}/{base.name}" if a.key else ""
     dec_path, ctx_path = rd / "decisions.md", rd / "context.md"
     verdict, counts = "(미실행)", None
     if ran:

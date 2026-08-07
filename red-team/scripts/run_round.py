@@ -276,9 +276,22 @@ def branch_key(branch: str) -> str:
     잔여 충돌은 sha1 32bit 접두 충돌뿐이다.
     """
     s = slug(branch)
-    if s == branch and not _RESERVED_SUF.search(s):
+    if s == branch and not _RESERVED_SUF.search(s) and len(s) <= 255:
         return s
     return _suffixed(s, branch)
+
+
+def _single_key(name: str) -> str:
+    """owner 가 없는 repo 키(로컬 경로 origin·origin 부재 폴백).
+
+    pair 키(`owner__repo`)와 출력 공간이 겹치면 안 된다 — basename 이 `team__app` 인
+    저장소가 `team/app` 의 pair 키와 같은 디렉토리를 얻는다(code-3 P1). 그래서
+    `__` 를 담은 이름은 branch_key 규칙에 더해 해시로 가른다.
+    """
+    s = slug(name)
+    if s == name and "__" not in s and not _RESERVED_SUF.search(s) and len(s) <= 255:
+        return s
+    return _suffixed(s, name)
 
 
 def repo_key(cwd: str) -> str:
@@ -295,23 +308,23 @@ def repo_key(cwd: str) -> str:
     """
     origin = git(cwd, "remote", "get-url", "origin")
     if not origin:
-        name = Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name
-        return branch_key(name)  # 단일 이름 폴백 — 브랜치와 같은 단사 규칙을 태운다
+        return _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
     if not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin):
         # 로컬 경로 origin(절대·상대) — URL 로 오인하면 `../x/team/app.git` 은 team__app,
         # `/abs/x/team/app.git` 은 app 이 되어 같은 저장소가 표기별로 갈린다(code-2 P2).
         # scheme(`\w+://`)·SCP형(`host:path`)만 URL 이고 나머지는 전부 basename 폴백이다.
-        return branch_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+        return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
     m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
     if m:
         parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
         if len(parts) >= 2:
             owner, repo = parts[-2], parts[-1]
             rendered = f"{slug(owner)}__{slug(repo)}"
-            if rendered.split("__") == [owner, repo] and not _RESERVED_SUF.search(rendered):
+            if rendered.split("__") == [owner, repo] and not _RESERVED_SUF.search(rendered) \
+                    and len(rendered) <= 255:  # 무접미 초과분은 절단+해시 경로로(code-3 P2)
                 return rendered
             return _suffixed(rendered, f"{owner}/{repo}")
-    return branch_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+    return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
 
 
 def _legacy_branch_dir(cwd: str, branch: str) -> Path:
@@ -320,6 +333,23 @@ def _legacy_branch_dir(cwd: str, branch: str) -> Path:
     repo = slug(re.sub(r"\.git$", "", origin.rsplit("/", 1)[-1])) if origin else \
         slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
     return HOME_DIR / "runs" / repo / slug(branch)
+
+
+def _worktree_repo_cwds(d: Path):
+    """d 아래 라운드 기록들의 repo_cwd 중 **실제 git 워크트리**인 것만.
+
+    손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열 repo_cwd 는 판정 불가라
+    건너뛴다(code-2 P2). 디렉토리가 남아 있어도 git 메타데이터가 사라졌으면 basename 이
+    저장소 키로 둔갑해 오판하므로 워크트리 확인까지 통과한 것만 낸다(code-3 P2).
+    """
+    for rj in d.glob("*/round.json"):
+        try:
+            data = json.loads(rj.read_text())
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue
+        p = data.get("repo_cwd") if isinstance(data, dict) else None
+        if isinstance(p, str) and p and Path(p).is_dir() and git(p, "rev-parse", "--show-toplevel"):
+            yield p
 
 
 def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
@@ -332,16 +362,19 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     판정 불가(기록 없음·워크트리 소실·손상 기록)면 옮긴다 — 단일 저장소 사용이 압도적이다.
     """
     legacy = _legacy_branch_dir(cwd, branch)
-    if legacy == new or new.exists() or not legacy.is_dir():
+    if legacy == new or not legacy.is_dir():
         return
-    for rj in legacy.glob("*/round.json"):
-        try:
-            data = json.loads(rj.read_text())
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            continue  # 손상 기록(잘린 UTF-8 포함)은 판정 불가 — 마이그레이션을 죽이지 않는다
-        # null·[] 같은 비 dict 유효 JSON, 비문자열 repo_cwd 도 판정 불가다(code-2 P2)
-        p = data.get("repo_cwd") if isinstance(data, dict) else None
-        if isinstance(p, str) and p and Path(p).is_dir() and repo_key(p) != new.parent.name:
+    if new.exists():
+        # 전환기 스쿼팅 감지(code-3 P1): 구 기록이 남았는데 새 키 자리가 이미 차 있다 —
+        # basename 에 `__` 를 담은 다른 저장소의 구 레이아웃일 수 있다. 남의 살아 있는
+        # 디렉토리일 수 있으므로 자동 해소는 없다 — 소유가 어긋나 보이면 경고만 한다.
+        if (p := next(_worktree_repo_cwds(new), None)) and repo_key(p) != new.parent.name:
+            print(f"⚠ 새 키 위치 {new} 에 다른 저장소의 기록이 있는 것으로 보인다\n"
+                  f"  (그 기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 수동 정리 전에는 "
+                  f"두 작업의 라운드가 섞인다)", flush=True)
+        return
+    for p in _worktree_repo_cwds(legacy):
+        if repo_key(p) != new.parent.name:
             print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
                   f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
                   flush=True)
@@ -356,6 +389,9 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     print(f"runs/ 키 갱신(issue #8) — 라운드 기록 이전: {legacy} → {new}", flush=True)
 
 
+MIGRATE = True  # resume --dry-run 이 끈다 — dry-run 은 무변경으로 구 경로를 그대로 읽는다(code-3 P1)
+
+
 def branch_dir(cwd: str) -> Path:
     """~/.red-team/runs/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
 
@@ -368,7 +404,10 @@ def branch_dir(cwd: str) -> Path:
     if branch in ("", "HEAD"):  # detached
         branch = git(cwd, "rev-parse", "--short", "HEAD") or "detached"
     new = HOME_DIR / "runs" / repo_key(cwd) / branch_key(branch)
-    _migrate_legacy(cwd, branch, new)
+    if MIGRATE:
+        _migrate_legacy(cwd, branch, new)
+    elif not new.exists() and (legacy := _legacy_branch_dir(cwd, branch)).is_dir():
+        return legacy  # 읽기 전용 해석 — 이전은 실제 실행에서만 일어난다
     return new
 
 

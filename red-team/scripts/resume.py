@@ -20,6 +20,7 @@ import argparse, json, os, re, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE)를 끄기 위해
 from run_round import branch_dir, branch_key, git, slug, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
@@ -39,7 +40,10 @@ def resolve_base(key: str | None, cwd: str):
         return derived, None
     runs = RUNS
     k = key.lower()
-    hits = sorted(d for d in runs.glob("*/*") if d.is_dir() and k in d.name.lower())
+    # parent/name 도 매칭한다 — 다중 후보 안내가 `owner__repo/branch` 를 보여주는데
+    # 검색이 d.name 만 보면 그 값을 그대로 입력해도 못 찾는다(code-3 P2).
+    hits = sorted(d for d in runs.glob("*/*") if d.is_dir()
+                  and (k in d.name.lower() or k in f"{d.parent.name}/{d.name}".lower()))
     if not hits:
         avail = sorted(f"{d.parent.name}/{d.name}" for d in runs.glob("*/*") if d.is_dir())
         sys.exit(f"'{key}' 에 맞는 라운드 디렉토리가 없다.\n  있는 것: "
@@ -288,6 +292,10 @@ def main():
     ap.add_argument("--cwd", default=None, help="대상 저장소 (생략 시 현재 디렉토리)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    if a.dry_run:
+        # dry-run 은 무변경이어야 한다 — branch_dir 의 구 레이아웃 이전(rename)까지 끈다.
+        # 새 경로가 없으면 구 경로를 읽기 전용으로 해석한다(code-3 P1).
+        run_round.MIGRATE = False
 
     cwd = a.cwd or os.getcwd()
     base, mismatch = resolve_base(a.key, cwd)

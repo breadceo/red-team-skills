@@ -73,6 +73,15 @@ sh(repo_a, "remote", "set-url", "origin", "git@github.com:team_/app.git")  # 경
 k1 = rr.repo_key(str(repo_a))
 sh(repo_a, "remote", "set-url", "origin", "git@github.com:team/_app.git")
 assert k1 != rr.repo_key(str(repo_a)), (k1, rr.repo_key(str(repo_a)))
+
+# ── 2c) _single_key: 폴백 키와 pair 키의 출력 공간 분리 (code-3 P1) ────────
+sh(repo_a, "remote", "set-url", "origin", "/local/bare/team__app.git")
+k_fallback = rr.repo_key(str(repo_a))
+assert k_fallback != "team__app" and k_fallback.startswith("team__app--"), k_fallback
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:team/app.git")
+assert rr.repo_key(str(repo_a)) == "team__app"          # pair 키는 무접미 그대로
+sh(repo_a, "remote", "set-url", "origin", "git@github.com:" + "o" * 155 + "/" + "r" * 99 + ".git")
+assert len(rr.repo_key(str(repo_a))) <= 255              # 무손실 pair 도 길이 상한(code-3 P2)
 sh(repo_a, "remote", "set-url", "origin", "git@github.com:team-a/app.git")  # 원복
 
 # ── 3) branch_dir: 새 키 + 마이그레이션 ────────────────────────────────────
@@ -143,8 +152,43 @@ new_f = runs / "team-f__app" / lossy
 assert rr.branch_dir(str(repo_f)) == new_f
 assert (new_f / "code-3").is_dir(), "비 dict 기록에서 이전이 죽었다"
 
-# ── 4) resume 워크트리 매칭 방향 정합 — 디렉토리명 == branch_key(브랜치) ──
-assert new_a.name == rr.branch_key("feature/foo")
+# 3h) repo_cwd 디렉토리가 git 워크트리가 아니면 판정 불가 — 오판 거부 없이 이전(code-3 P2)
+repo_g = make_repo("g", "git@github.com:team-g/app.git", "feature/foo")
+legacy_g = runs / "app" / "feature-foo"
+plain = pathlib.Path(TMP) / "plain-dir"; plain.mkdir()   # git 아님
+(legacy_g / "code-1").mkdir(parents=True)
+(legacy_g / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(plain)}))
+new_g = runs / "team-g__app" / lossy
+assert rr.branch_dir(str(repo_g)) == new_g
+assert (new_g / "code-1").is_dir(), "비워크트리 repo_cwd 가 이전을 오판 거부했다"
+
+# 3i) 스쿼팅 경고(code-3 P1) — 새 키 자리가 남의 기록이면 경고만, 아무것도 옮기지 않는다
+repo_h = make_repo("h", "git@github.com:team/app2.git", "main")
+squat = runs / "team__app2"                              # repo_h 의 새 pair 키 자리
+(squat / "main" / "code-9").mkdir(parents=True)
+(squat / "main" / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+legacy_h = runs / "app2" / "main"
+(legacy_h / "code-1").mkdir(parents=True)
+assert rr.branch_dir(str(repo_h)) == squat / "main"
+assert (legacy_h / "code-1").is_dir(), "스쿼팅 상태에서 구 기록을 옮겼다"
+assert (squat / "main" / "code-9").is_dir(), "스쿼팅 상태에서 남의 기록을 건드렸다"
+
+# 3j) dry-run 읽기 전용 해석(code-3 P1) — MIGRATE=False 면 rename 없이 구 경로를 반환
+shutil.rmtree(squat); shutil.rmtree(legacy_h.parent)
+repo_i = make_repo("i", "git@github.com:team-i/app.git", "feature/foo")
+legacy_i = runs / "app" / "feature-foo"
+(legacy_i / "code-1").mkdir(parents=True)
+rr.MIGRATE = False
+assert rr.branch_dir(str(repo_i)) == legacy_i, "dry-run 해석이 구 경로를 반환하지 않았다"
+assert legacy_i.is_dir(), "MIGRATE=False 인데 rename 이 일어났다"
+rr.MIGRATE = True
+assert rr.branch_dir(str(repo_i)) == runs / "team-i__app" / lossy  # 실제 실행은 이전한다
+
+# ── 4) resume 정합 ─────────────────────────────────────────────────────────
+assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
+import resume as rs
+hit, _mm = rs.resolve_base("team-a__app/feature-foo", str(repo_a))  # parent/name 매칭(code-3 P2)
+assert hit == new_a, hit
 
 print("test_runs_namespace: ok")
 shutil.rmtree(TMP)

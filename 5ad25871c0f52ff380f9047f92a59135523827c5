@@ -1,0 +1,21 @@
+CHANGELOG.md
+  h_d82ccb34241a0d 43-87
+pr-triage/SKILL.md
+  h_d82ccb34241a0d 3,51-53,57-58,297-301,364-367,455-529
+red-team/SKILL.md
+  h_d82ccb34241a0d 160-164,201-206,463-586
+red-team/scripts/run_round.py
+  h_d82ccb34241a0d 368-370
+red-team/scripts/test_from_zax.py
+  h_d82ccb34241a0d 2,78-79,83-88
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "5ad25871c0f52ff380f9047f92a59135523827c5",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  }
+}

@@ -393,7 +393,10 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     try:
         legacy.rename(new)
     except OSError:
-        if new.exists():  # 동시 branch_dir() 호출 경합 — 다른 소비처가 먼저 이전했다
+        # 동시 branch_dir() 경합 — 같은 목적지끼리는 new 가 생겨 있고, 서로 다른 저장소가
+        # 판정 불가 legacy 를 각자의 키로 다투면 legacy 만 사라진다(code-5 P2). 어느 쪽이든
+        # "다른 소비처가 먼저 이전했다"이므로 정상 반환한다.
+        if new.exists() or not legacy.is_dir():
             return
         raise
     print(f"runs/ 키 갱신(issue #8) — 라운드 기록 이전: {legacy} → {new}", flush=True)

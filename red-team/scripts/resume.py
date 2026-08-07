@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE)를 끄기 위해
-from run_round import branch_dir, branch_key, git, slug, GATES  # 경로 파생은 한 곳에서만 한다
+from run_round import branch_dir, git, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
@@ -35,16 +35,20 @@ def resolve_base(key: str | None, cwd: str):
     그 조각을 담은 브랜치 디렉토리를 찾는다 — 워크트리 밖에서도 진입할 수 있고,
     cwd 와 어긋나면 알려준다(엉뚱한 워크트리에서 구현하는 사고를 막는다).
     """
-    derived = branch_dir(cwd)
+    # 키 조회는 순수 읽기다 — 여기서 cwd 의 구 라운드가 이전되면 다른 작업을 조회만 해도
+    # 부수효과가 난다(code-5 P2). 이전은 대상 확정 후의 선행 이전 한 곳에서만 일어난다.
+    derived = branch_dir(cwd, migrate=not key)
     if not key:
         return derived, None
     runs = RUNS
     k = key.lower()
-    # 브랜치 디렉토리명 우선, 무히트일 때만 parent/name 폴백 — 다중 후보 안내의
-    # `owner__repo/branch` 값을 그대로 입력할 수 있게 하되(code-3 P2), 폴백을 항상 켜면
-    # 티켓 키가 repo 키에도 걸려 전에는 유일하던 검색이 다중 후보로 깨진다(code-4 P2).
+    # 검색 순서: 완전 일치(parent/name) → 브랜치명 substring → 전체키 substring.
+    # 완전 일치가 먼저여야 다중 후보 안내에 표시된 구 경로 식별자를 그대로 재입력했을 때
+    # 그 문자열을 substring 으로 담은 새 경로와 또 겹치지 않는다(code-5 P2).
+    # 폴백을 항상 켜면 티켓 키가 repo 키에도 걸려 유일하던 검색이 깨진다(code-4 P2).
     dirs = [d for d in runs.glob("*/*") if d.is_dir()]
-    hits = sorted(d for d in dirs if k in d.name.lower()) or \
+    hits = sorted(d for d in dirs if f"{d.parent.name}/{d.name}".lower() == k) or \
+        sorted(d for d in dirs if k in d.name.lower()) or \
         sorted(d for d in dirs if k in f"{d.parent.name}/{d.name}".lower())
     if not hits:
         avail = sorted(f"{d.parent.name}/{d.name}" for d in runs.glob("*/*") if d.is_dir())
@@ -62,7 +66,7 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
     ① 이미 그 워크트리 안이면 cwd ② 라운드 기록(round.json 의 repo_cwd)
     ③ 같은 저장소의 다른 체크아웃에서 `git worktree list` 로 조회.
     """
-    if branch_dir(cwd) == base:
+    if branch_dir(cwd, migrate=False) == base:  # 비교는 순수 읽기 — 이전은 선택 확정 후
         return cwd, "현재 디렉토리"
     if rounds_dir and (rj := rounds_dir / "round.json").exists():
         try:
@@ -71,15 +75,15 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
         except json.JSONDecodeError:
             pass
     out = git(cwd, "worktree", "list", "--porcelain")
-    path = None
     for line in out.splitlines():
         if line.startswith("worktree "):
             path = line[len("worktree "):]
-        elif line.startswith("branch ") and path:
-            br = line[len("branch refs/heads/"):]
-            # slug 비교는 구 레이아웃 호환이다 — round.json 없이 준비만 된 구 디렉토리는
-            # ② 를 못 타는데, 새 키로만 비교하면 실존 워크트리를 못 찾는다(code-1 P2).
-            if branch_key(br) == base.name or slug(br) == base.name:
+            # 브랜치명 비교가 아니라 **파생 동등성**으로 판정한다 — 이름만 비교하면
+            # 같은 브랜치명의 다른 저장소 워크트리를 대상으로 확정해 남의 runs 를
+            # 오염시키고(code-5 P2), 새 키를 문자 그대로 이름으로 쓴 브랜치가 순서에
+            # 따라 오선택된다(code-5 P2). 구 레이아웃 base 는 migrate=False 해석이
+            # legacy 를 돌려줘 그대로 일치한다(code-1 P2 의 slug 폴백을 대체).
+            if Path(path).is_dir() and branch_dir(path, migrate=False) == base:
                 return path, "git worktree list"
     return None, None
 
@@ -423,7 +427,9 @@ def main():
         # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
         # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
         shown = out
-        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base:
+        # not tgt.exists(): 새 경로가 이미 있으면 실제 실행도 이전하지 않고 기존 base 에
+        # 만든다 — 그때 target 을 표시하면 또 표시≠실제가 된다(code-5 P2).
+        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base and not tgt.exists():
             shown = tgt / out.name
         print(f"\n[dry-run] 생성할 경로: {shown}")
         for h, _ in sections(new_ctx):

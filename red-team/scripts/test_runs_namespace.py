@@ -210,6 +210,22 @@ assert hit == new_a, hit
 (runs / "org__app" / "TICKET-9").mkdir(parents=True)
 hit2, _ = rs.resolve_base("ticket-9", str(repo_a))
 assert hit2 == runs / "org__app" / "TICKET-9", hit2
+# 완전 일치 우선(code-5 P2) — 안내된 구 경로 식별자 재입력이 새 경로와 또 겹치지 않는다
+(runs / "appq" / "feature-q").mkdir(parents=True)
+(runs / "t__appq" / "feature-q--12345678").mkdir(parents=True)
+hit3, _ = rs.resolve_base("appq/feature-q", str(repo_a))
+assert hit3 == runs / "appq" / "feature-q", hit3
+# 워크트리 파생 동등성(code-5 P2) — 같은 브랜치명의 다른 저장소 워크트리를 거른다
+wt, _how = rs.worktree_for(new_a, str(repo_b), None)
+assert wt is None, wt                                      # repo_b(feature/foo)는 new_a 소속이 아니다
+wt, _how = rs.worktree_for(new_a, str(repo_a), None)
+assert wt == str(repo_a)
+# 키 조회의 무부수효과(code-5 P2) — 다른 작업 조회가 cwd 의 구 라운드를 이전시키지 않는다
+repo_k = make_repo("k", "git@github.com:team-k/app.git", "feature/foo")
+legacy_k = runs / "app" / "feature-foo"
+(legacy_k / "code-1").mkdir(parents=True)
+rs.resolve_base("appq/feature-q", str(repo_k))
+assert legacy_k.is_dir(), "키 조회가 cwd 의 구 라운드를 이전시켰다"
 
 print("test_runs_namespace: ok")
 shutil.rmtree(TMP)

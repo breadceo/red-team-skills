@@ -190,6 +190,23 @@ def main():
         text, tok = rr.parse_output("codex", '```json\n{"verdict":"GO","findings":[]}\n```', None)
         assert "verdict" in text and tok is None
 
+        # 파일접근오류 휴리스틱(issue #11): 리뷰어가 하위 파일을 추측하거나 재현 스크립트를
+        # 돌리다 낸 FileNotFoundError 는 세지 않고, cwd 루트 자체에 닿지 못한 줄만 센다
+        c = "/tmp/work/tree"
+        assert rr.count_access_errors(
+            f"python3: can't open file '{c}/test_prompt_contract.py': "
+            f"[Errno 2] No such file or directory", c) == 0     # 하위 파일 추측 — 오탐 금지
+        assert rr.count_access_errors(
+            f"ls: {c}/scripts/gone.py: No such file or directory", c) == 0
+        assert rr.count_access_errors(
+            f"cd: {c}: No such file or directory", c) == 1      # 루트 자체 소실 — 진짜 실패
+        assert rr.count_access_errors(
+            f"stat {c}/: No such file or directory", c) == 1    # 루트 뒤 슬래시만 붙어도 루트다
+        assert rr.count_access_errors(
+            f"fatal: not a git repository: {c}", c) == 1
+        assert rr.count_access_errors(
+            f"ls: {c}2: No such file or directory", c) == 0     # 이름이 겹치는 형제 경로
+
         # e2e: 엔진을 가짜로 갈아끼우고 코드 게이트 한 라운드 — 혼합 배정이 round.json 에 남는가
         # 프롬프트가 stdin 으로 실제 도착했을 때만 GO 를 낸다 — argv 회귀(SIGKILL 경로)를
         # 되돌리면 마커가 사라져 이 라운드가 PARSE-FAIL 로 무너진다

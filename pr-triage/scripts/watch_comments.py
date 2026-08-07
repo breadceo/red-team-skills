@@ -12,11 +12,15 @@ usage:
 처리 여부는 사람이 승인해 게시한 뒤에 표시한다(`triaged`). 알림 직후 세션이 죽어도
 처리 대상이 사라지지 않아야 한다.
 """
-import argparse, os, sys, time
+import argparse, os, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fetch_comments import detect, gh, gh_json, is_bot, load_state, save_state
+
+
+def gh_auth_ok() -> bool:
+    return subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
 
 
 def save_notified(cwd, pr, repo, seen):
@@ -84,9 +88,13 @@ def main():
     while idle < a.max_empty_hours * 3600:
         try:
             fresh = [x for x in incoming(repo, pr, me, a.bot_marker) if x[1] not in seen]
-        except SystemExit:      # gh 일시 실패로 감시를 죽이지 않는다
-            fresh = []
-        except Exception:
+        except (SystemExit, Exception):
+            # gh 일시 실패로 감시를 죽이지 않는다 — 단, 인증 만료는 조용히 삼키면
+            # "코멘트 없음" 으로 오인된 채 max-empty-hours 를 다 채운다(issue #12).
+            if not gh_auth_ok():
+                print(f"[watch] {repo}#{pr} gh 인증이 유효하지 않아 감시를 종료한다 — "
+                      f"`gh auth login` 으로 재인증한 뒤 다시 시작한다.", flush=True)
+                sys.exit(1)
             fresh = []
         for src, cid, who, body, url in fresh:
             seen.add(cid)

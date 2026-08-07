@@ -925,6 +925,19 @@ def extract_json(raw: str):
     return None
 
 
+def count_access_errors(raw: str, cwd: str) -> int:
+    """리뷰 대상 루트(cwd) 자체에 닿지 못한 줄만 센다.
+
+    리뷰어가 없는 하위 파일을 추측해 열거나 재현 스크립트를 돌리다 내는
+    FileNotFoundError 는 정상 행동이다 — 그런 줄은 cwd 뒤에 하위 경로가 이어지므로
+    (`{cwd}/...`), cwd 가 경로의 끝으로 등장하는 줄만 접근 실패로 본다(issue #11).
+    """
+    root = re.escape(cwd.rstrip("/")) + r"/?(?![\w.\-/])"
+    return sum(1 for line in raw.splitlines()
+               if ("No such file or directory" in line or "not a git repository" in line)
+               and re.search(root, line))
+
+
 def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         assignment: tuple[str, str | None, str | None, str]):
     engine, model, effort, _tier = assignment
@@ -944,9 +957,7 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
     (out / f"{reviewer}.txt").write_text(raw)
     # 리뷰어가 대상 코드를 못 읽으면 findings 가 조용히 비어 GO 로 보인다.
     # 그 라운드를 정상 결과로 채점하면 틀린 결론이 나오므로 반드시 표면화한다.
-    # 리뷰어가 없는 파일 경로를 추측하는 것은 정상이므로, cwd 자체에 닿지 못한 경우만 센다.
-    lost = sum(1 for line in raw.splitlines()
-               if cwd in line and ("No such file or directory" in line or "not a git repository" in line))
+    lost = count_access_errors(raw, cwd)
     text, tokens = parse_output(engine, stdout, model)
     parsed = extract_json(text)
     (out / f"{reviewer}.json").write_text(json.dumps(parsed, ensure_ascii=False, indent=2)

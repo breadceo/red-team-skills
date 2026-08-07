@@ -315,6 +315,24 @@ assert (new_s / "code-3").is_dir(), "외부 gen0 이 v2 전신 승계를 차단�
 assert (foreign_gen0 / "code-1").is_dir()
 shutil.rmtree(foreign_gen0)
 
+# 3p) unverified 보류 상태에서 새 라운드 생성 차단(code-13 P1) — 복구 후 승계 보전
+repo_t = make_repo("t", "git@github.com:team-t/app.git", "feature/foo")
+legacy_t = runs / "app" / "feature-foo"
+(legacy_t / "code-1").mkdir(parents=True)
+(legacy_t / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_t)}))
+_real_state2 = rr._git_toplevel_state
+rr._git_toplevel_state = lambda p: ("error", None)       # 확인 실패 강제
+try:
+    rr.resolve_out(str(repo_t), "code")
+    assert False, "unverified 보류인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+assert not (runs2 / "team-t__app" / lossy).exists(), "차단됐는데 새 경로가 생겼다"
+rr._git_toplevel_state = _real_state2
+out_t = rr.resolve_out(str(repo_t), "code")              # 복구 후엔 이전 + code-2
+assert out_t == runs2 / "team-t__app" / lossy / "code-2", out_t
+assert (runs2 / "team-t__app" / lossy / "code-1").is_dir(), "복구 후 승계가 안 됐다"
+
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs

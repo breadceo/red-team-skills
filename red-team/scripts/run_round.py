@@ -23,7 +23,7 @@ usage:
 프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
 그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
-import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
+import argparse, errno, hashlib, json, os, re, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -392,8 +392,11 @@ def _record_owners(d: Path):
     repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
     """
     for rj in d.glob("*/round.json"):
-        p = _read_repo_cwd(rj)
-        if p is None:
+        st, p = _read_repo_cwd(rj)
+        if st == "none":
+            continue
+        if st == "error":  # 존재 확인 실패 — 판정 불가가 아니라 거부 사유(code-13 P2)
+            yield "error", p
             continue
         state, _top = _git_toplevel_state(p)
         if state != "not_repo":
@@ -424,22 +427,23 @@ def _pick_legacy(cwd: str, branch: str, parent_name: str):
 
 
 def _read_repo_cwd(f: Path):
-    """기록 파일(round.json·owner.json)에서 repo_cwd — 판정 불가면 None.
+    """기록 파일(round.json·owner.json)의 repo_cwd — ('ok', p) | ('none', None) | ('error', p).
 
-    손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열·경로 소실·초장문 OSError 전부
-    None 이다(code-2·4 P2).
+    'none' 은 판정 불가 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열·경로
+    소실·초장문 ENAMETOOLONG(code-2·4 P2). 'error' 는 존재 확인 자체가 실패한 것
+    (권한·마운트 등) — 소유자 없음으로 오인해 이전하면 오귀속이다(code-13 P2).
     """
     try:
         data = json.loads(f.read_text())
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return None
+        return "none", None
     p = data.get("repo_cwd") if isinstance(data, dict) else None
     if not (isinstance(p, str) and p):
-        return None
+        return "none", None
     try:
-        return p if Path(p).is_dir() else None
-    except OSError:
-        return None
+        return ("ok", p) if Path(p).is_dir() else ("none", None)
+    except OSError as e:
+        return ("none", None) if e.errno == errno.ENAMETOOLONG else ("error", p)
 
 
 def note_owner(bdir: Path, cwd: str) -> None:
@@ -477,8 +481,8 @@ def _v2_predecessor(cwd: str, new: Path):
             continue
         verified = 0
         for f in sources:
-            p = _read_repo_cwd(f)
-            if p is None or _git_toplevel_state(p)[0] != "ok" \
+            st, p = _read_repo_cwd(f)
+            if st != "ok" or _git_toplevel_state(p)[0] != "ok" \
                     or repo_key(p) != new.parent.name:
                 verified = -1
                 break
@@ -612,6 +616,14 @@ def branch_dir(cwd: str, migrate: bool = False) -> Path:
 def resolve_out(cwd: str, gate: str) -> Path:
     """다음 라운드 디렉토리 — `<gate>-<n>` 의 n 은 자동 증가."""
     base = branch_dir(cwd, migrate=True)  # 쓰기 지점 ① — 구 레이아웃 이전은 여기서 일어난다
+    if not base.exists() and (bk := migration_blocked(cwd)) and bk[0] == "unverified":
+        # 확인 실패로 이전이 **보류**된 상태에서 새 이력을 시작하면 new.exists() 가 복구
+        # 후의 승계까지 영구히 막는다(code-13 P1) — 여기서 멈추는 것이 유일한 가역 선택이다.
+        # foreign(불일치 확정)은 새 이력이 맞으므로 막지 않는다.
+        sys.exit(f"구 라운드 기록의 소유 확인에 실패해 이전이 보류됐다 — 지금 새 라운드를 만들면\n"
+                 f"  확인이 복구돼도 기존 기록을 승계할 수 없게 된다(새 경로가 선점됨).\n"
+                 f"  확인 실패 지점: {bk[1]}\n"
+                 f"  접근 가능해진 뒤 다시 실행하고, 남의 기록이 확실하면 그 구 디렉토리를 수동 정리한다.")
     note_owner(base, cwd)
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{gate}-*")
                  if (m := re.fullmatch(rf"{gate}-(\d+)", d.name))), default=0)

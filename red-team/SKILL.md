@@ -338,10 +338,12 @@ PR 에 섞여 들어간다. 라운드 번호는 `<gate>-<n>` 으로 자동 증�
 
 ```bash
 python3 ~/.claude/skills/red-team/scripts/run_round.py \
-  --gate code --merge-into ~/.red-team/runs2/<repo>/<branch>/code-9 \
+  --gate code --merge-into ~/.red-team/runs2/<owner>__<repo>/<branch키>/code-9 \
   --reviewers b1-state-matrix
 ```
 
+경로를 손으로 조립하지 않는다 — `<branch키>` 는 해시 접미가 붙을 수 있으니 러너·`resume.py`
+가 출력한 `--merge-into` 명령을 그대로 쓴다.
 `--cwd` 와 `--context` 는 생략한다 — 그 라운드의 `repo_cwd` 와 `context.md` 를 쓴다.
 다른 컨텍스트를 주면 거절한다(라운드가 자체 재현성을 잃는다). 병합이 하는 일:
 

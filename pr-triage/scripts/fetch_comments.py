@@ -33,9 +33,9 @@ for _c in RED_TEAM_CANDIDATES:
         sys.path.insert(0, str(_c))
         break
 try:
-    from run_round import branch_dir  # 경로 파생은 red-team 과 한 규칙을 쓴다
+    from run_round import branch_dir, note_owner  # 경로 파생은 red-team 과 한 규칙을 쓴다
 except ImportError:
-    branch_dir = None
+    branch_dir = note_owner = None
 
 RED_TEAM_MISSING = (
     "`red-team` 스킬이 필요하다 — pr-triage 는 그 위에서 돈다.\n"
@@ -72,6 +72,10 @@ def load_state(cwd: str, pr: int) -> dict:
 def save_state(cwd: str, pr: int, st: dict) -> Path:
     p = state_path(cwd, pr)
     p.parent.mkdir(parents=True, exist_ok=True)
+    if note_owner is not None:
+        # 커서 전용 디렉토리(round.json 없음)도 origin 변경 승계의 양성 증거를 가진다
+        # (red-team code-12 P1) — 없으면 owner 변경 시 triaged/notified 가 조용히 초기화된다.
+        note_owner(p.parent, cwd)
     st["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     p.write_text(json.dumps(st, ensure_ascii=False, indent=2))
     # 쓰는 사이 red-team 이 구 레이아웃을 새 키로 이전(rename)했을 수 있다 — 경로를

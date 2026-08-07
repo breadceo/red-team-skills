@@ -357,14 +357,12 @@ def _legacy_branch_dir(cwd: str, branch: str) -> Path:
 def _legacy_candidates(cwd: str, branch: str):
     """구 세대 경로들 — 최신 세대 우선.
 
-    v2 폴백 세대: origin 없이 시작해 폴백 키로 v2 기록을 쌓다가 origin 이 생겨 pair 키로
-    승격된 저장소의 이전 자리(code-10 P1). 역방향(origin 제거)은 pair 키를 계산할 근거가
-    없어 지원하지 않는다. gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래 owner__repo
-    키 — issue #8 개발 라운드에서만 생성됨), gen0 은 출시본 레이아웃(basename/slug)이다.
+    구 루트(runs/) 세대만 낸다 — v2 안의 이전 키(폴백→pair 승격·origin 변경)는 전부
+    `_v2_predecessor` 의 **양성 증거 규칙**으로만 승계한다. v2 디렉토리에 구 세대의
+    "판정 불가면 이전" 규칙을 적용하면 디렉토리명이 같은 다른 저장소의 준비 라운드를
+    가져간다(code-12 P1). gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래
+    owner__repo 키 — issue #8 개발 라운드에서만 생성됨), gen0 은 출시본(basename/slug)이다.
     """
-    fb = _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
-    if repo_key(cwd) != fb:
-        yield RUNS_DIR / fb / branch_key(branch)            # v2 폴백 세대 (최신)
     yield LEGACY_RUNS / repo_key(cwd) / branch_key(branch)  # gen1
     yield _legacy_branch_dir(cwd, branch)                   # gen0
 
@@ -394,17 +392,8 @@ def _record_owners(d: Path):
     repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
     """
     for rj in d.glob("*/round.json"):
-        try:
-            data = json.loads(rj.read_text())
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            continue
-        p = data.get("repo_cwd") if isinstance(data, dict) else None
-        if not (isinstance(p, str) and p):
-            continue
-        try:
-            if not Path(p).is_dir():
-                continue
-        except OSError:
+        p = _read_repo_cwd(rj)
+        if p is None:
             continue
         state, _top = _git_toplevel_state(p)
         if state != "not_repo":
@@ -434,21 +423,67 @@ def _pick_legacy(cwd: str, branch: str, parent_name: str):
     return None, first_blocked
 
 
+def _read_repo_cwd(f: Path):
+    """기록 파일(round.json·owner.json)에서 repo_cwd — 판정 불가면 None.
+
+    손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열·경로 소실·초장문 OSError 전부
+    None 이다(code-2·4 P2).
+    """
+    try:
+        data = json.loads(f.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    p = data.get("repo_cwd") if isinstance(data, dict) else None
+    if not (isinstance(p, str) and p):
+        return None
+    try:
+        return p if Path(p).is_dir() else None
+    except OSError:
+        return None
+
+
+def note_owner(bdir: Path, cwd: str) -> None:
+    """브랜치 디렉토리에 소유 증거(owner.json)를 남긴다 — 쓰기 지점에서 호출한다.
+
+    경로 파생의 두 번째 진실이 **아니다**(파생은 여전히 워크트리에서만 나온다) —
+    round.json 이 없는 디렉토리(준비만 된 라운드, pr-triage 커서 전용)도 origin 변경
+    승계(_v2_predecessor)의 양성 증거를 가질 수 있게 하는 판정 재료다(code-12 P1).
+    실패해도 라운드·상태 저장을 막지 않는다.
+    """
+    try:
+        bdir.mkdir(parents=True, exist_ok=True)
+        (bdir / "owner.json").write_text(
+            json.dumps({"repo_cwd": str(Path(cwd).resolve())}, ensure_ascii=False))
+    except OSError:
+        pass
+
+
 def _v2_predecessor(cwd: str, new: Path):
     """origin 변경으로 키가 바뀐 같은 저장소의 이전 v2 디렉토리 — **양성 소유 증거** 필수.
 
     구 세대(gen0·gen1)와 달리 판정 불가를 이전 근거로 삼지 않는다 — v2 아래에는 여러
     저장소가 같은 브랜치명(main 등)으로 공존하는 것이 정상이라, 증거 없는 이전은 남의
-    기록을 가져간다. 기록의 워크트리 전부가 현재 키로 파생 확인될 때만 승계한다
-    (code-11 P1: fork 전환 등 origin owner 변경 시 라운드·triage 커서의 조용한 초기화 방지).
+    기록을 가져간다(code-11·12 P1). **모든 기록**(round.json 전부 + owner.json)이 판정
+    가능하고 전부 현재 키로 파생 확인될 때만 승계한다 — 판정 불가가 하나라도 섞이면
+    미검증 기록까지 새 이력으로 승계된다(code-12 P2).
     """
     for d in sorted(RUNS_DIR.glob(f"*/{new.name}")):
         if d == new or not d.is_dir():
             continue
-        owners = list(_record_owners(d))
-        oks = [p for s, p in owners if s == "ok"]
-        if oks and len(oks) == len(owners) \
-                and all(repo_key(p) == new.parent.name for p in oks):
+        sources = list(d.glob("*/round.json"))
+        if (d / "owner.json").exists():
+            sources.append(d / "owner.json")
+        if not sources:
+            continue
+        verified = 0
+        for f in sources:
+            p = _read_repo_cwd(f)
+            if p is None or _git_toplevel_state(p)[0] != "ok" \
+                    or repo_key(p) != new.parent.name:
+                verified = -1
+                break
+            verified += 1
+        if verified > 0:
             return d
     return None
 
@@ -462,10 +497,11 @@ def _migration_state(cwd: str, branch: str, new: Path):
     갈라지면 읽는 곳과 옮기는 곳이 서로 다른 디렉토리를 가리킨다(code-7·8).
     """
     if not new.exists():
-        src, blocked = _pick_legacy(cwd, branch, new.parent.name)
-        if src is None and blocked is None:
-            src = _v2_predecessor(cwd, new)
-        return src, blocked
+        # 양성 검증된 v2 전신이 구 세대 선택보다 먼저다 — 외부 legacy 하나가 정당한
+        # 승계를 차단하면 owner 변경 후 기존 라운드가 고아가 된다(code-12 P1).
+        if (src := _v2_predecessor(cwd, new)):
+            return src, None
+        return _pick_legacy(cwd, branch, new.parent.name)
     return None, None
 
 
@@ -576,6 +612,7 @@ def branch_dir(cwd: str, migrate: bool = False) -> Path:
 def resolve_out(cwd: str, gate: str) -> Path:
     """다음 라운드 디렉토리 — `<gate>-<n>` 의 n 은 자동 증가."""
     base = branch_dir(cwd, migrate=True)  # 쓰기 지점 ① — 구 레이아웃 이전은 여기서 일어난다
+    note_owner(base, cwd)
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{gate}-*")
                  if (m := re.fullmatch(rf"{gate}-(\d+)", d.name))), default=0)
     return base / f"{gate}-{n}"

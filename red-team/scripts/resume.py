@@ -478,6 +478,8 @@ def main():
                 print("  ", h)
         return
     out.mkdir(parents=True, exist_ok=True)
+    if repo_cwd:
+        run_round.note_owner(base, repo_cwd)  # 준비만 된 라운드도 승계 증거를 가진다(code-12 P1)
     (out / "context.md").write_text(new_ctx)
     for extra in ("plan-", "impact-"):  # 계획서·아티팩트는 게이트를 넘어가도 참조된다
         for f in rd.glob(f"{extra}*"):

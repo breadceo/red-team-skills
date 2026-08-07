@@ -230,7 +230,7 @@ assert rr.branch_dir(str(repo_l), migrate=True) == new_l
 assert (new_l / "code-7").is_dir(), "외부 gen1 에 막혀 자기 gen0 을 이전하지 못했다"
 assert (gen1_l / "code-9").is_dir(), "외부 gen1 을 건드렸다"
 
-# 3m) v2 폴백→pair 승계(code-10 P1) — origin 이 나중에 생기면 폴백 키 기록을 승계한다
+# 3m) v2 폴백→pair 승계(code-10 P1) — origin 이 나중에 생기면 **양성 증거로만** 승계한다
 repo_m = make_repo("m", None, "main")                    # origin 없이 시작
 fb_m = runs2 / "m" / "main"                              # 폴백 키(디렉토리명) 자리
 (fb_m / "code-1").mkdir(parents=True)
@@ -240,6 +240,12 @@ new_m = runs2 / "team-m__app" / "main"
 assert rr.branch_dir(str(repo_m)) == fb_m, "무변경 해석이 폴백 세대를 못 봤다"
 assert rr.branch_dir(str(repo_m), migrate=True) == new_m
 assert (new_m / "code-1").is_dir(), "폴백 키 기록이 pair 키로 승계되지 않았다"
+# 음성(code-12 P1): 증거 없는 남의 v2 폴백 디렉토리(같은 디렉토리명)는 가져가지 않는다
+victim = runs2 / "m2" / "main"
+(victim / "plan-1").mkdir(parents=True)                  # 준비만 됨 — 기록 없음
+repo_m2 = make_repo("m2", "git@github.com:team-m2/other.git", "main")  # 디렉토리명 m2
+assert rr.branch_dir(str(repo_m2), migrate=True) == runs2 / "team-m2__other" / "main"
+assert (victim / "plan-1").is_dir(), "증거 없는 v2 폴백 디렉토리를 가져갔다"
 
 # 3n) git 소유 확인 실패는 판정 불가가 아니라 이전 거부(code-10 P1) — 보수적
 repo_n = make_repo("n", "git@github.com:team-n/app.git", "feature/foo")
@@ -273,6 +279,41 @@ new_p = runs2 / "team-p__app" / "main"
 assert rr.branch_dir(str(repo_p), migrate=True) == new_p
 assert (stranger / "plan-1").is_dir(), "증거 없는 남의 v2 디렉토리를 가져갔다"
 assert not new_p.exists()
+# 판정 불가 혼재(code-12 P2): ok 기록 + null 기록 공존 시 승계 탈락
+repo_q = make_repo("q", "git@github.com:team-q1/app.git", "main")
+mix = runs2 / "team-q1__app" / "main"
+(mix / "code-1").mkdir(parents=True)
+(mix / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_q)}))
+(mix / "code-2").mkdir()
+(mix / "code-2" / "round.json").write_text("null")
+sh(repo_q, "remote", "set-url", "origin", "git@github.com:team-q2/app.git")
+assert rr.branch_dir(str(repo_q), migrate=True) == runs2 / "team-q2__app" / "main"
+assert (mix / "code-1").is_dir(), "판정 불가가 섞인 v2 후보를 승계했다"
+# owner.json 증거(code-12 P1): 커서 전용 디렉토리도 owner 변경 승계가 된다
+repo_r = make_repo("r", "git@github.com:team-r1/app.git", "main")
+cur_only = runs2 / "team-r1__app" / "main"
+rr.note_owner(cur_only, str(repo_r))
+(cur_only / "pr-7-triage.json").write_text('{"pr": 7, "triaged": [101], "notified": []}')
+sh(repo_r, "remote", "set-url", "origin", "git@github.com:team-r2/app.git")
+new_r = runs2 / "team-r2__app" / "main"
+assert rr.branch_dir(str(repo_r), migrate=True) == new_r
+assert (new_r / "pr-7-triage.json").exists(), "커서 전용 디렉토리가 승계되지 않았다"
+# 외부 gen0 이 있어도 양성 검증된 v2 전신이 우선(code-12 P1)
+repo_s = make_repo("s", "git@github.com:team-s1/app.git", "main")
+old_s = runs2 / "team-s1__app" / "main"
+rr.note_owner(old_s, str(repo_s))
+(old_s / "code-3").mkdir(parents=True)
+(old_s / "code-3" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_s)}))
+foreign_gen0 = runs / "app" / "main"
+(foreign_gen0 / "code-1").mkdir(parents=True)
+(foreign_gen0 / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
+sh(repo_s, "remote", "set-url", "origin", "git@github.com:team-s2/app.git")
+new_s = runs2 / "team-s2__app" / "main"
+assert rr.branch_dir(str(repo_s)) == old_s, "무변경 해석이 외부 gen0 에 막혀 전신을 못 봤다"
+assert rr.branch_dir(str(repo_s), migrate=True) == new_s
+assert (new_s / "code-3").is_dir(), "외부 gen0 이 v2 전신 승계를 차단했다"
+assert (foreign_gen0 / "code-1").is_dir()
+shutil.rmtree(foreign_gen0)
 
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)

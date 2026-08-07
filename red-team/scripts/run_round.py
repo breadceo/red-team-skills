@@ -563,6 +563,11 @@ def _migration_state(cwd: str, branch: str, new: Path):
             return src, None
         # 전신 후보의 확인 실패도 보류로 전파한다 — 새 이력 선점을 막아야 복구 후
         # 승계가 산다(code-14 P1, resolve_out 의 unverified 차단과 한 벌).
+        # unverified 가 foreign 보다 먼저다 — foreign 은 새 이력 진행을 허용하는 상태라
+        # 그것이 unverified 를 가리면 보류가 무력화된다(code-16 P2).
+        for b in (pred_blocked, blocked):
+            if b and b[0] == "unverified":
+                return None, b
         return None, blocked or pred_blocked
     return None, None
 

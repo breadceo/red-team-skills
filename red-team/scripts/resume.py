@@ -456,11 +456,11 @@ def main():
         # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
         # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
         shown = out
-        # would_migrate: 실제 실행이 이전하게 될 상태에서만 target 을 표시한다 — 새 경로가
-        # 이미 있거나(code-5 P2) 이전이 거부될 상태(남의 기록 혼재)면(code-7 P2) 실제
-        # 실행은 기존 base 에 만드므로 base 를 그대로 보여준다.
+        # 실제 실행이 **선택된 base 를** 이전하게 될 때만 target 을 표시한다 — 새 경로
+        # 존재(code-5 P2)·이전 거부(code-7 P2)는 물론, 다른 세대(gen1)가 옮겨지고 선택된
+        # gen0 는 남는 상태(code-9 P2)에서도 실제 생성은 base 쪽이다.
         if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base \
-                and run_round.would_migrate(repo_cwd):
+                and run_round.migration_source(repo_cwd) == base:
             shown = tgt / out.name
         print(f"\n[dry-run] 생성할 경로: {shown}")
         for h, _ in sections(new_ctx):

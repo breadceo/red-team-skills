@@ -35,6 +35,8 @@ for url, want in [
     ("https://github.com/team-b/app.git", "team-b__app"),
     ("https://github.com/team-b/app", "team-b__app"),
     ("ssh://git@github.com/team-c/app.git", "team-c__app"),
+    ("ssh://git@github.com:22/team-c/app.git", "team-c__app"),  # 명시 포트는 키가 아니다(code-9 P2)
+    ("ssh://git@example.com:22/app.git", "app"),                # 포트 소비 후 단일 세그먼트 → basename
 ]:
     sh(repo_a, "remote", "set-url", "origin", url)
     assert rr.repo_key(str(repo_a)) == want, (url, rr.repo_key(str(repo_a)))

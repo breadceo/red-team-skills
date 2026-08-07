@@ -324,7 +324,13 @@ def repo_key(cwd: str) -> str:
         # (code-2 P2). file:// 도 같은 로컬 디스크라 표기(절대경로 vs file://)만 바뀌어도
         # 키가 갈린다(code-8 P2). 원격 scheme·SCP형만 URL 이고 나머지는 basename 폴백이다.
         return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
-    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
+    url = origin
+    if re.match(r"^\w+://", url):
+        # scheme 형의 명시 포트는 키가 아니다 — `ssh://host:22/app.git` 의 22 가 경로
+        # 세그먼트로 새면 `22__app` 이 된다(code-9 P2). SCP 형은 건드리지 않는다 —
+        # 숫자만으로 된 owner(`host:123/repo`)가 포트로 오인되면 안 된다.
+        url = re.sub(r"^(\w+://[^/]+?):\d+(/)", r"\1\2", url)
+    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", url)
     if m:
         parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
         if len(parts) >= 2:
@@ -438,15 +444,17 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
 
 
-def would_migrate(cwd: str) -> bool:
-    """실제 실행(migrate=True)이 구 기록을 이전하게 되는 상태인가 — 부수효과 없음.
+def migration_source(cwd: str):
+    """실제 실행(migrate=True)이 이전하게 될 구 디렉토리 — 없으면 None. 부수효과 없음.
 
-    dry-run 표시 전용: 이전이 거부될 상태(다른 저장소 기록 혼재)나 새 경로가 이미 있는
-    상태에서 target 을 표시하면 실제 생성 경로와 갈린다(code-7 P2).
+    dry-run 표시 전용: 존재 여부(bool)만 돌려주면 "이전은 일어나는데 **선택된 base 가
+    아닌 다른 세대**가 옮겨지는" 상태를 못 가른다(code-9 P2) — 호출자가 자기 base 와
+    동일한지 비교해야 표시 == 실제가 된다. 거부 상태(다른 저장소 기록 혼재)·새 경로
+    존재 시 None(code-7 P2).
     """
     branch = _current_branch(cwd)
     new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
-    return _migration_state(cwd, branch, new)[0] is not None
+    return _migration_state(cwd, branch, new)[0]
 
 
 MIGRATE = True  # resume --dry-run 이 끈다 — dry-run 은 무변경으로 구 경로를 그대로 읽는다(code-3 P1)

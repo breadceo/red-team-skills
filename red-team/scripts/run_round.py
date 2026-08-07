@@ -391,8 +391,22 @@ def _record_owners(d: Path):
     판정 불가는 내지 않는다 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열
     repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
     """
-    sources = list(d.glob("*/round.json"))
-    if (d / "owner.json").exists():
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        # 디렉토리 열거 실패(권한·마운트)는 '기록 없음'이 아니다(code-15 P2) — 빈 소유자
+        # 목록으로 뭉개면 남의 구 라운드를 판정 불가로 오인해 이전한다.
+        yield "error", str(d)
+        return
+    sources = []
+    for n in names:
+        rj = d / n / "round.json"
+        try:
+            if rj.is_file():
+                sources.append(rj)
+        except OSError:
+            yield "error", str(rj)
+    if "owner.json" in names:
         sources.append(d / "owner.json")  # 커서 전용 디렉토리도 증거를 가진다(code-14 P2)
     for rj in sources:
         st, p = _read_repo_cwd(rj)
@@ -482,26 +496,50 @@ def _v2_predecessor(cwd: str, new: Path):
     for d in sorted(RUNS_DIR.glob(f"*/{new.name}")):
         if d == new or not d.is_dir():
             continue
-        sources = list(d.glob("*/round.json"))
-        if (d / "owner.json").exists():
-            sources.append(d / "owner.json")
-        if not sources:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            # 열거 실패한 디렉토리는 '전신 없음'이 아니다(code-15 P2) — 새 이력이 선점하면
+            # 접근 복구 후에도 승계가 막힌다.
+            blocked = blocked or ("unverified", str(d))
             continue
-        verified = 0
+        sources = []
+        errors = 0
+        for n in names:
+            rj = d / n / "round.json"
+            try:
+                if rj.is_file():
+                    sources.append(rj)
+            except OSError:
+                errors += 1
+        if "owner.json" in names:
+            sources.append(d / "owner.json")
+        if not sources and not errors:
+            continue
+        # 전 소스를 끝까지 훑어 집계한다 — 순서에 따라 판정이 갈리면 안 된다(code-15 P1).
+        pos = mismatch = undecidable = 0
         for f in sources:
             st, p = _read_repo_cwd(f)
-            if st == "ok":
+            if st == "error":
+                errors += 1
+            elif st == "none":
+                undecidable += 1
+            else:
                 g = _git_toplevel_state(p)[0]
-                if g == "ok" and repo_key(p) == new.parent.name:
-                    verified += 1
-                    continue
-                if g == "error":  # 확인 실패 — 전신일 수도 있는데 판정을 못 한 것(code-14 P1)
-                    blocked = blocked or ("unverified", p)
-            elif st == "error":
-                blocked = blocked or ("unverified", p)
-            verified = -1
-            break
-        if verified > 0:
+                if g == "error":
+                    errors += 1
+                elif g == "ok" and repo_key(p) == new.parent.name:
+                    pos += 1
+                else:
+                    mismatch += 1
+        if mismatch:
+            continue  # 다른 저장소의 v2 디렉토리 — 정상 공존, 보류 사유 아님
+        if errors or (undecidable and pos):
+            # 확인 실패, 또는 양성 증거가 있는데 손상 기록이 섞임 — '없음'으로 처리해
+            # 새 키를 선점하면 복구 가능한 이력이 영구 고아가 된다(code-15 P1·P2).
+            blocked = blocked or ("unverified", str(d))
+            continue
+        if pos:
             return d, None
     return None, blocked
 

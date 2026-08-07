@@ -360,6 +360,37 @@ assert (legacy_v / "pr-9-triage.json").exists(), "owner.json 증거를 무시하
 assert not new_v.exists()
 shutil.rmtree(legacy_v)
 
+# 3s) legacy 디렉토리 열거 실패(권한)도 보류(code-15 P2) — 남의 기록을 못 가져간다
+repo_w = make_repo("w", "git@github.com:team-w/app.git", "feature/foo")
+legacy_w = runs / "app" / "feature-foo"
+(legacy_w / "code-1").mkdir(parents=True)
+(legacy_w / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))  # 남의 것
+legacy_w.chmod(0o311)                                    # 열거 불가
+try:
+    rr.resolve_out(str(repo_w), "code")
+    assert False, "열거 실패인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+legacy_w.chmod(0o755)
+shutil.rmtree(legacy_w)
+
+# 3t) 양성 증거 + 손상 기록 혼재 전신은 탈락이 아니라 보류(code-15 P1)
+repo_x = make_repo("x", "git@github.com:team-x1/app.git", "main")
+mixp = runs2 / "team-x1__app" / "main"
+(mixp / "code-1").mkdir(parents=True)
+(mixp / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_x)}))
+(mixp / "code-2").mkdir()
+(mixp / "code-2" / "round.json").write_text("null")
+sh(repo_x, "remote", "set-url", "origin", "git@github.com:team-x2/app.git")
+try:
+    rr.resolve_out(str(repo_x), "code")
+    assert False, "혼재 전신인데 새 이력을 시작했다"
+except SystemExit:
+    pass
+(mixp / "code-2" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_x)}))  # 손상 복구
+out_x = rr.resolve_out(str(repo_x), "code")
+assert out_x == runs2 / "team-x2__app" / "main" / "code-3", out_x  # 복구 후 승계
+
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs

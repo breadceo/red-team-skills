@@ -352,10 +352,17 @@ def main():
     if not ctx_path.exists():
         print("⚠ context.md 가 없다 — 이 라운드는 이어받을 수 없다.")
     if not ran:
-        print(f"\n▶ 이 라운드는 준비만 됐고 아직 실행되지 않았다.\n"
-              f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n"
-              f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-              f"    --cwd {repo_cwd or '<워크트리 경로>'} --gate {gate} --context {ctx_path} --out {rd}")
+        print("\n▶ 이 라운드는 준비만 됐고 아직 실행되지 않았다.")
+        if repo_cwd:
+            print(f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n"
+                  f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
+                  f"    --cwd {repo_cwd} --gate {gate} --context {ctx_path} --out {rd}")
+        else:
+            # 워크트리를 모르면 경로 박힌 명령을 내지 않는다 — 구 레이아웃이면 run_round 가
+            # 실행 시작 시점에 자동 이전해 그 경로가 사라진다(code-2 P1). 대상 워크트리에서
+            # 재실행하면 선행 이전 후 새 경로로 재계산된 명령이 나온다.
+            print("  워크트리를 못 찾아 실행 명령을 생략한다 — 대상 워크트리로 이동해\n"
+                  "  resume.py 를 다시 실행한다(경로가 자동 이전·재계산된다).")
         return
     # 축이 빠진 라운드(--lean 등)의 GO 는 coverage=partial 로 기록된다 — 빠진 축이 못 본
     # 결함이 있을 수 있으므로 top-up 병합으로 커버리지를 채운 뒤의 verdict 만 게이트 판정이다.
@@ -415,10 +422,15 @@ def main():
             shutil.copy2(f, out / f.name)
     print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/후속티켓을 이관했다.")
     print(f"   손으로 갱신할 절 2개만 남았다 ({TODO} 표시됨): '## 리뷰 대상', '## 검증 상태'")
+    if not repo_cwd:
+        # 위 준비-라운드 안내와 같은 이유(code-2 P1) — 낡을 수 있는 경로 명령을 내지 않는다
+        print("\n▶ 워크트리를 못 찾아 실행 명령을 생략한다 — 대상 워크트리로 이동해\n"
+              "  resume.py 를 다시 실행한다(경로가 자동 이전·재계산된다).")
+        return
     # --out 을 명시한다. 생략하면 run_round.py 가 자동번호로 다음 디렉토리를 새로 만들어
     # 준비한 컨텍스트와 결과가 다른 라운드로 갈라진다.
     print(f"\n▶ 갱신 후 실행:\n  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-          f"    --cwd {repo_cwd or '<워크트리 경로>'} --gate {a.next_gate} \\\n"
+          f"    --cwd {repo_cwd} --gate {a.next_gate} \\\n"
           f"    --context {out/'context.md'} --out {out}")
 
 

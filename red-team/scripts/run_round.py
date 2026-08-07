@@ -258,7 +258,10 @@ _RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$")  # 해시 접미 자리 — 이 �
 
 
 def _suffixed(rendered: str, raw: str) -> str:
-    return f"{rendered}--{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
+    # rendered 는 slug 산출물(ASCII)이라 문자수 == 바이트수다. NAME_MAX(255) 안에 접미
+    # 10자 자리를 남겨 245자로 자른다 — 해시는 절단 전 원문 전체로 계산하므로 단사성은
+    # 유지된다(code-2 P1: 246자 브랜치가 변경 전엔 되다가 접미 10자로 mkdir 이 죽었다).
+    return f"{rendered[:245]}--{hashlib.sha1(raw.encode()).hexdigest()[:8]}"
 
 
 def branch_key(branch: str) -> str:
@@ -294,6 +297,11 @@ def repo_key(cwd: str) -> str:
     if not origin:
         name = Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name
         return branch_key(name)  # 단일 이름 폴백 — 브랜치와 같은 단사 규칙을 태운다
+    if not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin):
+        # 로컬 경로 origin(절대·상대) — URL 로 오인하면 `../x/team/app.git` 은 team__app,
+        # `/abs/x/team/app.git` 은 app 이 되어 같은 저장소가 표기별로 갈린다(code-2 P2).
+        # scheme(`\w+://`)·SCP형(`host:path`)만 URL 이고 나머지는 전부 basename 폴백이다.
+        return branch_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
     m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", origin)
     if m:
         parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
@@ -328,10 +336,12 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
         return
     for rj in legacy.glob("*/round.json"):
         try:
-            p = json.loads(rj.read_text()).get("repo_cwd")
+            data = json.loads(rj.read_text())
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue  # 손상 기록(잘린 UTF-8 포함)은 판정 불가 — 마이그레이션을 죽이지 않는다
-        if p and Path(p).is_dir() and repo_key(p) != new.parent.name:
+        # null·[] 같은 비 dict 유효 JSON, 비문자열 repo_cwd 도 판정 불가다(code-2 P2)
+        p = data.get("repo_cwd") if isinstance(data, dict) else None
+        if isinstance(p, str) and p and Path(p).is_dir() and repo_key(p) != new.parent.name:
             print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
                   f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
                   flush=True)

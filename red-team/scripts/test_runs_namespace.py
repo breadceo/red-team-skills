@@ -41,6 +41,8 @@ for url, want in [
 
 sh(repo_a, "remote", "set-url", "origin", "/local/bare/app.git")  # 로컬 경로 — basename 폴백
 assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "../remotes/team/app.git")  # 상대 경로도 동일(code-2 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
 
 no_origin = make_repo("standalone", None, "main")  # origin 없음 — 디렉토리명 폴백
 assert rr.repo_key(str(no_origin)) == "standalone", rr.repo_key(str(no_origin))
@@ -55,6 +57,10 @@ assert lossy != rr.branch_key("feature foo")                  # 같은 slug, 다
 assert rr.branch_key("feature/foo") == lossy                  # 결정적
 # 예약 접미(code-1 P1): lossy 키와 같은 문자열의 실존 브랜치는 강제 해시 — 출력 공간 분리
 assert rr.branch_key(lossy) != lossy and rr.branch_key(lossy).startswith(lossy + "--")
+# 길이 상한(code-2 P1): 접미가 붙어도 NAME_MAX(255) 이내, 절단 뒤에도 단사
+long_a, long_b = "x/" + "a" * 300, "x/" + "a" * 299 + "b"
+assert len(rr.branch_key(long_a)) <= 255
+assert rr.branch_key(long_a) != rr.branch_key(long_b)  # 절단 구간 밖 차이는 해시가 가른다
 
 # ── 2b) repo_key: `__` 경계 모호성 (code-1 P1) ─────────────────────────────
 keys = []
@@ -126,6 +132,16 @@ legacy_e = runs / "app" / "feature-foo"
 new_e = runs / "team-e__app" / lossy
 assert rr.branch_dir(str(repo_e)) == new_e
 assert (new_e / "code-1").is_dir(), "잘린 UTF-8 기록에서 이전이 죽었다"
+
+# 3g) 비 dict 유효 JSON(null·[])·비문자열 repo_cwd(code-2 P2) — 판정 불가, 죽지 않는다
+repo_f = make_repo("f", "git@github.com:team-f/app.git", "feature/foo")
+legacy_f = runs / "app" / "feature-foo"
+for i, body in enumerate(["null", "[]", '{"repo_cwd": []}'], 1):
+    (legacy_f / f"code-{i}").mkdir(parents=True)
+    (legacy_f / f"code-{i}" / "round.json").write_text(body)
+new_f = runs / "team-f__app" / lossy
+assert rr.branch_dir(str(repo_f)) == new_f
+assert (new_f / "code-3").is_dir(), "비 dict 기록에서 이전이 죽었다"
 
 # ── 4) resume 워크트리 매칭 방향 정합 — 디렉토리명 == branch_key(브랜치) ──
 assert new_a.name == rr.branch_key("feature/foo")

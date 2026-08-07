@@ -365,6 +365,9 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
               "아래 `## 계획 전문` 의 계획. 코드는 현재 체크아웃 상태를 근거로 확인한다.")
 
     body = [f"## 리뷰 대상\n{target}",
+            # 빈 절만 깔아 둔다 — 키 형태 텍스트를 넣지 않는다(플레이스홀더가 식별자로 오인된다).
+            "## 티켓\n<이 작업의 Jira 티켓·GitHub 이슈 식별자를 적는다 — 형식은 SKILL.md"
+            " 「게이트 GO 후 — 외부 산출물 최신화」 절. 없으면 비워 둔다 (기능이 조용히 꺼진다)>",
             f"## 이 변경이 하려는 것\n{intent or '<PLAN.md 작업 분석이 비어 있다 — 직접 채운다>'}"]
     if criteria:
         body.append("## 판정 기준 (Spec AC · Gherkin)\n"

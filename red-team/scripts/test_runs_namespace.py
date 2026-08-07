@@ -88,8 +88,9 @@ assert len(rr.repo_key(str(repo_a))) <= 255              # 무손실 pair 도 �
 sh(repo_a, "remote", "set-url", "origin", "git@github.com:team-a/app.git")  # 원복
 
 # ── 3) branch_dir: 새 키 + 마이그레이션 ────────────────────────────────────
-runs = pathlib.Path(os.environ["RED_TEAM_HOME"]) / "runs"
-new_a = runs / "team-a__app" / lossy
+runs = pathlib.Path(os.environ["RED_TEAM_HOME"]) / "runs"    # 구 루트 (레거시 픽스처)
+runs2 = pathlib.Path(os.environ["RED_TEAM_HOME"]) / "runs2"  # v2 루트 (신 키 전용)
+new_a = runs2 / "team-a__app" / lossy
 
 # 3a) 일치 — 구 기록의 repo_cwd 가 같은 origin 을 가리키면 rename
 legacy = runs / "app" / "feature-foo"
@@ -109,7 +110,7 @@ assert (legacy / "code-9").exists(), "새 경로가 있는데 구 디렉토리�
 repo_b = make_repo("b", "git@github.com:team-b/app.git", "feature/foo")
 (legacy / "code-1").mkdir(parents=True)
 (legacy / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
-new_b = runs / "team-b__app" / lossy
+new_b = runs2 / "team-b__app" / lossy
 assert rr.branch_dir(str(repo_b), migrate=True) == new_b
 assert (legacy / "code-1" / "round.json").exists(), "남의 기록을 가져갔다"
 assert not new_b.exists()
@@ -119,7 +120,7 @@ import shutil; shutil.rmtree(legacy)
 repo_c = make_repo("c", "git@github.com:team-c/app.git", "feature/foo")
 legacy_c = runs / "app" / "feature-foo"
 (legacy_c / "plan-1").mkdir(parents=True)
-new_c = runs / "team-c__app" / lossy
+new_c = runs2 / "team-c__app" / lossy
 assert rr.branch_dir(str(repo_c), migrate=True) == new_c
 assert (new_c / "plan-1").is_dir(), "판정 불가 케이스가 이전되지 않았다"
 
@@ -133,7 +134,7 @@ legacy_d = runs / "app" / "feature-foo"
 rr.branch_dir(str(repo_d), migrate=True)
 assert (legacy_d / "code-1").exists() and (legacy_d / "code-2").exists(), \
     "혼합 기록인데 통째로 가져갔다"
-assert not (runs / "team-d__app" / lossy).exists()
+assert not (runs2 / "team-d__app" / lossy).exists()
 
 # 3f) 잘린 UTF-8 round.json(code-1 P2) — 판정 불가로 취급, 죽지 않고 이전한다
 shutil.rmtree(legacy_d)
@@ -141,7 +142,7 @@ repo_e = make_repo("e", "git@github.com:team-e/app.git", "feature/foo")
 legacy_e = runs / "app" / "feature-foo"
 (legacy_e / "code-1").mkdir(parents=True)
 (legacy_e / "code-1" / "round.json").write_bytes('{"repo_cwd": "가나다'.encode()[:-1])
-new_e = runs / "team-e__app" / lossy
+new_e = runs2 / "team-e__app" / lossy
 assert rr.branch_dir(str(repo_e), migrate=True) == new_e
 assert (new_e / "code-1").is_dir(), "잘린 UTF-8 기록에서 이전이 죽었다"
 
@@ -151,7 +152,7 @@ legacy_f = runs / "app" / "feature-foo"
 for i, body in enumerate(["null", "[]", '{"repo_cwd": []}'], 1):
     (legacy_f / f"code-{i}").mkdir(parents=True)
     (legacy_f / f"code-{i}" / "round.json").write_text(body)
-new_f = runs / "team-f__app" / lossy
+new_f = runs2 / "team-f__app" / lossy
 assert rr.branch_dir(str(repo_f), migrate=True) == new_f
 assert (new_f / "code-3").is_dir(), "비 dict 기록에서 이전이 죽었다"
 
@@ -161,23 +162,24 @@ legacy_g = runs / "app" / "feature-foo"
 plain = pathlib.Path(TMP) / "plain-dir"; plain.mkdir()   # git 아님
 (legacy_g / "code-1").mkdir(parents=True)
 (legacy_g / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(plain)}))
-new_g = runs / "team-g__app" / lossy
+new_g = runs2 / "team-g__app" / lossy
 assert rr.branch_dir(str(repo_g), migrate=True) == new_g
 assert (new_g / "code-1").is_dir(), "비워크트리 repo_cwd 가 이전을 오판 거부했다"
 
-# 3i) 스쿼팅 경고(code-3 P1) — 새 키 자리가 남의 기록이면 경고만, 아무것도 옮기지 않는다
+# 3i) v2 루트의 구조적 스쿼팅 배제(code-7 P1) — 구 루트의 리터럴 `team__app2` 디렉토리
+# (basename 에 `__` 를 담은 다른 저장소의 gen0, 또는 gen1)가 새 키와 이름이 같아도,
+# 루트가 달라 새 키 자리를 선점할 수 없다. gen1 마이그레이션도 여기서 함께 확인한다.
 repo_h = make_repo("h", "git@github.com:team/app2.git", "main")
-squat = runs / "team__app2"                              # repo_h 의 새 pair 키 자리
-(squat / "main" / "code-9").mkdir(parents=True)
-(squat / "main" / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_a)}))
-legacy_h = runs / "app2" / "main"
-(legacy_h / "code-1").mkdir(parents=True)
-assert rr.branch_dir(str(repo_h), migrate=True) == squat / "main"
-assert (legacy_h / "code-1").is_dir(), "스쿼팅 상태에서 구 기록을 옮겼다"
-assert (squat / "main" / "code-9").is_dir(), "스쿼팅 상태에서 남의 기록을 건드렸다"
+gen1_h = runs / "team__app2" / "main"                    # gen1 (미출시 중간 레이아웃) 픽스처
+(gen1_h / "code-9").mkdir(parents=True)
+(gen1_h / "code-9" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_h)}))
+new_h = runs2 / "team__app2" / "main"
+assert rr.branch_dir(str(repo_h), migrate=True) == new_h
+assert (new_h / "code-9").is_dir(), "gen1 레이아웃이 v2 루트로 이전되지 않았다"
+assert not gen1_h.exists()
 
 # 3j) dry-run 읽기 전용 해석(code-3 P1) — MIGRATE=False 면 rename 없이 구 경로를 반환
-shutil.rmtree(squat); shutil.rmtree(legacy_h.parent)
+shutil.rmtree(new_h.parent)
 repo_i = make_repo("i", "git@github.com:team-i/app.git", "feature/foo")
 legacy_i = runs / "app" / "feature-foo"
 (legacy_i / "code-1").mkdir(parents=True)
@@ -191,15 +193,15 @@ assert legacy_i.is_dir(), "migrate=False 인데 rename 이 일어났다"
 # 기본값이 무변경(code-6 P1) — 조회 소비처(pr-triage 등)는 인자 없이 불러도 순수하다
 assert rr.branch_dir(str(repo_i)) == legacy_i
 assert legacy_i.is_dir(), "기본 호출인데 rename 이 일어났다"
-assert rr.target_dir(str(repo_i)) == runs / "team-i__app" / lossy  # 표시용 순수 계산
-assert rr.branch_dir(str(repo_i), migrate=True) == runs / "team-i__app" / lossy  # 실제 실행은 이전한다
+assert rr.target_dir(str(repo_i)) == runs2 / "team-i__app" / lossy  # 표시용 순수 계산
+assert rr.branch_dir(str(repo_i), migrate=True) == runs2 / "team-i__app" / lossy  # 실제 실행은 이전한다
 
 # 3k) 초장문 repo_cwd(code-4 P2) — Path.is_dir 의 OSError 도 판정 불가, 죽지 않는다
 repo_j = make_repo("j", "git@github.com:team-j/app.git", "feature/foo")
 legacy_j = runs / "app" / "feature-foo"
 (legacy_j / "code-1").mkdir(parents=True)
 (legacy_j / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": "/x/" + "y" * 5000}))
-new_j = runs / "team-j__app" / lossy
+new_j = runs2 / "team-j__app" / lossy
 assert rr.branch_dir(str(repo_j), migrate=True) == new_j
 assert (new_j / "code-1").is_dir(), "초장문 repo_cwd 에서 이전이 죽었다"
 

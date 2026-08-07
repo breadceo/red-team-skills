@@ -74,6 +74,15 @@ def save_state(cwd: str, pr: int, st: dict) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     st["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     p.write_text(json.dumps(st, ensure_ascii=False, indent=2))
+    # 쓰는 사이 red-team 이 구 레이아웃을 새 키로 이전(rename)했을 수 있다 — 경로를
+    # 재파생해 달라졌으면 새 위치로 옮겨 쓴다. 안 하면 상태가 구·신 위치로 갈라져 처리
+    # 완료가 미처리로 되살아난다(red-team code-7 P1). 이 쓰기가 최신 병합본이므로
+    # 이전된 사본은 덮는다. ms 단위 잔여 창은 수용한다(문서 프로토콜로 못 닫는 매체 한계).
+    cur = state_path(cwd, pr)
+    if cur != p:
+        cur.parent.mkdir(parents=True, exist_ok=True)
+        p.replace(cur)
+        p = cur
     return p
 
 

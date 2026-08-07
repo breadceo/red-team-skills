@@ -8,7 +8,7 @@
     python3 .../resume.py --next code
 
 **포인터 파일을 두지 않는다.** 라운드의 키는 경로 자체이고
-(`~/.red-team/runs/<repo>/<branch>/`), 그건 저장소 위치에서 나온다.
+(`~/.red-team/runs2/<owner>__<repo>/<branch키>/`), 그건 저장소 위치에서 나온다.
 별도 포인터를 두면 (a) 어긋날 수 있는 두 번째 진실이 생기고
 (b) eval·실험 런이 진짜 작업 포인터를 덮는 사고가 난다(실제로 났다).
 
@@ -24,7 +24,10 @@ import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE
 from run_round import branch_dir, git, GATES  # 경로 파생은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
-RUNS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "runs"
+# 검색은 v2 루트(runs2/)와 구 루트(runs/) 둘 다 본다 — 아직 이전되지 않은 작업도
+# 키로 찾을 수 있어야 하고, 발견 후의 이전은 대상 확정 후 선행 이전이 한다.
+_HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
 TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
 
 
@@ -40,18 +43,17 @@ def resolve_base(key: str | None, cwd: str):
     derived = branch_dir(cwd)
     if not key:
         return derived, None
-    runs = RUNS
     k = key.lower()
     # 검색 순서: 완전 일치(parent/name) → 브랜치명 substring → 전체키 substring.
     # 완전 일치가 먼저여야 다중 후보 안내에 표시된 구 경로 식별자를 그대로 재입력했을 때
     # 그 문자열을 substring 으로 담은 새 경로와 또 겹치지 않는다(code-5 P2).
     # 폴백을 항상 켜면 티켓 키가 repo 키에도 걸려 유일하던 검색이 깨진다(code-4 P2).
-    dirs = [d for d in runs.glob("*/*") if d.is_dir()]
+    dirs = [d for r in RUNS_ROOTS for d in r.glob("*/*") if d.is_dir()]
     hits = sorted(d for d in dirs if f"{d.parent.name}/{d.name}".lower() == k) or \
         sorted(d for d in dirs if k in d.name.lower()) or \
         sorted(d for d in dirs if k in f"{d.parent.name}/{d.name}".lower())
     if not hits:
-        avail = sorted(f"{d.parent.name}/{d.name}" for d in runs.glob("*/*") if d.is_dir())
+        avail = sorted(f"{d.parent.name}/{d.name}" for d in dirs)
         sys.exit(f"'{key}' 에 맞는 라운드 디렉토리가 없다.\n  있는 것: "
                  + (", ".join(avail) if avail else "(없음)"))
     if len(hits) > 1:
@@ -69,7 +71,10 @@ def _belongs(path: str, base: Path) -> bool:
     try:
         if branch_dir(path) == base:
             return True
-        return run_round._legacy_branch_dir(path, run_round._current_branch(path)) == base
+        # 구 세대(gen1·gen0) 키 동등성 — v2 경로가 이미 있으면 무변경 해석이 그쪽을
+        # 돌려주므로, 구 루트에 남은 base 는 세대별 키로 대조한다.
+        return any(c == base for c in
+                   run_round._legacy_candidates(path, run_round._current_branch(path)))
     except OSError:
         return False
 
@@ -442,9 +447,11 @@ def main():
         # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
         # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
         shown = out
-        # not tgt.exists(): 새 경로가 이미 있으면 실제 실행도 이전하지 않고 기존 base 에
-        # 만든다 — 그때 target 을 표시하면 또 표시≠실제가 된다(code-5 P2).
-        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base and not tgt.exists():
+        # would_migrate: 실제 실행이 이전하게 될 상태에서만 target 을 표시한다 — 새 경로가
+        # 이미 있거나(code-5 P2) 이전이 거부될 상태(남의 기록 혼재)면(code-7 P2) 실제
+        # 실행은 기존 base 에 만드므로 base 를 그대로 보여준다.
+        if repo_cwd and (tgt := run_round.target_dir(repo_cwd)) != base \
+                and run_round.would_migrate(repo_cwd):
             shown = tgt / out.name
         print(f"\n[dry-run] 생성할 경로: {shown}")
         for h, _ in sections(new_ctx):

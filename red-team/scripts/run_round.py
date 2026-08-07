@@ -15,7 +15,7 @@ usage:
 (없으면 첫 엔진으로 폴백). `--model`/`--effort` 는 전 리뷰어 강제 override 다.
 배정 결과는 round.json 의 `assignments` 에 남는다.
 
-산출물은 기본적으로 저장소 밖 `~/.red-team/runs/<owner>__<repo>/<branch>/<gate>-<n>/` 에 쌓인다 —
+산출물은 기본적으로 저장소 밖 `~/.red-team/runs2/<owner>__<repo>/<branch키>/<gate>-<n>/` 에 쌓인다 —
 리뷰 대상 저장소를 오염시키지 않고, 라운드 간 컨텍스트가 보존되어 다음 라운드가 이어진다.
 `--out` 을 주면 그 경로를 그대로 쓴다(eval 용).
 
@@ -30,6 +30,12 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+# v2 라운드 루트. 구 루트(runs/)와 **경로 공간을 통째로 분리**한 이유(issue #8 code-7):
+# 구 레이아웃의 키는 slug 산출물 전체라, 새 키를 아무리 단사로 설계해도 이미 디스크에 있는
+# 구 디렉토리가 새 키 자리를 선점하는 전환기 충돌(스쿼팅)을 막을 수 없었다. 루트가 다르면
+# runs2/ 아래는 v2 코드가 만든 것뿐이라 그 클래스가 통째로 사라진다.
+RUNS_DIR = HOME_DIR / "runs2"
+LEGACY_RUNS = HOME_DIR / "runs"
 # why 는 --show-assignments 가 "이 축은 어떤 일을 하니 무엇을 추천하나"로 출력한다.
 # core: --lean(MoE) 중간 라운드에서도 항상 도는 축. core 가 아닌 축은 "생략"이 아니라
 # "유예"다 — coverage 가 partial 인 GO 는 게이트 통과가 아니고, top-up 병합으로 채워야 확정된다.
@@ -330,11 +336,21 @@ def repo_key(cwd: str) -> str:
 
 
 def _legacy_branch_dir(cwd: str, branch: str) -> Path:
-    """issue #8 이전의 키 규칙 — 마이그레이션 판정에만 쓴다."""
+    """issue #8 이전(gen0)의 키 규칙 — 마이그레이션·무변경 해석 판정에만 쓴다."""
     origin = git(cwd, "remote", "get-url", "origin")
     repo = slug(re.sub(r"\.git$", "", origin.rsplit("/", 1)[-1])) if origin else \
         slug(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
-    return HOME_DIR / "runs" / repo / slug(branch)
+    return LEGACY_RUNS / repo / slug(branch)
+
+
+def _legacy_candidates(cwd: str, branch: str):
+    """구 세대 경로들 — 최신 세대 우선.
+
+    gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래 owner__repo 키 — issue #8
+    개발 라운드에서만 생성됨), gen0 은 출시본 레이아웃(basename/slug)이다.
+    """
+    yield LEGACY_RUNS / repo_key(cwd) / branch_key(branch)  # gen1
+    yield _legacy_branch_dir(cwd, branch)                   # gen0
 
 
 def _worktree_repo_cwds(d: Path):
@@ -359,47 +375,63 @@ def _worktree_repo_cwds(d: Path):
             continue
 
 
+def _migration_state(cwd: str, branch: str, new: Path):
+    """(이전할 구 디렉토리, 거부 사유가 된 외부 워크트리) — 부수효과 없는 판정.
+
+    _migrate_legacy 와 dry-run 표시가 같은 판정을 공유한다 — 갈라지면 dry-run 이
+    실제 실행과 다른 경로를 보여준다(code-7 P2).
+    """
+    if not new.exists():
+        for legacy in _legacy_candidates(cwd, branch):
+            if not legacy.is_dir():
+                continue
+            # 구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) —
+            # 기록 전부를 대조해 하나라도 불일치면 거부. 첫 일치에서 멈추면 뒤에 섞인
+            # 남의 기록까지 가져간다(code-1 P2). 판정 불가(기록 없음·워크트리 소실·손상)면
+            # 이전 — 단일 저장소 사용이 압도적이다.
+            f = next((p for p in _worktree_repo_cwds(legacy)
+                      if repo_key(p) != new.parent.name), None)
+            return (None, f) if f else (legacy, None)
+    return None, None
+
+
 def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
-    """구 레이아웃 라운드 기록을 새 키로 1회 rename — 새 경로가 아직 없을 때만.
+    """구 레이아웃 라운드 기록을 v2 루트로 1회 rename — 새 경로가 아직 없을 때만.
 
     옮기지 않으면 라운드 번호·컨텍스트 이관·latest_round 가 조용히 리셋된다.
-    단, 구 디렉토리가 **다른 저장소의 기록**일 수 있다(그 충돌이 issue #8 이다) —
-    라운드 기록(round.json 의 repo_cwd) **전부**를 대조해 하나라도 불일치면 두고 간다 —
-    첫 일치에서 멈추면 뒤에 섞인 남의 기록까지 가져간다(code-1 P2).
-    판정 불가(기록 없음·워크트리 소실·손상 기록)면 옮긴다 — 단일 저장소 사용이 압도적이다.
+    v2 루트는 구 루트와 경로 공간이 분리돼 있어 new 가 있으면 항상 v2 코드가 만든
+    정당한 기록이다 — 스쿼팅 검사(code-3·4·7 의 경고들)가 필요 없어졌다.
     """
-    legacy = _legacy_branch_dir(cwd, branch)
-    if legacy == new or not legacy.is_dir():
+    src, foreign = _migration_state(cwd, branch, new)
+    if foreign:
+        print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다\n"
+              f"  (기록의 워크트리 {foreign} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
+              flush=True)
         return
-    if new.exists():
-        # 전환기 스쿼팅 감지(code-3 P1): 구 기록이 남았는데 새 키 자리가 이미 차 있다 —
-        # basename 에 `__` 를 담은 다른 저장소의 구 레이아웃일 수 있다. 남의 살아 있는
-        # 디렉토리일 수 있으므로 자동 해소는 없다 — 소유가 어긋나 보이면 경고만 한다.
-        # 첫 기록만 보면 혼합 디렉토리(내 기록 뒤에 남의 기록)를 놓친다(code-4 P2) — 전수 순회.
-        for p in _worktree_repo_cwds(new):
-            if repo_key(p) != new.parent.name:
-                print(f"⚠ 새 키 위치 {new} 에 다른 저장소의 기록이 있는 것으로 보인다\n"
-                      f"  (그 기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 수동 정리 전에는 "
-                      f"두 작업의 라운드가 섞인다)", flush=True)
-                break
+    if src is None:
         return
-    for p in _worktree_repo_cwds(legacy):
-        if repo_key(p) != new.parent.name:
-            print(f"⚠ 구 라운드 디렉토리가 다른 저장소의 기록으로 보여 두고 간다: {legacy}\n"
-                  f"  (기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전)",
-                  flush=True)
-            return
     new.parent.mkdir(parents=True, exist_ok=True)
     try:
-        legacy.rename(new)
+        src.rename(new)
     except OSError:
         # 동시 branch_dir() 경합 — 같은 목적지끼리는 new 가 생겨 있고, 서로 다른 저장소가
-        # 판정 불가 legacy 를 각자의 키로 다투면 legacy 만 사라진다(code-5 P2). 어느 쪽이든
+        # 판정 불가 legacy 를 각자의 키로 다투면 src 만 사라진다(code-5 P2). 어느 쪽이든
         # "다른 소비처가 먼저 이전했다"이므로 정상 반환한다.
-        if new.exists() or not legacy.is_dir():
+        if new.exists() or not src.is_dir():
             return
         raise
-    print(f"runs/ 키 갱신(issue #8) — 라운드 기록 이전: {legacy} → {new}", flush=True)
+    print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
+
+
+def would_migrate(cwd: str) -> bool:
+    """실제 실행(migrate=True)이 구 기록을 이전하게 되는 상태인가 — 부수효과 없음.
+
+    dry-run 표시 전용: 이전이 거부될 상태(다른 저장소 기록 혼재)나 새 경로가 이미 있는
+    상태에서 target 을 표시하면 실제 생성 경로와 갈린다(code-7 P2).
+    """
+    branch = _current_branch(cwd)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
+    return _migration_state(cwd, branch, new)[0] is not None
 
 
 MIGRATE = True  # resume --dry-run 이 끈다 — dry-run 은 무변경으로 구 경로를 그대로 읽는다(code-3 P1)
@@ -419,11 +451,11 @@ def target_dir(cwd: str) -> Path:
     무변경 해석(branch_dir migrate=False)은 legacy 를 돌려주는데, 실제 실행은 이전 후
     이 경로 아래에 만들기 때문이다.
     """
-    return HOME_DIR / "runs" / repo_key(cwd) / branch_key(_current_branch(cwd))
+    return RUNS_DIR / repo_key(cwd) / branch_key(_current_branch(cwd))
 
 
 def branch_dir(cwd: str, migrate: bool = False) -> Path:
-    """~/.red-team/runs/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
+    """~/.red-team/runs2/<owner>__<repo>/<branch키> — 저장소 위치에서 결정된다.
 
     **이것이 라운드의 키다.** 별도 포인터 파일을 두지 않는 이유가 여기 있다 —
     작업 중인 워크트리만 있으면 경로가 나오고, 어긋날 수 있는 두 번째 진실이 생기지 않는다.
@@ -436,11 +468,13 @@ def branch_dir(cwd: str, migrate: bool = False) -> Path:
     pr-triage 의 상태 조회가 정확히 그 사례였다(code-6 P1).
     """
     branch = _current_branch(cwd)
-    new = HOME_DIR / "runs" / repo_key(cwd) / branch_key(branch)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
     if MIGRATE and migrate:
         _migrate_legacy(cwd, branch, new)
-    elif not new.exists() and (legacy := _legacy_branch_dir(cwd, branch)).is_dir():
-        return legacy  # 무변경 해석 — 기록이 현재 사는 곳을 그대로 가리킨다
+    elif not new.exists():
+        for legacy in _legacy_candidates(cwd, branch):
+            if legacy.is_dir():
+                return legacy  # 무변경 해석 — 기록이 현재 사는 곳을 그대로 가리킨다
     return new
 
 
@@ -789,7 +823,7 @@ def main():
                     help="zax:task 산출물에서 컨텍스트를 잡는다 (~/.zb-task/<TASK>/). "
                          "초안이 없으면 만들고 멈춘다 — 검토 후 다시 실행한다")
     ap.add_argument("--gate", choices=list(GATES), default="code")
-    ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs/... 로 자동 결정")
+    ap.add_argument("--out", default=None, help="생략 시 ~/.red-team/runs2/... 로 자동 결정")
     ap.add_argument("--merge-into", default=None, metavar="ROUND_DIR",
                     help="부분 재실행 결과를 그 라운드에 병합한다 (PARSE-FAIL·파일접근오류 치유). "
                          "--reviewers 필수. 이전 산출물은 *.superseded-* 로 남고 reruns 에 기록된다")
@@ -881,9 +915,16 @@ def main():
         ap.error("--cwd 와 (--context 또는 --from-zax) 가 필요하다")
     engines = resolve_engines(a.engine)
 
+    # 컨텍스트는 resolve_out **전에** 읽는다 — resolve_out 의 이전(rename)이 --context 가
+    # 가리키는 구 경로를 옮기면, 뒤에서 읽을 때 FileNotFoundError 로 죽는다(code-7 P2).
+    # 신선도 경고의 입력(계획서 목록·mtime)도 같은 이유로 여기서 캡처한다.
+    ctx_src = Path(a.context)
+    context = ctx_src.read_text()
+    ctx_mtime = ctx_src.stat().st_mtime
+    plan_mtimes = sorted((p.name, p.stat().st_mtime) for p in ctx_src.parent.iterdir()
+                         if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
     out = Path(a.merge_into) if a.merge_into else (Path(a.out) if a.out else resolve_out(a.cwd, a.gate))
     out.mkdir(parents=True, exist_ok=True)
-    context = Path(a.context).read_text()
     if not a.merge_into:
         # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
         (out / "context.md").write_text(context)
@@ -911,12 +952,9 @@ def main():
     # 판정한다 — 조용히 틀린 GO 가 나오는 경로라 라운드 시작 시점에 알린다.
     # 파일명 대소문자를 가리지 않는다 — zax:task 는 `PLAN.md`, 손으로 쓸 때는 `plan-1.md` 다.
     # (Python glob 은 대소문자를 구분하므로 `plan*.md` 만 보면 `PLAN.md` 를 놓친다)
-    ctx_src = Path(a.context)
-    plans = sorted(p for p in ctx_src.parent.iterdir()
-                   if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
-    for plan in plans:
-        if plan.stat().st_mtime > ctx_src.stat().st_mtime + 1:
-            print(f"⚠ {plan.name} 이 {ctx_src.name} 보다 새롭다.\n"
+    for plan_name, plan_mtime in plan_mtimes:  # 입력은 resolve_out 전에 캡처됨(code-7 P2)
+        if plan_mtime > ctx_mtime + 1:
+            print(f"⚠ {plan_name} 이 {ctx_src.name} 보다 새롭다.\n"
                   f"  계획을 고쳤다면 context.md 의 판정 기준(불변식·스코프 밖·확인 사항)도 같이 갱신했는지\n"
                   f"  확인한다. 계획서만 고치면 리뷰어가 낡은 기준으로 판정한다.", flush=True)
 

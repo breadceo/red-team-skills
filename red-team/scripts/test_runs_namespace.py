@@ -333,6 +333,33 @@ out_t = rr.resolve_out(str(repo_t), "code")              # 복구 후엔 이전 
 assert out_t == runs2 / "team-t__app" / lossy / "code-2", out_t
 assert (runs2 / "team-t__app" / lossy / "code-1").is_dir(), "복구 후 승계가 안 됐다"
 
+# 3q) 기록 파일 읽기 실패(EACCES)도 보류(code-14 P1) — 복구 후 승계 보전
+repo_u = make_repo("u", "git@github.com:team-u/app.git", "feature/foo")
+legacy_u = runs / "app" / "feature-foo"
+(legacy_u / "code-1").mkdir(parents=True)
+rj_u = legacy_u / "code-1" / "round.json"
+rj_u.write_text(json.dumps({"repo_cwd": str(repo_u)}))
+rj_u.chmod(0)                                            # 읽기 실패 강제
+try:
+    rr.resolve_out(str(repo_u), "code")
+    assert False, "기록 읽기 실패인데 새 라운드 경로를 내줬다"
+except SystemExit:
+    pass
+rj_u.chmod(0o644)
+out_u = rr.resolve_out(str(repo_u), "code")              # 복구 후 이전 + code-2
+assert out_u == runs2 / "team-u__app" / lossy / "code-2", out_u
+
+# 3r) legacy 커서 전용 + owner.json 증거(code-14 P2) — 다른 저장소가 못 가져간다
+repo_v = make_repo("v", "git@github.com:team-v/app.git", "main")
+legacy_v = runs / "app" / "main"
+rr.note_owner(legacy_v, str(repo_a))                     # repo_a 소유의 커서 전용 legacy
+(legacy_v / "pr-9-triage.json").write_text('{"pr": 9, "triaged": [1], "notified": []}')
+new_v = runs2 / "team-v__app" / "main"
+rr.branch_dir(str(repo_v), migrate=True)
+assert (legacy_v / "pr-9-triage.json").exists(), "owner.json 증거를 무시하고 커서를 가져갔다"
+assert not new_v.exists()
+shutil.rmtree(legacy_v)
+
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)
 import resume as rs

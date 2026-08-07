@@ -33,9 +33,10 @@ for _c in RED_TEAM_CANDIDATES:
         sys.path.insert(0, str(_c))
         break
 try:
-    from run_round import branch_dir, note_owner  # 경로 파생은 red-team 과 한 규칙을 쓴다
+    # 경로 파생은 red-team 과 한 규칙을 쓴다
+    from run_round import branch_dir, note_owner, migration_blocked
 except ImportError:
-    branch_dir = note_owner = None
+    branch_dir = note_owner = migration_blocked = None
 
 RED_TEAM_MISSING = (
     "`red-team` 스킬이 필요하다 — pr-triage 는 그 위에서 돈다.\n"
@@ -56,7 +57,16 @@ RED_TEAM_MISSING = (
 def state_path(cwd: str, pr: int) -> Path:
     if branch_dir is None:
         sys.exit(RED_TEAM_MISSING)
-    return branch_dir(cwd) / f"pr-{pr}-triage.json"
+    p = branch_dir(cwd) / f"pr-{pr}-triage.json"
+    if not p.parent.exists() and migration_blocked is not None \
+            and (bk := migration_blocked(cwd)) and bk[0] == "unverified":
+        # 소유 확인 실패로 red-team 이전이 보류된 상태 — 여기서 새 경로에 상태를 쓰면
+        # 복구 후에도 기존 커서를 승계할 수 없게 된다(red-team code-14 P1).
+        sys.exit(f"red-team 구 기록의 소유 확인에 실패해 이전이 보류된 상태다 — 지금 새 상태\n"
+                 f"  경로를 만들면 복구 후 기존 triaged/notified 커서를 승계할 수 없게 된다.\n"
+                 f"  확인 실패 지점: {bk[1]}\n"
+                 f"  접근 문제(권한·마운트)를 해결한 뒤 다시 실행한다.")
+    return p
 
 
 def load_state(cwd: str, pr: int) -> dict:

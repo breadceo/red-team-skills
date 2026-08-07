@@ -391,11 +391,14 @@ def _record_owners(d: Path):
     판정 불가는 내지 않는다 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열
     repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
     """
-    for rj in d.glob("*/round.json"):
+    sources = list(d.glob("*/round.json"))
+    if (d / "owner.json").exists():
+        sources.append(d / "owner.json")  # 커서 전용 디렉토리도 증거를 가진다(code-14 P2)
+    for rj in sources:
         st, p = _read_repo_cwd(rj)
         if st == "none":
             continue
-        if st == "error":  # 존재 확인 실패 — 판정 불가가 아니라 거부 사유(code-13 P2)
+        if st == "error":  # 존재·읽기 확인 실패 — 판정 불가가 아니라 거부 사유(code-13·14)
             yield "error", p
             continue
         state, _top = _git_toplevel_state(p)
@@ -435,8 +438,12 @@ def _read_repo_cwd(f: Path):
     """
     try:
         data = json.loads(f.read_text())
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return "none", None
+    except OSError as e:
+        # 기록 파일 자체를 읽지 못한 것(권한·마운트)은 '증거 없음'이 아니다(code-14 P1) —
+        # glob 직후 삭제된 ENOENT 경합만 판정 불가로 남긴다.
+        return ("none", None) if e.errno == errno.ENOENT else ("error", str(f))
     p = data.get("repo_cwd") if isinstance(data, dict) else None
     if not (isinstance(p, str) and p):
         return "none", None
@@ -471,6 +478,7 @@ def _v2_predecessor(cwd: str, new: Path):
     가능하고 전부 현재 키로 파생 확인될 때만 승계한다 — 판정 불가가 하나라도 섞이면
     미검증 기록까지 새 이력으로 승계된다(code-12 P2).
     """
+    blocked = None
     for d in sorted(RUNS_DIR.glob(f"*/{new.name}")):
         if d == new or not d.is_dir():
             continue
@@ -482,14 +490,20 @@ def _v2_predecessor(cwd: str, new: Path):
         verified = 0
         for f in sources:
             st, p = _read_repo_cwd(f)
-            if st != "ok" or _git_toplevel_state(p)[0] != "ok" \
-                    or repo_key(p) != new.parent.name:
-                verified = -1
-                break
-            verified += 1
+            if st == "ok":
+                g = _git_toplevel_state(p)[0]
+                if g == "ok" and repo_key(p) == new.parent.name:
+                    verified += 1
+                    continue
+                if g == "error":  # 확인 실패 — 전신일 수도 있는데 판정을 못 한 것(code-14 P1)
+                    blocked = blocked or ("unverified", p)
+            elif st == "error":
+                blocked = blocked or ("unverified", p)
+            verified = -1
+            break
         if verified > 0:
-            return d
-    return None
+            return d, None
+    return None, blocked
 
 
 def _migration_state(cwd: str, branch: str, new: Path):
@@ -503,9 +517,15 @@ def _migration_state(cwd: str, branch: str, new: Path):
     if not new.exists():
         # 양성 검증된 v2 전신이 구 세대 선택보다 먼저다 — 외부 legacy 하나가 정당한
         # 승계를 차단하면 owner 변경 후 기존 라운드가 고아가 된다(code-12 P1).
-        if (src := _v2_predecessor(cwd, new)):
+        pred, pred_blocked = _v2_predecessor(cwd, new)
+        if pred:
+            return pred, None
+        src, blocked = _pick_legacy(cwd, branch, new.parent.name)
+        if src:
             return src, None
-        return _pick_legacy(cwd, branch, new.parent.name)
+        # 전신 후보의 확인 실패도 보류로 전파한다 — 새 이력 선점을 막아야 복구 후
+        # 승계가 산다(code-14 P1, resolve_out 의 unverified 차단과 한 벌).
+        return None, blocked or pred_blocked
     return None, None
 
 

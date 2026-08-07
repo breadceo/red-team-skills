@@ -47,6 +47,13 @@ sh(repo_a, "remote", "set-url", "origin", "../remotes/team/app.git")  # 상대 �
 assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
 sh(repo_a, "remote", "set-url", "origin", "file://localhost/x/team/app.git")  # file:// 도 로컬(code-8 P2)
 assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+for url in ["C:/team/app.git", "C:\\team\\app.git", "file:///C:/team/app.git"]:  # Windows 드라이브(code-10 P2)
+    sh(repo_a, "remote", "set-url", "origin", url)
+    assert rr.repo_key(str(repo_a)) == "app", (url, rr.repo_key(str(repo_a)))
+sh(repo_a, "remote", "set-url", "origin", "ssh://git@[2001:db8::1]/app.git")  # IPv6 host 직결(code-10 P2)
+assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+sh(repo_a, "remote", "set-url", "origin", "ssh://git@[::1]:2222/team-v6/app.git")
+assert rr.repo_key(str(repo_a)) == "team-v6__app", rr.repo_key(str(repo_a))
 
 no_origin = make_repo("standalone", None, "main")  # origin 없음 — 디렉토리명 폴백
 assert rr.repo_key(str(no_origin)) == "standalone", rr.repo_key(str(no_origin))
@@ -222,6 +229,30 @@ new_l = runs2 / "team__appx" / "main"
 assert rr.branch_dir(str(repo_l), migrate=True) == new_l
 assert (new_l / "code-7").is_dir(), "외부 gen1 에 막혀 자기 gen0 을 이전하지 못했다"
 assert (gen1_l / "code-9").is_dir(), "외부 gen1 을 건드렸다"
+
+# 3m) v2 폴백→pair 승계(code-10 P1) — origin 이 나중에 생기면 폴백 키 기록을 승계한다
+repo_m = make_repo("m", None, "main")                    # origin 없이 시작
+fb_m = runs2 / "m" / "main"                              # 폴백 키(디렉토리명) 자리
+(fb_m / "code-1").mkdir(parents=True)
+(fb_m / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_m)}))
+sh(repo_m, "remote", "add", "origin", "git@github.com:team-m/app.git")  # origin 승격
+new_m = runs2 / "team-m__app" / "main"
+assert rr.branch_dir(str(repo_m)) == fb_m, "무변경 해석이 폴백 세대를 못 봤다"
+assert rr.branch_dir(str(repo_m), migrate=True) == new_m
+assert (new_m / "code-1").is_dir(), "폴백 키 기록이 pair 키로 승계되지 않았다"
+
+# 3n) git 소유 확인 실패는 판정 불가가 아니라 이전 거부(code-10 P1) — 보수적
+repo_n = make_repo("n", "git@github.com:team-n/app.git", "feature/foo")
+legacy_n = runs / "app" / "feature-foo"
+(legacy_n / "code-1").mkdir(parents=True)
+(legacy_n / "code-1" / "round.json").write_text(json.dumps({"repo_cwd": str(repo_n)}))
+_real_state = rr._git_toplevel_state
+rr._git_toplevel_state = lambda p: ("error", None)       # 확인 실패 강제
+assert rr.branch_dir(str(repo_n), migrate=True) == runs2 / "team-n__app" / lossy
+assert (legacy_n / "code-1").is_dir(), "확인 실패인데 이전을 감행했다"
+rr._git_toplevel_state = _real_state
+assert rr.branch_dir(str(repo_n), migrate=True) == runs2 / "team-n__app" / lossy
+assert not legacy_n.exists(), "확인 복구 후에도 이전되지 않았다"
 
 # ── 4) resume 정합 ─────────────────────────────────────────────────────────
 assert new_a.name == rr.branch_key("feature/foo")        # 디렉토리명 == branch_key(브랜치)

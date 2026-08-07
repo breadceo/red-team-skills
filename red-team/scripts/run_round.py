@@ -317,20 +317,23 @@ def repo_key(cwd: str) -> str:
     origin = git(cwd, "remote", "get-url", "origin")
     if not origin:
         return _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
-    if origin.startswith("file://") \
+    if origin.startswith("file://") or re.match(r"^[A-Za-z]:[\\/]", origin) \
             or (not re.match(r"^\w+://", origin) and not re.match(r"^[^/]+:", origin)):
-        # 로컬 경로 origin(절대·상대·file://) — URL 로 오인하면 `../x/team/app.git` 은
-        # team__app, `/abs/x/team/app.git` 은 app 이 되어 같은 저장소가 표기별로 갈린다
-        # (code-2 P2). file:// 도 같은 로컬 디스크라 표기(절대경로 vs file://)만 바뀌어도
-        # 키가 갈린다(code-8 P2). 원격 scheme·SCP형만 URL 이고 나머지는 basename 폴백이다.
-        return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
+        # 로컬 경로 origin(절대·상대·file://·Windows 드라이브) — URL 로 오인하면
+        # `../x/team/app.git` 은 team__app, `/abs/x/team/app.git` 은 app 이 되어 같은
+        # 저장소가 표기별로 갈린다(code-2 P2). file://(code-8 P2)·`C:/`(code-10 P2, SCP
+        # 오인)도 같은 로컬 디스크다. 원격 scheme·SCP형만 URL 이고 나머지는 basename 폴백.
+        tail = re.sub(r"\.git[\\/]?$", "", origin.rstrip("/\\"))
+        return _single_key(re.split(r"[\\/]", tail)[-1])
     url = origin
     if re.match(r"^\w+://", url):
         # scheme 형의 명시 포트는 키가 아니다 — `ssh://host:22/app.git` 의 22 가 경로
         # 세그먼트로 새면 `22__app` 이 된다(code-9 P2). SCP 형은 건드리지 않는다 —
         # 숫자만으로 된 owner(`host:123/repo`)가 포트로 오인되면 안 된다.
         url = re.sub(r"^(\w+://[^/]+?):\d+(/)", r"\1\2", url)
-    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?[^/:]+[:/](.+)$", url)
+    # host 는 bracketed IPv6 도 된다 — `[2001:db8::1]` 내부 콜론을 경로 구분자로 읽으면
+    # host 직결 저장소에 가짜 owner 가 생긴다(code-10 P2).
+    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?(?:\[[^\]]+\]|[^/:]+)[:/](.+)$", url)
     if m:
         parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
         if len(parts) >= 2:
@@ -354,19 +357,41 @@ def _legacy_branch_dir(cwd: str, branch: str) -> Path:
 def _legacy_candidates(cwd: str, branch: str):
     """구 세대 경로들 — 최신 세대 우선.
 
-    gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래 owner__repo 키 — issue #8
-    개발 라운드에서만 생성됨), gen0 은 출시본 레이아웃(basename/slug)이다.
+    v2 폴백 세대: origin 없이 시작해 폴백 키로 v2 기록을 쌓다가 origin 이 생겨 pair 키로
+    승격된 저장소의 이전 자리(code-10 P1). 역방향(origin 제거)은 pair 키를 계산할 근거가
+    없어 지원하지 않는다. gen1 은 이 변경의 미출시 중간 레이아웃(구 루트 아래 owner__repo
+    키 — issue #8 개발 라운드에서만 생성됨), gen0 은 출시본 레이아웃(basename/slug)이다.
     """
+    fb = _single_key(Path(git(cwd, "rev-parse", "--show-toplevel") or cwd).name)
+    if repo_key(cwd) != fb:
+        yield RUNS_DIR / fb / branch_key(branch)            # v2 폴백 세대 (최신)
     yield LEGACY_RUNS / repo_key(cwd) / branch_key(branch)  # gen1
     yield _legacy_branch_dir(cwd, branch)                   # gen0
 
 
-def _worktree_repo_cwds(d: Path):
-    """d 아래 라운드 기록들의 repo_cwd 중 **실제 git 워크트리**인 것만.
+def _git_toplevel_state(p: str):
+    """git 소유 확인의 3상태 — ('ok', toplevel) | ('not_repo', None) | ('error', None).
 
-    손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열 repo_cwd 는 판정 불가라
-    건너뛴다(code-2 P2). 디렉토리가 남아 있어도 git 메타데이터가 사라졌으면 basename 이
-    저장소 키로 둔갑해 오판하므로 워크트리 확인까지 통과한 것만 낸다(code-3 P2).
+    확인 **실패**(권한·I/O·타임아웃)를 '비워크트리(판정 불가)'와 같은 빈 값으로 뭉개면
+    외부 저장소 기록을 이전할 수 있다(code-10 P1) — 실패는 이전 거부 사유다.
+    """
+    try:
+        r = subprocess.run(["git", "-C", p, "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:
+        return "error", None
+    if r.returncode == 0:
+        return "ok", r.stdout.strip()
+    if "not a git repository" in (r.stderr or "").lower():
+        return "not_repo", None
+    return "error", None
+
+
+def _record_owners(d: Path):
+    """d 아래 라운드 기록들의 (확인 상태, repo_cwd) — 'ok'(워크트리 확인) 또는 'error'.
+
+    판정 불가는 내지 않는다 — 손상(잘린 UTF-8)·비 dict 유효 JSON(null·[])·비문자열
+    repo_cwd(code-2 P2), 경로 소실·초장문 OSError(code-4 P2), 비워크트리(code-3 P2).
     """
     for rj in d.glob("*/round.json"):
         try:
@@ -374,13 +399,16 @@ def _worktree_repo_cwds(d: Path):
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             continue
         p = data.get("repo_cwd") if isinstance(data, dict) else None
+        if not (isinstance(p, str) and p):
+            continue
         try:
-            # is_dir 는 ENOENT 류만 삼킨다 — ENAMETOOLONG 같은 OSError 는 여기서 잡아
-            # 판정 불가로 넘긴다. 안 잡으면 branch_dir 전 소비처가 죽는다(code-4 P2).
-            if isinstance(p, str) and p and Path(p).is_dir() and git(p, "rev-parse", "--show-toplevel"):
-                yield p
+            if not Path(p).is_dir():
+                continue
         except OSError:
             continue
+        state, _top = _git_toplevel_state(p)
+        if state != "not_repo":
+            yield state, p
 
 
 def _pick_legacy(cwd: str, branch: str, parent_name: str):
@@ -396,8 +424,8 @@ def _pick_legacy(cwd: str, branch: str, parent_name: str):
     for legacy in _legacy_candidates(cwd, branch):
         if not legacy.is_dir():
             continue
-        f = next((p for p in _worktree_repo_cwds(legacy)
-                  if repo_key(p) != parent_name), None)
+        f = next((p for state, p in _record_owners(legacy)
+                  if state == "error" or repo_key(p) != parent_name), None)
         if f:
             first_foreign = first_foreign or f
             continue
@@ -442,6 +470,17 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
             return
         raise
     print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
+
+
+def migration_blocked(cwd: str):
+    """이전이 외부 소유(또는 확인 실패) 기록 때문에 거부된 상태면 그 워크트리 경로.
+
+    resume 가 '라운드가 없다'와 '거부된 구 기록이 있다'를 갈라 안내하는 데 쓴다
+    (code-10 P1) — 부수효과 없음.
+    """
+    branch = _current_branch(cwd)
+    new = RUNS_DIR / repo_key(cwd) / branch_key(branch)
+    return _migration_state(cwd, branch, new)[1]
 
 
 def migration_source(cwd: str):

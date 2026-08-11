@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""신규 리뷰 코멘트가 올라오면 한 줄씩 내보낸다. `Monitor` 도구에 물려 쓴다.
+"""신규 리뷰 코멘트가 올라오면 한 줄씩 내보낸다. 호스트의 감시기에 물려 쓴다.
 
 usage:
   watch_comments.py [--pr N] [--repo owner/name] [--cwd path]
                     [--interval 300] [--max-empty-hours 24]
 
 한 줄 = 한 알림. 아무 일 없으면 아무것도 내보내지 않으므로 모델이 헛되게 깨지 않는다.
-`/loop <간격>` 으로 주기 실행하는 것보다 이쪽이 낫다 — 코멘트가 없는 동안은 모델을 안 쓴다.
+장기 프로세스로 실행하면 코멘트가 없는 동안은 모델을 쓰지 않는다.
 
 **알림 커서와 처리 커서를 따로 둔다.** 알림은 중복만 막으면 되고(`notified`),
 처리 여부는 사람이 승인해 게시한 뒤에 표시한다(`triaged`). 알림 직후 세션이 죽어도
@@ -67,7 +67,7 @@ def main():
     ap.add_argument("--max-empty-hours", type=float, default=24,
                     help="이 시간 동안 신규가 없으면 종료한다 (무한 감시 방지)")
     ap.add_argument("--once", action="store_true",
-                    help="한 번만 확인하고 끝낸다. `/loop` 로 주기 실행할 때·테스트할 때 쓴다")
+                    help="한 번만 확인하고 끝낸다. 예약 실행·테스트에 쓴다")
     a = ap.parse_args()
 
     cwd = a.cwd or os.getcwd()

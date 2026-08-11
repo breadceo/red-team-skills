@@ -8,15 +8,19 @@
 `~/.red-team/config.json` 이 없거나 `engines` 키가 없으면(구버전 단수 `engine` 만 있는
 경우 포함) **먼저 사용자에게 한 번 묻고 저장한다.** 어떤 엔진이 깔려 있는지는 환경마다 다르다.
 
-**AskUserQuestion 도구가 있으면 그것으로 묻는다** — `multiSelect: true` 로 두 엔진을
-체크박스로 주고, 사용자가 고른 것을 콤마로 이어 `--set-engine` 에 넘긴다:
+질문은 현재 호스트에서 아래 순서로 한 분기만 고른다.
+
+- Claude Code에서 `AskUserQuestion`이 있으면 `multiSelect: true`로 묻는다.
+- Codex에서 `request_user_input`이 노출되어 있으면 사용한다. 없으면 텍스트 질문 하나를 보내고 기다린다.
+- 그 밖의 headless 환경은 텍스트로 같은 내용을 묻고 기다린다.
+
+선택지는 두 엔진이고, 사용자가 고른 것을 콤마로 이어 `--set-engine`에 넘긴다.
 
 - 질문: "red-team 리뷰 엔진으로 무엇을 쓸까요? (복수 선택 시 리뷰어가 축별로 분산됩니다)"
 - 선택지 `codex` — `acpx` + OpenAI codex CLI 필요. 지금까지 모든 실측이 이 엔진으로 나왔다
 - 선택지 `claude` — 로그인된 `claude` CLI 필요. 별도 CLI 설치 없이 돈다
 - 둘 다 선택 (권장, 둘 다 설치된 환경) → `--set-engine codex,claude`
 
-AskUserQuestion 이 없는 환경(headless 등)이면 텍스트로 같은 내용을 묻고 답을 기다린다.
 묻기 전에 어느 CLI 가 실제로 있는지 확인해 없는 엔진은 선택지 설명에 표시한다
 (`which acpx`, `which claude`).
 
@@ -30,7 +34,15 @@ claude -p "reply with exactly: ok"    # 'ok' 가 나오면 준비됨
 수단은 `--disable-slash-commands` + `--settings '{"hooks":{}}'` 이고, 리뷰어는 이 상태로
 돈다 — 리뷰어 세션에 다른 스킬의 세션 시작 프로토콜이 끼면 턴을 그쪽에 다 쓰고 리뷰가 밀린다.
 
+`run_round.py`는 stdin을 `DEVNULL`로 고정한다. codex를 직접 부르면 반드시
+`< /dev/null`을 붙인다. 없으면 EOF 대기로 멈춘다.
+
 ## 축별 모델·effort 배정
+
+**main agent 모델과 이 표의 reviewer 모델은 별개다.** main agent는 Claude Code/Codex 세션의
+설정·프로필을 그대로 쓰고, `~/.red-team/config.json`의 `assignments`는 `run_round.py`가
+만드는 reviewer subprocess에만 적용된다. Codex의 native subagent 설정으로 이 표를 복제하지
+않는다. 각 subprocess가 아래 model/effort를 명시적으로 받아 두 설정이 섞이지 않는다.
 
 리뷰어는 전원 같은 스펙으로 돌지 않는다. 축 성격이 tier 를 정하고, tier 가 엔진별
 모델·reasoning effort 를 정한다 (`run_round.py` 의 `GATES`/`TIERS`):
@@ -51,8 +63,8 @@ deep 축에 recall 우선 모델을 두는 근거와 두 엔진 분산의 의도
 ## 엔진 설정 명령
 
 ```bash
-python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex          # 한 엔진만
-python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex,claude   # 둘 다 (권장)
+python3 <red-team-skill>/scripts/run_round.py --set-engine codex          # 한 엔진만
+python3 <red-team-skill>/scripts/run_round.py --set-engine codex,claude   # 둘 다 (권장)
 ```
 
 **콤마로 여러 엔진을 저장하면 리뷰어가 축별로 분산된다** — 첫 항목이 기본(폴백)이다.
@@ -76,7 +88,7 @@ CLI 출력 형식이 바뀌어 래핑 파싱이 실패하면 라운드는 그대
 라운드가 몇 번 쌓이면 **배정이 값을 하는지**(regression/달러)를 표로 본다:
 
 ```bash
-python3 ~/.claude/skills/red-team/scripts/report_usage.py [repo/브랜치 조각]
+python3 <red-team-skill>/scripts/report_usage.py [repo/브랜치 조각]
 ```
 
 분자는 `classification == regression` 이다 — 이유는 `evidence.md`(축별 모델 배정의 근거).
@@ -89,7 +101,7 @@ python3 ~/.claude/skills/red-team/scripts/report_usage.py [repo/브랜치 조각
 "토큰/한도" 같은 요청을 하면 **손으로 config 를 고치지 말고 이 플로우를 탄다**:
 
 1. `run_round.py --show-assignments` 로 현 배정·오버라이드·축 성격(추천 이유)을 확인한다.
-2. **AskUserQuestion 으로 묻는다.** 첫 질문은 빠른 선택지:
+2. **위의 호스트별 질문 분기로 묻는다.** 첫 질문은 빠른 선택지:
    - `codex only 전환` — claude 한도 소진/절약. `--set-engine codex` 한 방 (배정표 무손상)
    - `claude only 전환` — 반대 방향. `--set-engine claude`
    - `추천 배정 복귀` — 오버라이드 전부 제거 (`--set-assignment '축='` 반복)

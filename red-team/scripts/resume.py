@@ -2,7 +2,7 @@
 """red-team 이어받기 — 지금 어디인지 알려주고, 다음 라운드 컨텍스트를 만들어 준다.
 
 작업 중인 워크트리에서 이것만 실행하면 된다:
-    python3 ~/.claude/skills/red-team/scripts/resume.py
+    python3 <red-team-skill>/scripts/resume.py
 
 게이트를 넘어갈 때(계획 GO → 구현 완료 → 코드 게이트):
     python3 .../resume.py --next code

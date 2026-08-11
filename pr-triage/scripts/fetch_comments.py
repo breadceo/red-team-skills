@@ -20,13 +20,10 @@ from pathlib import Path
 # import 하는 이유는, 두 스킬이 같은 `~/.red-team/runs/<repo>/<branch>/` 를 읽고 쓰기 때문이다 —
 # 규칙이 갈라지면 트리아지 커서와 red-team 라운드가 서로 다른 디렉토리를 가리키고,
 # 그 순간 "이미 처리한 코멘트" 목록이 조용히 사라진다.
-# 설치 위치를 가정하지 않는다 — 마켓플레이스는 전역(`~/.claude/skills/`)과
-# 프로젝트 로컬(`<repo>/.claude/skills/`) 양쪽에 설치한다. 형제 디렉토리를 먼저 보는 것이
-# 두 경우를 한 번에 덮는다(이 파일이 <skills>/pr-triage/scripts/ 에 있으므로).
+# 두 스킬은 한 배포 단위다. 이 파일의 실경로에서 형제를 찾으면 symlink·복사·플러그인 설치를
+# 모두 덮고, 다른 호스트나 대상 저장소에 우연히 남은 구버전을 불러오지 않는다.
 RED_TEAM_CANDIDATES = [
     Path(__file__).resolve().parents[2] / "red-team" / "scripts",
-    Path.home() / ".claude" / "skills" / "red-team" / "scripts",
-    Path.cwd() / ".claude" / "skills" / "red-team" / "scripts",
 ]
 for _c in RED_TEAM_CANDIDATES:
     if (_c / "run_round.py").exists():

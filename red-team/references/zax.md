@@ -35,7 +35,7 @@
 컨텍스트는 손으로 쓰지 않고 zax 산출물에서 초안을 뽑는다:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT:-~/.claude/skills}/red-team/scripts/run_round.py \
+python3 <red-team-skill>/scripts/run_round.py \
   --cwd <저장소 경로> --gate plan --from-zax <task-name>
 ```
 

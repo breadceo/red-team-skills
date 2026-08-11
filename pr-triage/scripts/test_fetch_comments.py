@@ -11,6 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # 설치 위치를 가
 import fetch_comments as fc
 
 assert str(fc.REPOSTS).startswith(str(TMP)), "REPOSTS 가 RED_TEAM_HOME 파생식을 안 쓴다"
+assert fc.RED_TEAM_CANDIDATES == [
+    Path(fc.__file__).resolve().parents[2] / "red-team" / "scripts"
+], "배포본 sibling 밖의 호스트 전용 red-team 을 탐색한다"
 
 STATE_DIR = TMP / "runs" / "repo" / "branch"
 fc.branch_dir = lambda cwd: STATE_DIR           # git 없이 상태 경로를 고정한다

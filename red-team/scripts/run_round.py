@@ -792,7 +792,7 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
                     "여기 적힌 동작이 코드에서 실제로 그렇게 되는지 본다.\n\n" + criteria)
     if gate == "plan":
         # 문서 6-구조 — B2C-52504 회고: 리뷰 32건 중 25건(78%)이 문서에서 예방 가능했고,
-        # 그 빈칸이 이 여섯이다. 채우는 절차(누락 행의 AskUserQuestion clarify)는 SKILL.md 에 있다.
+        # 그 빈칸이 이 여섯이다. 채우는 절차(누락 행의 사용자 clarify)는 SKILL.md 에 있다.
         body.append("## 판정 기준 — 문서 6-구조 + 계획 생존성 커버리지\n"
                     "각 행을 PRD·계획서와 대조해 채운다 — `반영(어디 — 인용)` / `해당 없음(이유)` / `누락`.\n"
                     "인용 없는 `반영` 은 무효다. `누락` 은 라운드 전에 사용자에게 물어(clarify) 해소한다 (SKILL.md).\n\n"

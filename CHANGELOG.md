@@ -38,6 +38,19 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-08-11
+
+### 📦 red-team·pr-triage — Claude Code와 Codex 공용 Agent Skills (#16)
+
+- 같은 clone을 Claude Code의 `.claude/skills`와 Codex의 `.agents/skills`에 symlink하는 설치법을 추가했다.
+- `pr-triage`는 배포본의 sibling `red-team`만 불러온다. 전역·대상 저장소 `.claude`의 다른
+  버전을 조용히 섞던 fallback을 제거하고 회귀 테스트를 추가했다.
+- PR 감시는 Claude Code `Monitor`, Codex Desktop automation, 장기 실행 CLI를 명시적으로
+  분기한다. 없는 도구를 플랫폼 중립 산문으로 추측하지 않는다.
+- main agent 모델은 호스트 세션 설정, 축별 모델은 reviewer subprocess 설정이라는 경계를
+  문서화했다. 기존 GATES/TIERS와 모델 기본값은 바꾸지 않았다.
+- 저장소 규칙은 `AGENTS.md`를 정본으로 두고 `CLAUDE.md`가 import한다.
+
 ## 2026-08-07
 
 ### 📚 red-team·pr-triage — 스킬 문서가 가벼워졌다: 필요한 순간에만 읽는 구조 (#6)

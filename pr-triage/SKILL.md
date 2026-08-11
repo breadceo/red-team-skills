@@ -15,7 +15,7 @@ description: 내 PR 에 달린 리뷰 코멘트를 감시하다가, 신규 코�
 | code-hub MCP (선택) | 레포 밖 계약 주장 확인 — 없으면 그 건은 사용자에게 올라간다 |
 
 `red-team` 은 같은 저장소에 형제로 있다 — 같이 설치하고 **같은 위치에 둔다.** 스크립트는
-형제 → `~/.claude/skills/` → `<cwd>/.claude/skills/` 순으로 찾고, 못 찾으면 멈춘다.
+현재 배포본의 형제만 찾고, 못 찾으면 멈춘다. 전역·대상 저장소의 다른 설치본으로 fallback하지 않는다.
 
 ## 왜 이 스킬이 있나
 
@@ -27,7 +27,7 @@ PR 리뷰 대응의 기계적 부분(수집·리뷰어 판별·리뷰가 본 커
 ## 흐름
 
 ```
-┌ 감시(Monitor) ── 신규 없으면 아무 일도 없다
+┌ 호스트 감시기 ── 신규 없으면 아무 일도 없다
 ↓
 신규 코멘트 → ① 사실인가(코드) → ② 이 티켓 범위인가(기록) → 분류
 → ⚠ 분류 확인(라운드당 1회) → real-defect 수정 → 검증 → red-team 코드 게이트 GO
@@ -39,23 +39,15 @@ PR 리뷰 대응의 기계적 부분(수집·리뷰어 판별·리뷰가 본 커
 "미룰 것을 고침" 30% 오류를 **사람이 30초에 걸러내는 위치**로 옮긴 것이다(근거:
 `references/measurement.md`).
 
-### 0. 감시 걸기 — loop 는 이 스킬이 만들지 않는다
+### 0. 감시 걸기
 
-PR 직후 `Monitor` 에 감시기를 물린다 — 신규 코멘트가 있을 때만 모델이 깬다:
-
-```
-Monitor(command: "python3 ~/.claude/skills/pr-triage/scripts/watch_comments.py --pr <N>",
-        description: "PR #<N> 신규 리뷰 코멘트", persistent: true)
-```
-
-첫 실행은 기존 코멘트를 알리지 않는다(폭주 방지) — 미처리분은 1절로 본다. 신규가 24시간
-없으면 스스로 종료한다(`--max-empty-hours`). 세션을 오래 못 띄우면 `--once` + `/loop
-10m`. 알림 하나가 라운드 하나다.
+**`references/monitoring.md`를 읽고 현재 호스트의 한 분기만 실행한다.** Claude Code,
+Codex Desktop, 장기 실행 CLI의 exact 경로가 다르다. 없는 도구를 추측하지 않는다.
 
 ### 1. 수집
 
 ```bash
-python3 ~/.claude/skills/pr-triage/scripts/fetch_comments.py --pr <N> --new-only
+python3 <pr-triage-skill>/scripts/fetch_comments.py --pr <N> --new-only
 ```
 
 커서 기준 **미처리** 코멘트만 나온다(PR·저장소 생략 시 현재 브랜치). 커서는
@@ -232,13 +224,14 @@ fetch_comments.py --pr <N> --mark-triaged "<처리한 코멘트 id 쉼표 구분
 
 - 내가 리뷰어가 되어 남의 PR 에 코멘트를 만드는 것은 `review-buddy` 다
 - 검증 게이트는 `red-team` **호출**로 쓴다 — 루프 로직 복제 금지
-- loop 는 `Monitor` 가 한다. 이 스킬은 감시기·커서만 제공한다
+- 반복 실행은 호스트 감시기가 한다. 이 스킬은 감시기·커서만 제공한다
 - PR 생성·배포는 `fix-flow` 7~9단계다
 
 ## 참고 문서
 
 | 문서 | 언제 읽나 |
 |---|---|
+| `references/monitoring.md` | PR 감시를 시작할 때 — 호스트별 exact 실행 경로 |
 | `references/edge-cases.md` | docs-only PR, 미결 표 등재 지적, 레포 밖 계약 주장, 기록 재확인, fp 봇 재게시, 9절 실행 시 |
 | `references/measurement.md` | 본문 수치의 근거 확인, 재측정, 분류 로그 임계값 알림 시 |
 

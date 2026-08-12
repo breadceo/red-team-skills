@@ -12,7 +12,7 @@ usage:
 주의: 리뷰 봇이 **작성자 계정으로** 코멘트를 올리는 경우가 있다.
 그래서 `author == me` 만으로는 리뷰와 내 응답이 갈리지 않는다 — 봇 마커를 함께 본다.
 """
-import argparse, json, os, re, subprocess, sys
+import argparse, json, os, re, shlex, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,13 +20,10 @@ from pathlib import Path
 # import 하는 이유는, 두 스킬이 같은 `~/.red-team/runs/<repo>/<branch>/` 를 읽고 쓰기 때문이다 —
 # 규칙이 갈라지면 트리아지 커서와 red-team 라운드가 서로 다른 디렉토리를 가리키고,
 # 그 순간 "이미 처리한 코멘트" 목록이 조용히 사라진다.
-# 설치 위치를 가정하지 않는다 — 마켓플레이스는 전역(`~/.claude/skills/`)과
-# 프로젝트 로컬(`<repo>/.claude/skills/`) 양쪽에 설치한다. 형제 디렉토리를 먼저 보는 것이
-# 두 경우를 한 번에 덮는다(이 파일이 <skills>/pr-triage/scripts/ 에 있으므로).
+# 두 스킬은 한 배포 단위다. 이 파일의 실경로에서 형제를 찾으면 symlink·복사·플러그인 설치를
+# 모두 덮고, 다른 호스트나 대상 저장소에 우연히 남은 구버전을 불러오지 않는다.
 RED_TEAM_CANDIDATES = [
     Path(__file__).resolve().parents[2] / "red-team" / "scripts",
-    Path.home() / ".claude" / "skills" / "red-team" / "scripts",
-    Path.cwd() / ".claude" / "skills" / "red-team" / "scripts",
 ]
 for _c in RED_TEAM_CANDIDATES:
     if (_c / "run_round.py").exists():
@@ -318,8 +315,10 @@ def main():
         hits = [f"교정 {t}건" for t in REVIEW_AT_CORRECTED if before_c < t <= after_c]
         hits += [f"누적 {t}건" for t in REVIEW_AT_TOTAL if before_n < t <= after_n]
         if hits:
+            cmd = shlex.join(["python3", str(Path(__file__).resolve().parent.parent / "evals" / "score.py"),
+                              "--log", str(LOG)])
             print(f"\n▶ 검토 시점에 도달했다 ({', '.join(hits)}). 사용자에게 재측정·반영 여부를 묻는다:\n"
-                  f"  python3 {Path(__file__).resolve().parent.parent}/evals/score.py --log {LOG}")
+                  f"  {cmd}")
         return
 
     if a.mark_triaged:

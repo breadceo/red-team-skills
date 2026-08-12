@@ -9,3 +9,6 @@ pr-triage/evals/*.json
 
 # OS
 .DS_Store
+
+# Codex repository instructions are part of this distribution.
+!AGENTS.md

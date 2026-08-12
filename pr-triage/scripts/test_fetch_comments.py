@@ -2,15 +2,18 @@
 
 gh 호출은 전부 fixture 로 대체한다 — 네트워크 없이 돈다. 실행: python3 test_fetch_comments.py
 """
-import contextlib, io, json, os, sys, tempfile
+import contextlib, io, json, os, shlex, sys, tempfile
 from pathlib import Path
 
-TMP = Path(tempfile.mkdtemp(prefix="triage-test-"))
+TMP = Path(tempfile.mkdtemp(prefix="triage test "))
 os.environ["RED_TEAM_HOME"] = str(TMP)          # LOG·REPOSTS 격리 — import 전에 잡아야 한다
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # 설치 위치를 가정하지 않는다
 import fetch_comments as fc
 
 assert str(fc.REPOSTS).startswith(str(TMP)), "REPOSTS 가 RED_TEAM_HOME 파생식을 안 쓴다"
+assert fc.RED_TEAM_CANDIDATES == [
+    Path(fc.__file__).resolve().parents[2] / "red-team" / "scripts"
+], "배포본 sibling 밖의 호스트 전용 red-team 을 탐색한다"
 
 STATE_DIR = TMP / "runs" / "repo" / "branch"
 fc.branch_dir = lambda cwd: STATE_DIR           # git 없이 상태 경로를 고정한다
@@ -200,6 +203,16 @@ assert by_id[101]["in_diff"] is None and by_id[101]["line_in_hunk"] is None, \
 stdout = run("--show-files")
 assert "조회 실패" in stdout, "--show-files 가 조회 실패를 표기하지 않았다"
 FILES_FAIL[0] = False
+
+# ── 8) 출력한 측정 명령은 공백 경로에서도 그대로 복사 실행된다 ────────────
+old_total = fc.REVIEW_AT_TOTAL
+fc.REVIEW_AT_TOTAL = (1,)
+stdout = run("--log-classification", '[{"predicted": [], "confirmed": []}]')
+fc.REVIEW_AT_TOTAL = old_total
+cmd = stdout.split("묻는다:\n", 1)[1].strip()
+argv = shlex.split(cmd)
+assert argv[1] == str(Path(fc.__file__).resolve().parent.parent / "evals" / "score.py"), argv
+assert argv[argv.index("--log") + 1] == str(fc.LOG), argv
 
 print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
       "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "

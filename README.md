@@ -1,6 +1,6 @@
 # red-team-skills
 
-Claude Code 스킬 두 개. **커밋 전에 스스로 털고, PR 에 달린 리뷰 코멘트를 그 기록 위에서 처리한다.**
+Claude Code와 Codex에서 함께 쓰는 Agent Skills 두 개. **커밋 전에 스스로 털고, PR 에 달린 리뷰 코멘트를 그 기록 위에서 처리한다.**
 
 | 스킬 | 하는 일 |
 |---|---|
@@ -27,19 +27,29 @@ Claude Code 스킬 두 개. **커밋 전에 스스로 털고, PR 에 달린 리�
 ```bash
 git clone https://github.com/breadceo/red-team-skills.git
 cd red-team-skills
-ln -s "$PWD/red-team"  ~/.claude/skills/red-team
+
+# Claude Code
+mkdir -p ~/.claude/skills
+ln -s "$PWD/red-team" ~/.claude/skills/red-team
 ln -s "$PWD/pr-triage" ~/.claude/skills/pr-triage
+
+# Codex
+mkdir -p ~/.agents/skills
+ln -s "$PWD/red-team" ~/.agents/skills/red-team
+ln -s "$PWD/pr-triage" ~/.agents/skills/pr-triage
 ```
 
 symlink 로 걸어도 스크립트가 실경로 기준으로 형제를 찾으므로 의존 해석은 그대로 동작한다.
-프로젝트 로컬(`<repo>/.claude/skills/`)에 두어도 되고, 전역·로컬 어느 쪽이든 **둘을 같은
-위치에** 두기만 하면 된다.
+한 플랫폼만 쓰면 그 플랫폼 블록만 실행한다. 프로젝트 로컬 설치는 Claude Code
+`<repo>/.claude/skills/`, Codex `<repo>/.agents/skills/`에 같은 방식으로 건다. 어느
+플랫폼이든 **두 스킬을 같은 skills 디렉토리에** 둔다. 업데이트는 이 clone에서 `git pull`만
+하면 두 플랫폼에 동시에 반영된다.
 
 ## 사전 조건
 
 | 무엇 | 왜 |
 |---|---|
-| 리뷰 엔진 — `acpx` + OpenAI codex CLI **및/또는** 로그인된 `claude` CLI | `red-team` 이 리뷰어를 이 엔진으로 돌린다. 최초 1회 `run_round.py --set-engine <codex\|claude\|codex,claude>` 로 고른다 — 둘 다 저장하면 리뷰어 축별로 분산된다 |
+| 리뷰 엔진 — `acpx` + OpenAI codex CLI **및/또는** 로그인된 `claude` CLI | `red-team` 이 리뷰어를 이 엔진으로 돌린다. 최초 1회 `python3 red-team/scripts/run_round.py --set-engine <codex\|claude\|codex,claude>` 로 고른다 — 둘 다 저장하면 리뷰어 축별로 분산된다 |
 | `gh` CLI 인증 | `pr-triage` 의 코멘트 수집·회신이 전부 `gh api` 다 |
 | Python 3 | 표준 라이브러리만 쓴다. 추가 의존성 없음 |
 
@@ -47,15 +57,18 @@ symlink 로 걸어도 스크립트가 실경로 기준으로 형제를 찾으므
 
 ```bash
 # 0. 엔진 선택 (최초 1회, 이후 변경도 같은 명령 — 둘 다 있으면 codex,claude 권장)
-python3 ~/.claude/skills/red-team/scripts/run_round.py --set-engine codex,claude
+python3 red-team/scripts/run_round.py --set-engine codex,claude
 
 # 1. 코드 게이트 한 라운드
-python3 ~/.claude/skills/red-team/scripts/run_round.py \
-  --cwd <저장소 경로> --gate code --context <context.md 경로>
+python3 red-team/scripts/run_round.py \
+  --cwd "<저장소 경로>" --gate code --context "<context.md 경로>"
 
 # 2. 이어받기 — 어디까지 됐고 다음에 뭘 할지 알려준다
-python3 ~/.claude/skills/red-team/scripts/resume.py
+python3 red-team/scripts/resume.py
 ```
+
+위 명령은 clone 루트에서 실행한다. 스킬이 실행될 때는 각 `SKILL.md`가 정의한
+`<red-team-skill>`·`<pr-triage-skill>` 절대 경로를 사용하므로 호스트 설치 위치를 추측하지 않는다.
 
 라운드 산출물은 **저장소 밖**(`~/.red-team/runs2/`)에 쌓인다. 리뷰 산출물이 `git status` 에
 뜨면 리뷰 중 작업 트리가 흔들리고 PR 에 섞여 들어가기 때문이다.

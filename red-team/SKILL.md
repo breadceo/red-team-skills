@@ -56,9 +56,11 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 
 ### 2. 돌린다
 
+`<red-team-skill>` = 이 파일의 절대 디렉토리(다른 설치본 검색 금지).
+
 ```bash
-python3 ~/.claude/skills/red-team/scripts/run_round.py \
-  --cwd <저장소 경로> --gate code --context <context.md 경로>
+python3 "<red-team-skill>/scripts/run_round.py" \
+  --cwd "<저장소 경로>" --gate code --context "<context.md 경로>"
 ```
 
 계획 게이트는 `--gate plan`. 코드 게이트는 러너가 `git diff` 를 **한 번** 떠서 리뷰어
@@ -170,7 +172,7 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 `references/evidence.md`). 이어받을 때는 이것만 실행한다:
 
 ```bash
-python3 ~/.claude/skills/red-team/scripts/resume.py [TICKET-123]
+python3 "<red-team-skill>/scripts/resume.py" [TICKET-123]
 ```
 
 **사용자가 티켓 키만 말했으면 키를 넘겨 호출한다.** 후보가 여럿이면 보여주며 멈추고,
@@ -178,7 +180,7 @@ python3 ~/.claude/skills/red-team/scripts/resume.py [TICKET-123]
 위치에서 파생한다. **출력이 시키는 대로 한다** — ABORTED 종결, findings 미처리, `보류`
 차단, GO/NO-GO 다음 행동, same-origin 경고를 스크립트가 판정해 알려준다.
 
-게이트 전환은 `resume.py --next code` — 컨텍스트를 **누적 이관**한다(덮으면 이전 지적이
+게이트 전환은 `python3 "<red-team-skill>/scripts/resume.py" --next code` — 컨텍스트를 **누적 이관**한다(덮으면 이전 지적이
 되살아난다). 남는 것은 `<!-- TODO(resume) -->` 표시된 `## 리뷰 대상`·`## 검증 상태` 두
 절뿐 — 채운 뒤 스크립트가 출력한 `run_round.py` 명령을 그대로 실행한다(`--out` 포함 —
 생략하면 디렉토리가 갈라진다).
@@ -204,8 +206,6 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 
 - 리뷰어는 **읽기 전용**으로 돈다(codex `--non-interactive-permissions deny`, claude
   `--allowedTools Read,Grep,Glob,Bash`). 코드를 고치는 것은 이 스킬을 돌리는 쪽이다.
-- `run_round.py` 는 stdin 을 `DEVNULL` 로 고정한다. codex 를 직접 부르면 반드시
-  `< /dev/null` — 없으면 EOF 대기로 무한 정지한다.
 - 전원 `PARSE-FAIL` = `verdict: INVALID`, 일부 실패 = `coverage: partial` — 둘 다 GO 가
   아니다. 처리는 `references/recovery.md`.
 - 커밋되지 않은 변경을 리뷰하는 동안 작업 트리를 건드리지 않는다 — 브랜치 변경·파일

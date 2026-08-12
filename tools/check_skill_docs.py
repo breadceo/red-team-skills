@@ -7,9 +7,11 @@
    (가이드 "Mistake 4: Missing Resource References" 방지)
 3. 스킬 루트에 SKILL.md 외 고아 .md 가 없다 — 두려면 references/ 로 내리고 참조한다
    (DESIGN.md 가 참조 0건으로 떠 있던 사고의 재발 방지)
+4. 번들 스크립트 명령은 절대 skill 경로를 쓰고, 공백 가능한 경로 placeholder 를 quote 한다
 
 사용: python3 tools/check_skill_docs.py   (저장소 어디서든)
 """
+import re
 import sys
 from pathlib import Path
 
@@ -55,6 +57,20 @@ def main() -> int:
                 failures.append(
                     f"{skill.name}/{f.name} — 스킬 루트에 SKILL.md 외 .md 를 두지 않는다 (references/ 로)"
                 )
+
+    docs = [ROOT / "README.md", *(f for skill in skills for f in skill.rglob("*.md"))]
+    forbidden = {
+        r"(?m)^(?:python3 )?(?:fetch_comments|record_decisions|post_replies|run_round|resume|report_usage)\.py\b": "번들 스크립트를 PATH 에서 찾는다",
+        r"(?<![/\w])(?:fetch_comments|record_decisions|post_replies|run_round|resume|report_usage)\.py (?=--[a-z])": "본문의 실행 명령이 skill 경로를 생략한다",
+        r"(?m)^python3 (?:scripts|evals)/": "번들 스크립트를 현재 디렉토리 기준으로 찾는다",
+        r"python3 <(?:red-team|pr-triage)-skill>/(?:scripts|evals)/": "skill 스크립트 경로가 quote 되지 않았다",
+        r"--(?:cwd|context|round-dir|items|replies) <[^>\n]+>": "공백 가능한 인자 경로가 quote 되지 않았다",
+    }
+    for doc in docs:
+        text = doc.read_text(encoding="utf-8")
+        for pattern, message in forbidden.items():
+            if re.search(pattern, text):
+                failures.append(f"{doc.relative_to(ROOT)} — {message}")
 
     if failures:
         print("\n".join(f"FAIL: {m}" for m in failures), file=sys.stderr)

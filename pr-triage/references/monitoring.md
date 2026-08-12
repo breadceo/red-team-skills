@@ -10,7 +10,7 @@
 `Monitor` 도구가 있을 때만 사용한다.
 
 ```text
-Monitor(command: "python3 <pr-triage-skill>/scripts/watch_comments.py --pr <N>",
+Monitor(command: "python3 '<pr-triage-skill>/scripts/watch_comments.py' --pr <N>",
         description: "PR #<N> 신규 리뷰 코멘트", persistent: true)
 ```
 
@@ -20,7 +20,7 @@ Monitor(command: "python3 <pr-triage-skill>/scripts/watch_comments.py --pr <N>",
 지시는 아래 한 문장이다.
 
 ```text
-python3 <pr-triage-skill>/scripts/watch_comments.py --pr <N> --once 를 실행하고,
+python3 "<pr-triage-skill>/scripts/watch_comments.py" --pr <N> --once 를 실행하고,
 [pr-triage] 신규 코멘트가 출력된 경우에만 pr-triage SKILL.md 1절부터 처리한다.
 ```
 
@@ -29,7 +29,7 @@ python3 <pr-triage-skill>/scripts/watch_comments.py --pr <N> --once 를 실행�
 장기 실행 셸을 유지할 수 있으면 아래 프로세스를 실행한다.
 
 ```bash
-python3 <pr-triage-skill>/scripts/watch_comments.py --pr <N>
+python3 "<pr-triage-skill>/scripts/watch_comments.py" --pr <N>
 ```
 
 장기 실행도 예약 도구도 없으면 자동 감시를 제공한다고 말하지 않는다. 사용자가 확인을 요청할

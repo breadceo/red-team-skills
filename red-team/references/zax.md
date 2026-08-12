@@ -35,8 +35,8 @@
 컨텍스트는 손으로 쓰지 않고 zax 산출물에서 초안을 뽑는다:
 
 ```bash
-python3 <red-team-skill>/scripts/run_round.py \
-  --cwd <저장소 경로> --gate plan --from-zax <task-name>
+python3 "<red-team-skill>/scripts/run_round.py" \
+  --cwd "<저장소 경로>" --gate plan --from-zax <task-name>
 ```
 
 `~/.zb-task/<task-name>/redteam-context.md` 가 없으면 **초안만 만들고 멈춘다.** 실리는 것은:

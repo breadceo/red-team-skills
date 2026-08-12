@@ -59,8 +59,8 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 `<red-team-skill>` = 이 파일의 절대 디렉토리(다른 설치본 검색 금지).
 
 ```bash
-python3 <red-team-skill>/scripts/run_round.py \
-  --cwd <저장소 경로> --gate code --context <context.md 경로>
+python3 "<red-team-skill>/scripts/run_round.py" \
+  --cwd "<저장소 경로>" --gate code --context "<context.md 경로>"
 ```
 
 계획 게이트는 `--gate plan`. 코드 게이트는 러너가 `git diff` 를 **한 번** 떠서 리뷰어
@@ -172,7 +172,7 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 `references/evidence.md`). 이어받을 때는 이것만 실행한다:
 
 ```bash
-python3 <red-team-skill>/scripts/resume.py [TICKET-123]
+python3 "<red-team-skill>/scripts/resume.py" [TICKET-123]
 ```
 
 **사용자가 티켓 키만 말했으면 키를 넘겨 호출한다.** 후보가 여럿이면 보여주며 멈추고,

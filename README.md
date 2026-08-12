@@ -61,7 +61,7 @@ python3 red-team/scripts/run_round.py --set-engine codex,claude
 
 # 1. 코드 게이트 한 라운드
 python3 red-team/scripts/run_round.py \
-  --cwd <저장소 경로> --gate code --context <context.md 경로>
+  --cwd "<저장소 경로>" --gate code --context "<context.md 경로>"
 
 # 2. 이어받기 — 어디까지 됐고 다음에 뭘 할지 알려준다
 python3 red-team/scripts/resume.py

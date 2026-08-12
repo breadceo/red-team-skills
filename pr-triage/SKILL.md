@@ -47,7 +47,7 @@ Codex Desktop, 장기 실행 CLI의 exact 경로가 다르다. 없는 도구를 
 ### 1. 수집
 
 ```bash
-python3 <pr-triage-skill>/scripts/fetch_comments.py --pr <N> --new-only
+python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --new-only
 ```
 
 커서 기준 **미처리** 코멘트만 나온다(PR·저장소 생략 시 현재 브랜치). 커서는
@@ -126,7 +126,7 @@ diff / diff 안 문서의 미결 표에 등재된 지적 / 레포 밖(BE 계약�
 것이다. 교정은 그대로 따르고, 승인이 나면 **결과를 기록하고** 6절로:
 
 ```bash
-fetch_comments.py --pr <N> --log-classification \
+python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --log-classification \
   '[{"id":123,"predicted":["real-defect"],"confirmed":["out-of-scope","real-defect"],"note":"사용자 교정"}]'
 ```
 
@@ -149,7 +149,8 @@ fetch_comments.py --pr <N> --log-classification \
 짚으면 조용히 누락된다 — 손으로 붙이지 말고 스크립트로:
 
 ```bash
-record_decisions.py --round-dir <라운드 경로> --items <items.json> \
+python3 "<pr-triage-skill>/scripts/record_decisions.py" \
+  --round-dir "<라운드 경로>" --items "<items.json>" \
   --label "PR #<N> 리뷰 코멘트 처리"    # items: [{"section":"반영|후속 티켓|보류","text":"- …"}]
 ```
 
@@ -187,7 +188,8 @@ record_decisions.py --round-dir <라운드 경로> --items <items.json> \
 승인된 초안만 JSON 으로 모아 올린다. **기본이 dry-run, `--confirm` 이 있어야 올라간다:**
 
 ```bash
-post_replies.py --repo owner/name --pr N --replies <replies.json> [--confirm]
+python3 "<pr-triage-skill>/scripts/post_replies.py" \
+  --repo owner/name --pr N --replies "<replies.json>" [--confirm]
 ```
 
 `source: inline` 은 그 스레드 답글로, top-level·review 는 새 코멘트로. 선택 필드:
@@ -197,7 +199,8 @@ post_replies.py --repo owner/name --pr N --replies <replies.json> [--confirm]
 갱신한다** — 안 하면 다음 라운드가 같은 코멘트를 또 처리한다:
 
 ```bash
-fetch_comments.py --pr <N> --mark-triaged "<처리한 코멘트 id 쉼표 구분>"
+python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
+  --pr <N> --mark-triaged "<처리한 코멘트 id 쉼표 구분>"
 ```
 
 그리고 0절의 감시로 돌아간다.

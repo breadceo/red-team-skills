@@ -21,7 +21,7 @@
 돌려 같은 라운드에 병합한다 — 그때까지 그 라운드는 `coverage: partial` 이라 게이트 통과가 아니다:
 
 ```bash
-python3 <red-team-skill>/scripts/run_round.py \
+python3 "<red-team-skill>/scripts/run_round.py" \
   --gate code --merge-into ~/.red-team/runs2/<owner>__<repo>/<branch키>/code-9 \
   --reviewers b1-state-matrix
 ```

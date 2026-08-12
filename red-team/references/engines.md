@@ -63,8 +63,8 @@ deep 축에 recall 우선 모델을 두는 근거와 두 엔진 분산의 의도
 ## 엔진 설정 명령
 
 ```bash
-python3 <red-team-skill>/scripts/run_round.py --set-engine codex          # 한 엔진만
-python3 <red-team-skill>/scripts/run_round.py --set-engine codex,claude   # 둘 다 (권장)
+python3 "<red-team-skill>/scripts/run_round.py" --set-engine codex          # 한 엔진만
+python3 "<red-team-skill>/scripts/run_round.py" --set-engine codex,claude   # 둘 다 (권장)
 ```
 
 **콤마로 여러 엔진을 저장하면 리뷰어가 축별로 분산된다** — 첫 항목이 기본(폴백)이다.
@@ -88,7 +88,7 @@ CLI 출력 형식이 바뀌어 래핑 파싱이 실패하면 라운드는 그대
 라운드가 몇 번 쌓이면 **배정이 값을 하는지**(regression/달러)를 표로 본다:
 
 ```bash
-python3 <red-team-skill>/scripts/report_usage.py [repo/브랜치 조각]
+python3 "<red-team-skill>/scripts/report_usage.py" [repo/브랜치 조각]
 ```
 
 분자는 `classification == regression` 이다 — 이유는 `evidence.md`(축별 모델 배정의 근거).

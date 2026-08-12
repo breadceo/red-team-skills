@@ -1,0 +1,28 @@
+README.md
+  h_d82ccb34241a0d 64
+pr-triage/SKILL.md
+  h_d82ccb34241a0d 50,129,152-153,191-192,202-203
+pr-triage/references/monitoring.md
+  h_d82ccb34241a0d 13,23,32
+red-team/SKILL.md
+  h_d82ccb34241a0d 62-63,175
+red-team/references/engines.md
+  h_d82ccb34241a0d 66-67,91
+red-team/references/recovery.md
+  h_d82ccb34241a0d 24
+red-team/references/zax.md
+  h_d82ccb34241a0d 38-39
+tools/check_skill_docs.py
+  h_d82ccb34241a0d 10,14,61-72
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "85d76620cd1480ff00106140aededc8fb9662865",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

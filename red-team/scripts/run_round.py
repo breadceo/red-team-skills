@@ -935,9 +935,99 @@ def count_access_errors(raw: str, cwd: str) -> int:
     리뷰어가 없는 하위 파일을 추측해 열거나 재현 스크립트를 돌리다 내는
     FileNotFoundError 는 정상 행동이다 — 그런 줄은 cwd 뒤에 하위 경로가 이어지므로
     (`{cwd}/...`), cwd 가 경로의 끝으로 등장하는 줄만 접근 실패로 본다(issue #11).
+    ACP JSON 은 최종 non-zero terminal 출력만 본다 — prompt·명령·성공한 로그 검색에
+    같은 문자열이 있어도 실행 실패가 아니다.
     """
     root = re.escape(cwd.rstrip("/")) + r"/?(?![\w.\-/])"
-    return sum(1 for line in raw.splitlines()
+    outputs = []
+
+    def add_output(value):
+        if isinstance(value, str):
+            outputs.extend(value.splitlines())
+        elif isinstance(value, list):
+            for item in value:
+                add_output(item)
+        elif isinstance(value, dict):
+            for key in ("formatted_output", "error", "text", "message",
+                        "stdout", "stderr", "content", "output"):
+                if key in value:
+                    add_output(value[key])
+
+    terminal_requests = {}
+    terminal_outputs = {}
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            outputs.append(line)
+            continue
+        if not isinstance(event, dict) or event.get("jsonrpc") != "2.0":
+            result = event.get("result") if isinstance(event, dict) else None
+            outputs.append(result if isinstance(result, str) else line)
+            continue
+        event_id = event.get("id")
+        method = event.get("method")
+        if method in ("terminal/output", "terminal/wait_for_exit") \
+                and isinstance(event_id, (str, int)):
+            params = event.get("params", {})
+            terminal_id = params.get("terminalId") if isinstance(params, dict) else None
+            terminal_requests[event_id] = (method, terminal_id)
+        request = terminal_requests.get(event_id) if isinstance(event_id, (str, int)) else None
+        result = event.get("result")
+        if request and isinstance(result, dict):
+            request_method, terminal_id = request
+            status = result.get("exitStatus", result)
+            failed = isinstance(status, dict) and \
+                (status.get("exitCode") not in (None, 0) or status.get("signal"))
+            if request_method == "terminal/output":
+                output = result.get("output")
+                if failed and isinstance(output, str):
+                    for previous in terminal_outputs.get(terminal_id, []):
+                        outputs.extend(previous.splitlines())
+                    outputs.extend(output.splitlines())
+                elif isinstance(output, str) and terminal_id is not None:
+                    terminal_outputs.setdefault(terminal_id, []).append(output)
+            elif failed and terminal_id in terminal_outputs:
+                for output in terminal_outputs[terminal_id]:
+                    outputs.extend(output.splitlines())
+            continue
+        if method in ("terminal/output", "terminal/wait_for_exit"):
+            continue
+        if event.get("method") != "session/update":
+            continue
+        params = event.get("params")
+        if not isinstance(params, dict):
+            continue
+        update = params.get("update", {})
+        if not isinstance(update, dict):
+            continue
+        meta = update.get("_meta", {}) if isinstance(update, dict) else {}
+        result = update.get("rawOutput", {})
+        terminal_exit = meta.get("terminal_exit", {}) if isinstance(meta, dict) else {}
+        exit_code = result.get("exit_code") if isinstance(result, dict) else None
+        if exit_code is None and isinstance(terminal_exit, dict):
+            exit_code = terminal_exit.get("exit_code")
+        signal = terminal_exit.get("signal") if isinstance(terminal_exit, dict) else None
+        if exit_code in (None, 0) and not signal and update.get("status") != "failed":
+            continue
+        if isinstance(result, dict):
+            for key in ("formatted_output", "error", "text", "message",
+                        "stdout", "stderr", "content", "output"):
+                if key in result:
+                    add_output(result[key])
+            content = result.get("result", {}).get("content", []) \
+                if isinstance(result.get("result"), dict) else []
+            for item in content if isinstance(content, list) else []:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    outputs.extend(item["text"].splitlines())
+        elif isinstance(result, str):
+            add_output(result)
+        content = update.get("content", [])
+        for item in content if isinstance(content, list) else []:
+            nested = item.get("content", {}) if isinstance(item, dict) else {}
+            if isinstance(nested, dict) and isinstance(nested.get("text"), str):
+                outputs.extend(nested["text"].splitlines())
+    return sum(1 for line in outputs
                if ("No such file or directory" in line or "not a git repository" in line)
                and re.search(root, line))
 

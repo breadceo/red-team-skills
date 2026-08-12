@@ -11,7 +11,8 @@
 질문은 현재 호스트에서 아래 순서로 한 분기만 고른다.
 
 - Claude Code에서 `AskUserQuestion`이 있으면 `multiSelect: true`로 묻는다.
-- Codex에서 `request_user_input`이 노출되어 있으면 사용한다. 없으면 텍스트 질문 하나를 보내고 기다린다.
+- Codex Plan mode에서는 `request_user_input` 폼을 사용한다. Default mode에서는 도구가
+  노출되어 있어도 호출할 수 없으므로 텍스트 질문 하나를 보내고 기다린다.
 - 그 밖의 headless 환경은 텍스트로 같은 내용을 묻고 기다린다.
 
 선택지는 두 엔진이고, 사용자가 고른 것을 콤마로 이어 `--set-engine`에 넘긴다.

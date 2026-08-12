@@ -2,7 +2,7 @@
 
 gh 호출은 monkeypatch 로 대체한다 — 네트워크 없이 돈다. 실행: python3 test_post_replies.py
 """
-import contextlib, io, json, os, sys, tempfile, types
+import builtins, contextlib, io, json, os, sys, tempfile, types
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="post-test-"))
@@ -10,6 +10,8 @@ os.environ["RED_TEAM_HOME"] = str(TMP)          # 상태 격리 — import 전�
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # 설치 위치를 가정하지 않는다
 import fetch_comments as fc
 import post_replies as ppr
+
+fc.repository_id = lambda repo: {"o/r": 303, "other/repo": 404}.get(repo)
 
 STATE_DIR = TMP / "runs" / "repo" / "branch"
 FP = "auth null-flow, v2"
@@ -130,7 +132,15 @@ fc.branch_dir = lambda cwd: STATE_DIR
 # 5c) 일괄 fp_replies 기록 — 항목의 fps 전원, keep-first (디스크 기존 앵커 우선)
 fc.merge_state(".", 5, {"fp_replies": {FP: {"reply_id": 1, "reply_url": "u-1회차앵커"}}})
 FAIL_REACTION[0] = True     # 리액션 실패는 회신 성공과 별도 보고돼야 한다
+real_repository_id = fc.repository_id
+repository_id_calls = [0]
+def counted_repository_id(repo):
+    repository_id_calls[0] += 1
+    return real_repository_id(repo)
+fc.repository_id = counted_repository_id
 out = run_main([{**OK_ITEM, "fps": [FP, "new-fp"], "reaction": "-1"}], "--confirm")
+fc.repository_id = real_repository_id
+assert repository_id_calls[0] == 1, "게시 전 검증 뒤 상태 기록에서 metadata를 다시 조회했다"
 st = fc.load_state(".", 5)
 assert st["fp_replies"][FP]["reply_url"] == "u-1회차앵커", "keep-first 실패 — 1회차 앵커가 덮였다"
 assert st["fp_replies"]["new-fp"] == {"reply_id": 991, "reply_url": "http://r/991"}, \
@@ -149,11 +159,62 @@ assert [c for c in CALLS if c[4].endswith("/reactions")][0][4] == \
 
 # 5e) 회신 실패 시 리액션은 보류한다 — 1회차 계약은 "전문 반박 + 👎 동시"다
 CALLS.clear()
+owned = fc.load_state(".", 5)
+unowned = dict(owned)
+unowned.pop("repo", None)
+unowned.pop("repo_id", None)
+fc.save_state(".", 5, unowned)
 FAIL_POST[0] = True
 out = run_main([{**OK_ITEM, "fps": [FP], "reaction": "-1"}], "--confirm")
 FAIL_POST[0] = False
 assert "✗ 실패" in out, "회신 실패 메시지가 안 보인다"
 assert not [c for c in CALLS if c[4].endswith("/reactions")], "회신 실패에도 리액션이 호출됐다"
+failed_state = fc.load_state(".", 5)
+assert "repo" not in failed_state and "repo_id" not in failed_state, \
+    "실패한 첫 게시의 repository claim이 남아 올바른 repo 재시도를 막는다"
+fc.save_state(".", 5, owned)
+
+# claim 직후 첫 출력이 깨져도 try/finally가 이미 설치돼 있어 claim을 복원한다.
+fc.save_state(".", 5, unowned)
+real_print = getattr(ppr, "print", None)
+print_calls = [0]
+def broken_once(*args, **kwargs):
+    print_calls[0] += 1
+    if print_calls[0] == 1:
+        raise BrokenPipeError("closed stdout")
+    builtins.print(*args, **kwargs)
+ppr.print = broken_once
+try:
+    run_main([{**OK_ITEM, "fps": [FP]}], "--confirm")
+    raise AssertionError("첫 출력 실패가 전파되지 않았다")
+except BrokenPipeError:
+    pass
+if real_print is None:
+    del ppr.print
+else:
+    ppr.print = real_print
+failed_state = fc.load_state(".", 5)
+assert "repo" not in failed_state and "repo_id" not in failed_state, \
+    "첫 출력 실패가 repository claim을 남겼다"
+fc.save_state(".", 5, owned)
+
+# claim 직후 병행 writer가 저장한 cursor는 post의 rollback snapshot에 섞여 삭제되면 안 된다.
+fc.save_state(".", 5, unowned)
+real_claim_repo = fc.claim_repo
+def claim_then_writer(*args, **kwargs):
+    result = real_claim_repo(*args, **kwargs)
+    claimed_id = result[0] if isinstance(result, tuple) else result
+    fc.merge_state(".", 5, {"notified": [777], "repo": "o/r", "repo_id": claimed_id})
+    return result
+fc.claim_repo = claim_then_writer
+FAIL_POST[0] = True
+run_main([{**OK_ITEM, "fps": [FP]}], "--confirm")
+FAIL_POST[0] = False
+fc.claim_repo = real_claim_repo
+failed_state = fc.load_state(".", 5)
+assert failed_state.get("notified") == [777], \
+    "post rollback이 claim 이후 병행 writer의 cursor를 삭제했다"
+fc.save_state(".", 5, owned)
 
 # 5f) id 없는 성공(비-JSON 응답) — fp_replies 에 기록하지 않고 경고로 보고한다
 NONJSON_REPLY[0] = True

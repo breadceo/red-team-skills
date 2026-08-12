@@ -16,14 +16,33 @@ import argparse, os, shlex, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fetch_comments import detect, gh, gh_json, is_bot, load_state, save_state
+from fetch_comments import (detect, gh, gh_json, is_bot, load_state, merge_state,
+                            repository_status)
 
 
 def gh_auth_ok() -> bool:
     return subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
 
 
-def save_notified(cwd, pr, repo, seen):
+def resolve_repo_state(cwd, pr, repo, adopt):
+    """현재 GitHub repository ID로 상태 소유권을 확인하고 legacy 상태만 명시 채택한다."""
+    st = load_state(cwd, pr)
+    current_repo_id, status = repository_status(st, repo)
+    saved_repo = st.get("repo")
+    if status != "same" and not (adopt and status == "adoptable"):
+        detail = "확실히 다른 저장소이므로 기존 상태를 채택할 수 없다."
+        if status == "adoptable":
+            command = shlex.join(["python3", str(Path(__file__).resolve()),
+                                  "--cwd", cwd, "--repo", repo, "--pr", str(pr), "--adopt-repo"])
+            detail = f"과거 slug를 확인할 수 없다. 같은 저장소가 맞다면 상태만 명시적으로 채택한다:\n  {command}"
+        sys.exit(f"[watch] 저장된 repo({saved_repo})와 현재 대상({repo})의 동일성을 확인하지 못했다 — "
+                 f"상태를 보존하기 위해 감시를 시작하지 않는다. {detail}")
+    if st.get("repo") != repo or st.get("repo_id") != current_repo_id:
+        st = merge_state(cwd, pr, {"repo": repo}, adopt_repo=status == "adoptable")
+    return st, status == "adoptable", current_repo_id
+
+
+def save_notified(cwd, pr, repo, repo_id, seen):
     """저장 직전에 디스크를 다시 읽는다.
 
     감시는 몇 시간씩 살아 있고 그동안 `fetch_comments.py --mark-triaged` 가 같은 파일에
@@ -31,10 +50,8 @@ def save_notified(cwd, pr, repo, seen):
     날아간다 — 실제로 PR #872 에서 45건이 16건으로 되돌아갔다.
     감시는 `notified` 에 추가만 하므로 합집합으로 병합하면 충분하다.
     """
-    st = load_state(cwd, pr)
-    st["notified"] = sorted(set(st.get("notified", [])) | set(seen))
-    st["repo"] = repo
-    save_state(cwd, pr, st)
+    merge_state(cwd, pr, {"notified": list(seen), "watch_initialized": True,
+                          "repo": repo, "repo_id": repo_id})
 
 
 def incoming(repo, pr, me, marker):
@@ -68,19 +85,26 @@ def main():
                     help="이 시간 동안 신규가 없으면 종료한다 (무한 감시 방지)")
     ap.add_argument("--once", action="store_true",
                     help="한 번만 확인하고 끝낸다. 예약 실행·테스트에 쓴다")
+    ap.add_argument("--adopt-repo", action="store_true",
+                    help="ID 없는 legacy 상태의 과거 slug도 확인할 수 없을 때 현재 저장소를 채택한다")
     a = ap.parse_args()
 
-    cwd = a.cwd or os.getcwd()
+    cwd = str(Path(a.cwd or os.getcwd()).resolve())
     repo, pr = detect(cwd, a.repo, a.pr)
-    me = (gh("api", "user", "-q", ".login") or "").strip()
 
-    st = load_state(cwd, pr)
+    st, adopted, current_repo_id = resolve_repo_state(cwd, pr, repo, a.adopt_repo)
+    if a.adopt_repo:
+        action = "채택했다" if adopted else "이미 채택된 상태다"
+        print(f"[watch] {repo}는 repository ID {current_repo_id}로 {action} — "
+              "상태 채택만 마치고 종료한다. 원래 명령을 다시 실행한다.")
+        return
+    me = (gh("api", "user", "-q", ".login") or "").strip()
     seen = set(st.get("notified", []))
     # 최초 실행에서는 기존 코멘트를 전부 알리지 않는다 — 알림 폭주를 막고,
     # 과거 코멘트는 `fetch_comments.py --new-only` 로 한 번에 본다.
-    if not seen:
+    if not st.get("watch_initialized", bool(seen)):
         seen = {cid for _, cid, _, _, _ in incoming(repo, pr, me, a.bot_marker)}
-        save_notified(cwd, pr, repo, seen)
+        save_notified(cwd, pr, repo, current_repo_id, seen)
         fetch = shlex.join(["python3", str(Path(__file__).resolve().parent / "fetch_comments.py"),
                             "--new-only"])
         print(f"[watch] {repo}#{pr} 감시 시작 — 기존 {len(seen)}건은 알리지 않는다 "
@@ -98,13 +122,14 @@ def main():
                       f"`gh auth login` 으로 재인증한 뒤 다시 시작한다.", flush=True)
                 sys.exit(1)
             fresh = []
-        for src, cid, who, body, url in fresh:
+        for _src, cid, _who, _body, _url in fresh:
             seen.add(cid)
+        for src, cid, who, body, url in fresh:
             head = " ".join(body.split())[:160]
             print(f"[pr-triage] {repo}#{pr} 신규 {src} 코멘트 · {who} · id={cid}\n"
                   f"  {head}\n  {url}", flush=True)
         if fresh:
-            save_notified(cwd, pr, repo, seen)
+            save_notified(cwd, pr, repo, current_repo_id, seen)
             idle = 0.0
         else:
             idle += a.interval

@@ -206,6 +206,199 @@ def main():
             f"fatal: not a git repository: {c}", c) == 1
         assert rr.count_access_errors(
             f"ls: {c}2: No such file or directory", c) == 0     # 이름이 겹치는 형제 경로
+        prompt_echo = json.dumps({
+            "jsonrpc": "2.0", "method": "session/prompt",
+            "params": {"cwd": c, "prompt": "No such file or directory"},
+        })
+        assert rr.count_access_errors(prompt_echo, c) == 0       # ACP가 되비춘 prompt는 실행 결과가 아니다
+        source_echo = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update",
+                "_meta": {
+                    "terminal_output_delta": {"data": 'source = "No such file or directory"'},
+                    "terminal_info": {"cwd": c},
+                },
+            }},
+        })
+        assert rr.count_access_errors(source_echo, c) == 0       # 소스 출력과 metadata cwd의 결합 오탐 금지
+        successful_search_echo = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "completed",
+                "rawOutput": {
+                    "formatted_output": f"matched log cwd={c}; No such file or directory",
+                    "exit_code": 0,
+                },
+                "_meta": {"terminal_exit": {"exit_code": 0}},
+            }},
+        })
+        assert rr.count_access_errors(successful_search_echo, c) == 0  # 로그 검색 성공 출력은 오류가 아니다
+        terminal_error = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "failed",
+                "rawOutput": {
+                    "formatted_output": f"cd: {c}: No such file or directory",
+                    "exit_code": 1,
+                },
+                "_meta": {"terminal_exit": {"exit_code": 1}},
+            }},
+        })
+        assert rr.count_access_errors(terminal_error, c) == 1    # 실제 terminal 출력은 유지
+        terminal_error_without_status = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update",
+                "rawOutput": {
+                    "formatted_output": f"cd: {c}: No such file or directory",
+                },
+                "_meta": {"terminal_exit": {"exit_code": 1}},
+            }},
+        })
+        assert rr.count_access_errors(terminal_error_without_status, c) == 1
+        terminal_error_status_only = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "failed",
+                "rawOutput": {
+                    "formatted_output": f"cd: {c}: No such file or directory",
+                    "exit_code": None,
+                },
+                "_meta": {"terminal_exit": {"exit_code": None, "signal": None}},
+            }},
+        })
+        assert rr.count_access_errors(terminal_error_status_only, c) == 1
+        mcp_error = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "failed",
+                "rawOutput": {"error": f"fatal: not a git repository: {c}"},
+            }},
+        })
+        assert rr.count_access_errors(mcp_error, c) == 1
+        for raw_output in (
+            f"fatal: not a git repository: {c}",
+            {"content": f"cd: {c}: No such file or directory"},
+            {"stdout": f"cd: {c}: No such file or directory"},
+            {"stderr": f"fatal: not a git repository: {c}"},
+            {"text": f"fatal: not a git repository: {c}"},
+            {"message": f"cd: {c}: No such file or directory"},
+            {"output": f"fatal: not a git repository: {c}"},
+            {"content": [{"type": "text",
+                          "text": f"fatal: not a git repository: {c}"}]},
+            {"content": [{"type": "content", "content": {
+                "type": "text", "text": f"fatal: not a git repository: {c}",
+            }}]},
+        ):
+            event = json.dumps({
+                "jsonrpc": "2.0", "method": "session/update",
+                "params": {"update": {
+                    "sessionUpdate": "tool_call_update", "status": "failed",
+                    "rawOutput": raw_output,
+                }},
+            })
+            assert rr.count_access_errors(event, c) == 1, raw_output
+        mcp_result_error = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "failed",
+                "rawOutput": {"result": {"content": [
+                    {"type": "text", "text": f"fatal: not a git repository: {c}"},
+                ]}},
+            }},
+        })
+        assert rr.count_access_errors(mcp_result_error, c) == 1
+        mcp_start_error = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update", "status": "failed",
+                "content": [{"type": "content", "content": {
+                    "type": "text", "text": f"fatal: not a git repository: {c}",
+                }}],
+            }},
+        })
+        assert rr.count_access_errors(mcp_start_error, c) == 1
+        for invalid_params in (None, []):
+            malformed_update = json.dumps({
+                "jsonrpc": "2.0", "method": "session/update",
+                "params": invalid_params,
+            })
+            assert rr.count_access_errors(malformed_update, c) == 0
+        terminal_signal_update = json.dumps({
+            "jsonrpc": "2.0", "method": "session/update",
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update",
+                "rawOutput": {
+                    "formatted_output": f"cd: {c}: No such file or directory",
+                },
+                "_meta": {"terminal_exit": {"exit_code": None, "signal": "SIGKILL"}},
+            }},
+        })
+        assert rr.count_access_errors(terminal_signal_update, c) == 1
+        claude_error = json.dumps({
+            "result": f"cd: {c}: No such file or directory",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })
+        assert rr.count_access_errors(claude_error, c) == 1      # Claude JSON wrapper의 본문도 유지
+        terminal_output_request = json.dumps({
+            "jsonrpc": "2.0", "id": 91, "method": "terminal/output",
+            "params": {"sessionId": "session", "terminalId": "terminal"},
+        })
+        terminal_output_response = json.dumps({
+            "jsonrpc": "2.0", "id": 91,
+            "result": {
+                "output": f"cd: {c}: No such file or directory",
+                "exitStatus": {"exitCode": 1},
+            },
+        })
+        terminal_output_error = terminal_output_request + "\n" + terminal_output_response
+        assert rr.count_access_errors(terminal_output_error, c) == 1  # 실제 ACP 요청/응답 계약
+        terminal_signal_response = json.dumps({
+            "jsonrpc": "2.0", "id": 91,
+            "result": {
+                "output": f"cd: {c}: No such file or directory",
+                "exitStatus": {"exitCode": None, "signal": "SIGKILL"},
+            },
+        })
+        terminal_signal_error = terminal_output_request + "\n" + terminal_signal_response
+        assert rr.count_access_errors(terminal_signal_error, c) == 1
+        running_output_response = json.dumps({
+            "jsonrpc": "2.0", "id": 91,
+            "result": {"output": f"cd: {c}: No such file or directory"},
+        })
+        wait_request = json.dumps({
+            "jsonrpc": "2.0", "id": 92, "method": "terminal/wait_for_exit",
+            "params": {"sessionId": "session", "terminalId": "terminal"},
+        })
+        wait_response = json.dumps({
+            "jsonrpc": "2.0", "id": 92, "result": {"exitCode": 1},
+        })
+        split_terminal_error = "\n".join((terminal_output_request, running_output_response,
+                                            wait_request, wait_response))
+        assert rr.count_access_errors(split_terminal_error, c) == 1
+        later_output_request = json.dumps({
+            "jsonrpc": "2.0", "id": 93, "method": "terminal/output",
+            "params": {"sessionId": "session", "terminalId": "terminal"},
+        })
+        harmless_output_response = json.dumps({
+            "jsonrpc": "2.0", "id": 93, "result": {"output": "still running"},
+        })
+        multi_output_error = "\n".join((terminal_output_request, running_output_response,
+                                          later_output_request, harmless_output_response,
+                                          wait_request, wait_response))
+        assert rr.count_access_errors(multi_output_error, c) == 1
+        failed_tail_response = json.dumps({
+            "jsonrpc": "2.0", "id": 93, "result": {
+                "output": "tail only", "exitStatus": {"exitCode": 1},
+                "truncated": True,
+            },
+        })
+        truncated_terminal_error = "\n".join((terminal_output_request,
+                                                running_output_response,
+                                                later_output_request,
+                                                failed_tail_response))
+        assert rr.count_access_errors(truncated_terminal_error, c) == 1
 
         # e2e: 엔진을 가짜로 갈아끼우고 코드 게이트 한 라운드 — 혼합 배정이 round.json 에 남는가
         # 프롬프트가 stdin 으로 실제 도착했을 때만 GO 를 낸다 — argv 회귀(SIGKILL 경로)를

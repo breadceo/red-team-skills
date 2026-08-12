@@ -12,7 +12,7 @@ usage:
 주의: 리뷰 봇이 **작성자 계정으로** 코멘트를 올리는 경우가 있다.
 그래서 `author == me` 만으로는 리뷰와 내 응답이 갈리지 않는다 — 봇 마커를 함께 본다.
 """
-import argparse, json, os, re, shlex, subprocess, sys
+import argparse, contextlib, fcntl, json, os, re, shlex, subprocess, sys, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,6 +76,121 @@ def load_state(cwd: str, pr: int) -> dict:
     return {"pr": pr, "triaged": [], "notified": []}
 
 
+@contextlib.contextmanager
+def state_lock(cwd: str, pr: int):
+    p = state_path(cwd, pr).with_suffix(".lock")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def repository_id(repo: str, attempts=3):
+    """GitHub repository ID를 짧게 재시도해 조회한다."""
+    for attempt in range(attempts):
+        out = gh("api", f"repos/{repo}", "--jq", ".id", check=False)
+        try:
+            return int(out.strip())
+        except (AttributeError, TypeError, ValueError):
+            if attempt + 1 < attempts:
+                time.sleep(0.2 * 2 ** attempt)
+    return None
+
+
+def repository_name(repo: str):
+    """redirect 전 slug로 조회해도 GitHub가 돌려준 canonical owner/name을 쓴다."""
+    out = gh("api", f"repos/{repo}", "--jq", ".full_name", check=False)
+    name = out.strip() if isinstance(out, str) else ""
+    return name if "/" in name else None
+
+
+def gh_auth_ok() -> bool:
+    return subprocess.run(["gh", "auth", "status"], capture_output=True).returncode == 0
+
+
+def repository_status(st: dict, repo: str):
+    """공유 상태와 현재 repo의 관계를 (same|adoptable|different)로 판정한다."""
+    current_id = repository_id(repo)
+    if current_id is None:
+        if not gh_auth_ok():
+            sys.exit(f"{repo}의 gh 인증이 유효하지 않다 — `gh auth login`으로 재인증한 뒤 다시 실행한다.")
+        sys.exit(f"{repo}의 repository ID와 소유권을 3회 확인하지 못했다 — 상태를 변경하지 않는다.")
+    saved_repo = st.get("repo")
+    try:
+        saved_id = int(st["repo_id"])
+    except (KeyError, TypeError, ValueError):
+        saved_id = None
+    if saved_id is not None and saved_id != current_id:
+        return current_id, "different"
+    if not saved_repo or saved_id == current_id or \
+            (saved_id is None and saved_repo.casefold() == repo.casefold()):
+        return current_id, "same"
+    previous_id = repository_id(saved_repo)
+    if previous_id is None and not gh_auth_ok():
+        sys.exit(f"{saved_repo}의 gh 인증이 유효하지 않다 — `gh auth login`으로 재인증한 뒤 다시 실행한다.")
+    if previous_id == current_id:
+        return current_id, "same"
+    return current_id, "adoptable" if previous_id is None else "different"
+
+
+def claim_repo(cwd: str, pr: int, repo: str, adopt_repo=False, with_snapshot=False):
+    """네트워크 확인 뒤 최신 상태에 repo slug+ID를 먼저 고정한다."""
+    for _attempt in range(2):
+        before = load_state(cwd, pr)
+        current_id, status = repository_status(before, repo)
+        if status == "adoptable" and not adopt_repo:
+            cmd = shlex.join([
+                "python3", str(Path(__file__).resolve().parent / "watch_comments.py"),
+                "--cwd", str(Path(cwd).resolve()), "--repo", repo, "--pr", str(pr),
+                "--adopt-repo",
+            ])
+            sys.exit(f"상태 파일의 legacy repo({before.get('repo')!r})와 현재 repo({repo!r})의 "
+                     f"동일성을 확인할 수 없다 — 상태를 변경하지 않는다.\n"
+                     f"  현재 저장소를 명시 채택하려면 한 번 실행한다: {cmd}")
+        if status == "different":
+            sys.exit(f"상태 파일의 repo({before.get('repo')!r})와 현재 repo({repo!r})의 "
+                     "repository ID가 다르다 또는 동일성을 확인할 수 없다 — 상태를 변경하지 않는다.")
+        saved_repo = before.get("repo")
+        same_known_id = before.get("repo_id") is not None and \
+            str(before["repo_id"]) == str(current_id)
+        claim_name = repo
+        if same_known_id and saved_repo:
+            if saved_repo.casefold() == repo.casefold():
+                claim_name = saved_repo
+            else:
+                # old slug도 redirect로 같은 ID를 돌려주므로 호출자 문자열만으로 최신을
+                # 고를 수 없다. GitHub canonical name을 못 읽으면 디스크 최신값을 보존한다.
+                claim_name = repository_name(repo) or saved_repo
+        with state_lock(cwd, pr):
+            latest = load_state(cwd, pr)
+            if (latest.get("repo"), latest.get("repo_id")) != \
+                    (before.get("repo"), before.get("repo_id")):
+                continue
+            claim_before = dict(latest)
+            latest.update({"repo": claim_name, "repo_id": current_id,
+                           "repo_claim_generation": uuid.uuid4().hex})
+            save_state(cwd, pr, latest)
+            if with_snapshot:
+                return current_id, claim_before, dict(latest)
+            return current_id
+    sys.exit("repository 소유권을 확인하는 동안 상태가 반복 변경됐다 — 다시 실행한다.")
+
+
+def rollback_repo_claim(cwd: str, pr: int, before: dict, claimed: dict) -> bool:
+    """claim 뒤 다른 writer가 상태를 건드리지 않았을 때만 이전 상태로 되돌린다."""
+    def payload(st):
+        return {k: v for k, v in st.items() if k != "updated_at"}
+
+    with state_lock(cwd, pr):
+        if payload(load_state(cwd, pr)) != payload(claimed):
+            return False
+        save_state(cwd, pr, dict(before))
+        return True
+
+
 def save_state(cwd: str, pr: int, st: dict) -> Path:
     p = state_path(cwd, pr)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +216,7 @@ def save_state(cwd: str, pr: int, st: dict) -> Path:
     return p
 
 
-def merge_state(cwd: str, pr: int, updates: dict) -> dict:
+def merge_state(cwd: str, pr: int, updates: dict, adopt_repo=False) -> dict:
     """상태 쓰기 공통 규칙 — save 직전 디스크를 **다시 읽고** 병합해 쓴다.
 
     시작 시점 스냅샷을 되쓰면 병행 watch 의 `notified` 나 `--mark-triaged` 의 `triaged` 를
@@ -110,17 +225,29 @@ def merge_state(cwd: str, pr: int, updates: dict) -> dict:
     1회차 전문 반박이 그 fp 의 앵커다: 2회차 요약 회신이 같은 fp 를 달고 와도
     앵커가 요약으로 밀리면 안 된다.
     """
-    st = load_state(cwd, pr)
-    for k, v in updates.items():
-        if k == "fp_replies":
-            merged = dict(v)
-            merged.update(st.get("fp_replies") or {})   # 디스크 우선 = keep-first
-            st["fp_replies"] = merged
-        elif isinstance(v, list):
-            st[k] = sorted(set(st.get(k) or []) | set(v))
-        else:
-            st[k] = v
-    save_state(cwd, pr, st)
+    updates = dict(updates)
+    if repo := updates.get("repo"):
+        if "repo_id" not in updates:
+            updates["repo_id"] = claim_repo(cwd, pr, repo, adopt_repo)
+    with state_lock(cwd, pr):
+        st = load_state(cwd, pr)
+        if repo := updates.get("repo"):
+            if st.get("repo_id") is not None and \
+                    str(st["repo_id"]) != str(updates["repo_id"]):
+                sys.exit("검증 이후 repository 소유권이 바뀌었다 — 상태를 변경하지 않는다.")
+            if st.get("repo_id") is not None:
+                updates.pop("repo", None)
+                updates.pop("repo_id", None)
+        for k, v in updates.items():
+            if k == "fp_replies":
+                merged = dict(v)
+                merged.update(st.get("fp_replies") or {})   # 디스크 우선 = keep-first
+                st["fp_replies"] = merged
+            elif isinstance(v, list):
+                st[k] = sorted(set(st.get(k) or []) | set(v))
+            else:
+                st[k] = v
+        save_state(cwd, pr, st)
     return st
 
 
@@ -141,10 +268,69 @@ REPOSTS = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team")) / "pr
 REPOST_REVIEW_AT = (10, 30)     # 누적되면 봇 팀에 종결 경로 신설을 요청할 근거가 된다
 
 
+@contextlib.contextmanager
+def repost_lock():
+    p = REPOSTS.with_suffix(REPOSTS.suffix + ".lock")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def repost_count():
     if not REPOSTS.exists():
         return 0
     return sum(1 for l in REPOSTS.read_text().splitlines() if l.strip())
+
+
+def record_reposts(pr: int, repo: str, repo_id: int, candidates: list, logged: set):
+    """append-log의 dedup 확인과 append를 한 전역 임계 구역에서 처리한다."""
+    logged = set(logged)
+    with repost_lock():
+        candidate_keys = {key for key, _row in candidates}
+        legacy_ids = {}
+        if REPOSTS.exists():
+            for raw in REPOSTS.read_text().splitlines():
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                key = f"{row.get('fp')}:{row.get('comment_id')}"
+                if row.get("pr") != pr or key not in candidate_keys:
+                    continue
+                row_repo = row.get("repo")
+                row_repo_id = row.get("repo_id")
+                if row_repo_id is None and row_repo:
+                    if row_repo.casefold() == repo.casefold():
+                        row_repo_id = repo_id
+                    else:
+                        if row_repo not in legacy_ids:
+                            legacy_ids[row_repo] = repository_id(row_repo)
+                        row_repo_id = legacy_ids[row_repo]
+                        if row_repo_id is None:
+                            if not gh_auth_ok():
+                                sys.exit(f"{row_repo}의 gh 인증이 유효하지 않다 — "
+                                         "`gh auth login`으로 재인증한 뒤 다시 실행한다.")
+                            sys.exit(f"legacy 재게시 로그의 repo({row_repo}) 소유권을 확인하지 못했다 — "
+                                     "중복 기록을 막기 위해 로그와 상태를 변경하지 않는다.")
+                if str(row_repo_id) == str(repo_id):
+                    logged.add(key)
+        rows = []
+        for key, row in candidates:
+            if key in logged:
+                continue
+            logged.add(key)
+            rows.append({**row, "repo_id": repo_id})
+        before = repost_count()
+        if rows:
+            with REPOSTS.open("a") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        after = repost_count()
+    return rows, logged, before, after
 
 
 def log_count():
@@ -323,10 +509,8 @@ def main():
 
     if a.mark_triaged:
         ids = [int(x) for x in re.findall(r"\d+", a.mark_triaged)]
-        st = load_state(cwd, pr)
-        st["triaged"] = sorted(set(st.get("triaged", [])) | set(ids))
-        st["repo"] = repo
-        print(f"처리 완료 표시 {len(ids)}건 → 누적 {len(st['triaged'])}건\n{save_state(cwd, pr, st)}")
+        st = merge_state(cwd, pr, {"triaged": ids, "repo": repo})
+        print(f"처리 완료 표시 {len(ids)}건 → 누적 {len(st['triaged'])}건\n{state_path(cwd, pr)}")
         return
 
     me = (gh("api", "user", "-q", ".login") or "").strip()
@@ -426,7 +610,7 @@ def main():
     # 회신을 목록에서 못 찾으면(삭제 등) 시점을 판정할 수 없으므로 기록하지 않는다.
     logged = set(st.get("repost_logged") or [])
     by_id = {it["id"]: it for it in items}
-    repost_rows = []
+    candidates = []
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for it in items:
         for e in it["fps"]:
@@ -435,19 +619,25 @@ def main():
             if not e["fp_replied"] or not reply or key in logged \
                     or it["created_at"] <= reply["created_at"]:
                 continue
-            logged.add(key)
-            repost_rows.append({"fp": e["fp"], "comment_id": it["id"],
-                                "prior_reply": e["fp_reply_url"],
-                                "repo": repo, "pr": pr, "at": stamp})
+            candidates.append((key, {"fp": e["fp"], "comment_id": it["id"],
+                                     "prior_reply": e["fp_reply_url"],
+                                     "repo": repo, "pr": pr, "at": stamp}))
+    if candidates:
+        verified_repo_id = claim_repo(cwd, pr, repo) if branch_dir else repository_id(repo)
+        if verified_repo_id is None:
+            sys.exit(f"{repo}의 repository ID를 확인하지 못해 재게시 로그를 쓰지 않는다.")
+        repost_rows, logged, before, after = record_reposts(
+            pr, repo, verified_repo_id, candidates, logged)
+    else:
+        repost_rows = []
+    recovered = logged - set(st.get("repost_logged") or [])
+    if recovered and not repost_rows and branch_dir:
+        merge_state(cwd, pr, {"repost_logged": sorted(logged), "repo": repo,
+                              "repo_id": verified_repo_id})
     if repost_rows:
-        before = repost_count()
-        REPOSTS.parent.mkdir(parents=True, exist_ok=True)
-        with REPOSTS.open("a") as f:
-            for row in repost_rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        after = repost_count()
         if branch_dir:
-            merge_state(cwd, pr, {"repost_logged": sorted(logged), "repo": repo})
+            merge_state(cwd, pr, {"repost_logged": sorted(logged), "repo": repo,
+                                  "repo_id": verified_repo_id})
         print(f"봇 재게시(회신 후) {len(repost_rows)}건 기록 → {REPOSTS} · 누적 {after}건")
         # crossing 판정(이전 < t <= 이후)이라 정확히 한 번 발동한다 — 기존 REVIEW_AT_* 와 동일.
         hits = [t for t in REPOST_REVIEW_AT if before < t <= after]

@@ -137,11 +137,18 @@ def main():
     cwd = a.cwd or os.getcwd()
     items = json.loads(Path(a.replies).read_text())
     validate(items, a.bot_marker)
-
-    print(f"{a.repo}#{a.pr} · {len(items)}건 "
-          f"{'게시한다' if a.confirm else '미리보기 (게시하지 않는다)'}\n")
+    verified_repo_id = None
+    claim_before = claim_after = None
     posted, react_fails, id_missing = [], [], []
+    post_succeeded = False
     try:
+        if a.confirm and fetch_comments.branch_dir is not None \
+                and any(it.get("fps") for it in items):
+            verified_repo_id, claim_before, claim_after = fetch_comments.claim_repo(
+                cwd, a.pr, a.repo, with_snapshot=True)
+
+        print(f"{a.repo}#{a.pr} · {len(items)}건 "
+              f"{'게시한다' if a.confirm else '미리보기 (게시하지 않는다)'}\n")
         for i, it in enumerate(items):
             print(f"── [{i}] target={it.get('target_id')} source={it.get('source', 'top-level')}"
                   + (f" fps={it['fps']}" if it.get("fps") else ""))
@@ -150,6 +157,8 @@ def main():
                 print("   …")
             r = post(a.repo, a.pr, it, a.confirm)
             print("   " + r["msg"])
+            if r["ok"] and not r.get("dry"):
+                post_succeeded = True
             if r["ok"] and not r.get("dry") and it.get("fps"):
                 if r.get("id"):
                     posted.append((it, r.get("id"), r.get("url")))
@@ -167,6 +176,13 @@ def main():
                     react_fails.append((i, msg.splitlines()[0]))
             print()
     finally:
+        if claim_after is not None and not post_succeeded:
+            restored = fetch_comments.rollback_repo_claim(
+                cwd, a.pr, claim_before, claim_after)
+            if restored:
+                print("repository claim 복원 — 성공한 게시가 없어 이전 상태로 되돌렸다.")
+            else:
+                print("⚠ 게시 중 다른 writer가 상태를 변경해 repository claim을 되돌리지 않았다.")
         # 상태 기록은 **모든 게시가 끝난 뒤 일괄**이되, 루프 중 미검증 예외로 여기 도달해도
         # 반드시 실행한다 — finally 가 아니면 이미 게시된 분(posted)이 fp_replies 에 하나도
         # 남지 않는 "전부 게시·전부 미기록"이 된다. keep-first 정책이라 여기서 다시 돌아도
@@ -178,21 +194,14 @@ def main():
                       "  다음 fetch 에서 이 fp 가 fp_replied 아님으로 보이면 과거 회신을 수동 "
                       "앵커하고 상태를 백필한다 (pr-triage/SKILL.md 7절).")
             else:
-                # merge_state 전에 상태 파일의 repo 를 대조한다 — 다르면 fp_replies 를
-                # 엉뚱한 저장소 상태에 병합해 그 저장소의 1회차 앵커를 훼손할 수 있다
-                # (--cwd 오지정·다른 워크트리를 가리키는 경우가 흔한 원인이다). 상태 파일이
-                # 없거나 repo 키가 아직 없으면(첫 기록) 통과시킨다.
-                st = load_state(cwd, a.pr)
-                if st.get("repo") and st["repo"] != a.repo:
-                    sys.exit(f"상태 파일의 repo({st['repo']!r})가 --repo({a.repo!r})와 다르다 "
-                             "— --cwd 가 잘못된 저장소를 가리키고 있을 수 있다.")
                 fp_replies = {}
                 for it, cid, url in posted:
                     for fp in it["fps"]:   # 항목의 fps **전원**을 기록한다
                         # 배치 안에서도 first-write-wins — merge_state 가 디스크 기존 키를
                         # 우선하므로(keep-first) 1회차 전문 반박 앵커가 요약으로 밀리지 않는다.
                         fp_replies.setdefault(fp, {"reply_id": cid, "reply_url": url})
-                merge_state(cwd, a.pr, {"fp_replies": fp_replies, "repo": a.repo})
+                merge_state(cwd, a.pr, {"fp_replies": fp_replies, "repo": a.repo,
+                                        "repo_id": verified_repo_id})
                 print(f"fp_replies 기록 {len(fp_replies)}건 (keep-first — 이미 있는 fp 는 덮지 않는다)")
 
     if id_missing:

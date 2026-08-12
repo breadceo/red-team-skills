@@ -2,7 +2,7 @@
 
 gh 호출은 전부 fixture 로 대체한다 — 네트워크 없이 돈다. 실행: python3 test_fetch_comments.py
 """
-import contextlib, io, json, os, shlex, sys, tempfile
+import contextlib, io, json, os, shlex, sys, tempfile, threading
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="triage test "))
@@ -60,6 +60,9 @@ FILES = [
 def fake_gh(*args, check=True):
     if args[:2] == ("api", "user"):
         return "ethan\n"
+    if args[0] == "api" and args[1].startswith("repos/"):
+        return {"o/r": "303\n", "old/repo": "303\n",
+                "other/repo": "404\n"}.get(args[1][len("repos/"):])
     raise AssertionError(f"예상 밖의 gh 호출: {args}")
 
 
@@ -83,6 +86,89 @@ def fake_gh_json(path, check=True):
 
 
 fc.gh, fc.gh_json = fake_gh, fake_gh_json
+fc.gh_auth_ok = lambda: True
+
+# repository metadata 일시 실패는 제한 재시도 뒤 복구한다.
+repo_attempts = [0]
+real_gh, real_sleep = fc.gh, fc.time.sleep
+fc.gh = lambda *_args, **_kwargs: (repo_attempts.__setitem__(0, repo_attempts[0] + 1) \
+    or ("303\n" if repo_attempts[0] == 3 else None))
+fc.time.sleep = lambda _seconds: None
+assert fc.repository_id("o/r") == 303 and repo_attempts[0] == 3
+fc.gh, fc.time.sleep = real_gh, real_sleep
+real_repository_id = fc.repository_id
+fc.repository_id = lambda _repo: 101
+assert fc.repository_status({"repo_id": 202}, "o/r")[1] == "different"
+real_gh_auth_ok = fc.gh_auth_ok
+fc.repository_id = lambda _repo: None
+fc.gh_auth_ok = lambda: False
+try:
+    fc.repository_status({"repo_id": 202}, "o/r")
+    raise AssertionError("metadata 인증 실패를 일반 소유권 실패로 처리했다")
+except SystemExit as e:
+    assert "gh auth login" in str(e), e
+fc.gh_auth_ok = real_gh_auth_ok
+fc.repository_id = real_repository_id
+
+# secondary legacy slug 조회 중 인증이 만료되면 채택 가능 상태로 오인하지 않는다.
+fc.repository_id = lambda repo: 101 if repo == "new/repo" else None
+fc.gh_auth_ok = lambda: False
+try:
+    fc.repository_status({"repo": "old/repo"}, "new/repo")
+    raise AssertionError("secondary metadata 인증 실패를 adoptable로 처리했다")
+except SystemExit as e:
+    assert "gh auth login" in str(e), e
+fc.gh_auth_ok = real_gh_auth_ok
+fc.repository_id = real_repository_id
+
+# ID 없는 legacy slug를 확인할 수 없으면 기존 one-shot 채택 명령으로 복구를 안내한다.
+fc.save_state("relative repo", 8, {"pr": 8, "repo": "gone/repo",
+                                   "triaged": [], "notified": []})
+fc.repository_id = lambda repo: 101 if repo == "new/repo" else None
+try:
+    fc.claim_repo("relative repo", 8, "new/repo")
+    raise AssertionError("명시 채택이 필요한 legacy 상태를 묵시적으로 채택했다")
+except SystemExit as e:
+    message = str(e)
+    assert "watch_comments.py" in message and "--adopt-repo" in message \
+        and str(Path("relative repo").resolve()) in message, message
+fc.repository_id = real_repository_id
+
+# 서로 다른 두 최초 claim이 동시에 시작해도 lock+CAS로 하나만 소유권을 얻는다.
+barrier = threading.Barrier(2)
+local = threading.local()
+def racing_repository_id(repo):
+    if not getattr(local, "started", False):
+        local.started = True
+        barrier.wait()
+    return {"first/repo": 501, "second/repo": 502}[repo]
+fc.repository_id = racing_repository_id
+claimed, rejected = [], []
+def claim(repo):
+    try:
+        claimed.append((repo, fc.claim_repo(".", 6, repo)))
+    except SystemExit:
+        rejected.append(repo)
+threads = [threading.Thread(target=claim, args=(repo,))
+           for repo in ("first/repo", "second/repo")]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+fc.repository_id = real_repository_id
+assert len(claimed) == len(rejected) == 1, (claimed, rejected)
+race_state = fc.load_state(".", 6)
+assert race_state["repo"] == claimed[0][0] and race_state["repo_id"] == claimed[0][1], race_state
+
+# 같은 repo를 뒤이어 claim한 writer도 별도 세대다 — 앞 writer가 그 소유권을 rollback하면 안 된다.
+fc.repository_id = lambda _repo: 601
+claim_before = fc.load_state(".", 7)
+fc.claim_repo(".", 7, "same/repo")
+first_claim = fc.load_state(".", 7)
+fc.claim_repo(".", 7, "same/repo")
+assert not fc.rollback_repo_claim(".", 7, claim_before, first_claim), \
+    "같은 repo의 후속 claim 세대를 구분하지 못해 앞 writer가 rollback했다"
+fc.repository_id = real_repository_id
 
 
 def run(*argv):
@@ -155,6 +241,15 @@ assert "변경 파일 2개" in stdout and "src/a.ts" in stdout and "bin/x.png" i
 
 # ── 4) --new-only 필터 **전** fp_seq 계산 ─────────────────────────────────
 run("--mark-triaged", "101")
+st = fc.load_state(".", 5)
+assert st["repo"] == "o/r" and st["repo_id"] == 303, st
+try:
+    fc.merge_state(".", 5, {"repo": "other/repo", "triaged": [999]})
+    raise AssertionError("다른 repository ID로 공유 상태를 변경했다")
+except SystemExit:
+    pass
+st = fc.load_state(".", 5)
+assert st["repo"] == "o/r" and st["repo_id"] == 303 and 999 not in st["triaged"], st
 stdout, by_id = fetch("--new-only")
 assert 101 not in by_id, "triaged 코멘트가 목록에 남았다"
 assert {x["fp"]: x["fp_seq"] for x in by_id[102]["fps"]}[FP_A] == 2, \
@@ -179,11 +274,56 @@ assert len(rows) == 10, "회신 이전 코멘트(101·102)까지 재게시로 �
 e = {x["fp"]: x for x in by_id[108]["fps"]}[FP_A]
 assert e["fp_replied"] and e["fp_reply_url"] == "http://c/103" and e["fp_seq"] == 3
 assert "봇 종결 실패 누적 10건" in stdout, "crossing(이전<t<=이후) 안내가 없다"
-# 두 번째 fetch — repost_logged dedup 으로 다시 쌓이지 않고, 임계 안내도 반복되지 않는다
+# 상태 커서 유실 뒤 rename돼도 append log의 repository ID로 같은 사건을 다시 쓰지 않는다.
+all_rows = [json.loads(l) for l in fc.REPOSTS.read_text().splitlines() if l.strip()]
+for row in all_rows:
+    if row.get("comment_id") == 108:
+        row["repo"] = "old/repo"
+all_rows.append({"repo": "unrelated/repo", "pr": 999, "fp": "other", "comment_id": 1})
+fc.REPOSTS.write_text("".join(json.dumps(row) + "\n" for row in all_rows))
+cursorless = fc.load_state(".", 5)
+cursorless.pop("repost_logged", None)
+fc.save_state(".", 5, cursorless)
+real_repository_id = fc.repository_id
+def no_unrelated_lookup(repo):
+    assert repo != "unrelated/repo", "후보와 무관한 legacy row metadata를 조회했다"
+    return real_repository_id(repo)
+fc.repository_id = no_unrelated_lookup
+stdout, _ = fetch()
+fc.repository_id = real_repository_id
+rows = [json.loads(l) for l in fc.REPOSTS.read_text().splitlines() if l.strip()]
+assert len(rows) == 11, "repost dedup 실패 — fetch 마다 다시 쌓인다"
+assert "봇 종결 실패" not in stdout, "임계 안내가 반복된다 (스팸)"
+assert f"{FP_A}:108" in fc.load_state(".", 5).get("repost_logged", []), \
+    "append log에서 복구한 cursor를 상태에 backfill하지 않았다"
+# 기존 repo_id 없는 로그도 old slug가 같은 ID로 해석되면 rename 중복을 막는다.
+for row in rows:
+    if row.get("comment_id") == 108:
+        row.pop("repo_id", None)
+fc.REPOSTS.write_text("".join(json.dumps(row) + "\n" for row in rows))
+cursorless = fc.load_state(".", 5)
+cursorless.pop("repost_logged", None)
+fc.save_state(".", 5, cursorless)
+real_repository_id = fc.repository_id
+fc.repository_id = lambda repo: None if repo == "old/repo" else real_repository_id(repo)
+fc.gh_auth_ok = lambda: False
+try:
+    fetch()
+    raise AssertionError("legacy repost metadata 인증 실패를 일반 소유권 실패로 처리했다")
+except SystemExit as e:
+    assert "gh auth login" in str(e), e
+fc.gh_auth_ok = lambda: True
+try:
+    fetch()
+    raise AssertionError("legacy repo 소유권 확인 실패에도 재게시 로그를 진행했다")
+except SystemExit as e:
+    assert "legacy 재게시 로그" in str(e), e
+fc.repository_id = real_repository_id
+fc.gh_auth_ok = real_gh_auth_ok
+assert len([l for l in fc.REPOSTS.read_text().splitlines() if l.strip()]) == 11
 stdout, _ = fetch()
 rows = [json.loads(l) for l in fc.REPOSTS.read_text().splitlines() if l.strip()]
-assert len(rows) == 10, "repost dedup 실패 — fetch 마다 다시 쌓인다"
-assert "봇 종결 실패" not in stdout, "임계 안내가 반복된다 (스팸)"
+assert len(rows) == 11 and "봇 종결 실패" not in stdout
 
 # ── 6) merge_state — 재읽기 병합: 리스트 합집합 · fp_replies keep-first ───
 st = fc.merge_state(".", 5, {"fp_replies": {FP_A: {"reply_id": 999, "reply_url": "u-덮기시도"},
@@ -192,7 +332,52 @@ st = fc.merge_state(".", 5, {"fp_replies": {FP_A: {"reply_id": 999, "reply_url":
 assert st["fp_replies"][FP_A]["reply_url"] == "http://c/103", \
     "keep-first 실패 — 디스크 기존 앵커가 덮였다"
 assert st["fp_replies"]["new-fp"]["reply_url"] == "u7"
-assert "z:1" in st["repost_logged"] and f"{FP_A}:108" in st["repost_logged"], "리스트 합집합 실패"
+assert "z:1" in st["repost_logged"], "리스트 합집합 실패"
+
+# metadata 조회 중 병행 watcher가 저장한 최신 커서를 최종 merge가 다시 읽어 보존한다.
+concurrent = fc.load_state(".", 5)
+concurrent["notified"] = []
+fc.save_state(".", 5, concurrent)
+real_repository_id = fc.repository_id
+def repository_id_with_concurrent_write(repo):
+    latest = fc.load_state(".", 5)
+    latest["notified"] = [77]
+    fc.save_state(".", 5, latest)
+    return real_repository_id(repo)
+fc.repository_id = repository_id_with_concurrent_write
+st = fc.merge_state(".", 5, {"repo": "o/r", "triaged": [998]})
+fc.repository_id = real_repository_id
+assert 77 in st["notified"] and 998 in st["triaged"], st
+
+# 같은 repository ID의 rename 경합은 허용하고 디스크의 최신 slug를 보존한다.
+renamed = fc.load_state(".", 5)
+renamed.update({"repo": "renamed/repo", "repo_id": 303})
+fc.save_state(".", 5, renamed)
+st = fc.merge_state(".", 5, {"repo": "o/r", "repo_id": 303, "triaged": [997]})
+assert st["repo"] == "renamed/repo" and 997 in st["triaged"], st
+
+# repo_id를 생략한 일반 caller도 redirect의 canonical slug를 써서 stale slug로 되돌리지 않는다.
+real_repository_name = fc.repository_name
+fc.repository_name = lambda _repo: "renamed/repo"
+st = fc.merge_state(".", 5, {"repo": "o/r", "triaged": [996]})
+fc.repository_name = real_repository_name
+assert st["repo"] == "renamed/repo" and 996 in st["triaged"], st
+
+# append-log dedup read→append는 전역 lock 안에서 재확인해 동시 writer도 한 행만 쓴다.
+real_reposts = fc.REPOSTS
+fc.REPOSTS = TMP / "race-reposts.jsonl"
+race_candidate = [("race-fp:1", {"fp": "race-fp", "comment_id": 1,
+                                  "repo": "o/r", "pr": 77, "at": "now"})]
+race_results = []
+threads = [threading.Thread(target=lambda: race_results.append(
+    fc.record_reposts(77, "o/r", 303, race_candidate, set()))) for _ in range(2)]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+assert sum(len(result[0]) for result in race_results) == 1, race_results
+assert len(fc.REPOSTS.read_text().splitlines()) == 1
+fc.REPOSTS = real_reposts
 
 # ── 7) files API 실패 — 죽지 않고 플래그 전부 null 로 강등, 경고 1줄 ───────────
 FILES_FAIL[0] = True

@@ -141,7 +141,7 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --log-classificat
 **red-team 코드 게이트 통과** — 이게 수정을 자동화할 수 있는 근거다. NO-GO 면 회신 없이
 라운드를 더 돌고, `INVALID` 는 GO 가 아니다 ④ GO 면 7절로. **게이트를 건너뛰고 회신하지
 않는다** — 검증 안 된 "고쳤습니다"는 PR 에 남는다. 컨텍스트는 `## 리뷰 대상`·`## 검증
-상태` 만 갱신한다(나머지는 `resume.py --next code` 가 이관).
+상태` 만 갱신한다(나머지는 `python3 "<red-team-skill>/scripts/resume.py" --next code` 가 이관).
 
 ### 6-1. 처리 결과를 red-team 기록에 넣는다
 

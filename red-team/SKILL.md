@@ -180,7 +180,7 @@ python3 "<red-team-skill>/scripts/resume.py" [TICKET-123]
 위치에서 파생한다. **출력이 시키는 대로 한다** — ABORTED 종결, findings 미처리, `보류`
 차단, GO/NO-GO 다음 행동, same-origin 경고를 스크립트가 판정해 알려준다.
 
-게이트 전환은 `resume.py --next code` — 컨텍스트를 **누적 이관**한다(덮으면 이전 지적이
+게이트 전환은 `python3 "<red-team-skill>/scripts/resume.py" --next code` — 컨텍스트를 **누적 이관**한다(덮으면 이전 지적이
 되살아난다). 남는 것은 `<!-- TODO(resume) -->` 표시된 `## 리뷰 대상`·`## 검증 상태` 두
 절뿐 — 채운 뒤 스크립트가 출력한 `run_round.py` 명령을 그대로 실행한다(`--out` 포함 —
 생략하면 디렉토리가 갈라진다).

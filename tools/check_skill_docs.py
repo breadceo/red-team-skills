@@ -60,8 +60,10 @@ def main() -> int:
 
     docs = [ROOT / "README.md", *(f for skill in skills for f in skill.rglob("*.md"))]
     forbidden = {
-        r"(?m)^(fetch_comments|record_decisions|post_replies)\.py\b": "번들 스크립트를 PATH 에서 찾는다",
-        r"python3 <(?:red-team|pr-triage)-skill>/scripts/": "skill 스크립트 경로가 quote 되지 않았다",
+        r"(?m)^(?:python3 )?(?:fetch_comments|record_decisions|post_replies|run_round|resume|report_usage)\.py\b": "번들 스크립트를 PATH 에서 찾는다",
+        r"(?<![/\w])(?:fetch_comments|record_decisions|post_replies|run_round|resume|report_usage)\.py (?=--[a-z])": "본문의 실행 명령이 skill 경로를 생략한다",
+        r"(?m)^python3 (?:scripts|evals)/": "번들 스크립트를 현재 디렉토리 기준으로 찾는다",
+        r"python3 <(?:red-team|pr-triage)-skill>/(?:scripts|evals)/": "skill 스크립트 경로가 quote 되지 않았다",
         r"--(?:cwd|context|round-dir|items|replies) <[^>\n]+>": "공백 가능한 인자 경로가 quote 되지 않았다",
     }
     for doc in docs:

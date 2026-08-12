@@ -49,7 +49,7 @@ symlink 로 걸어도 스크립트가 실경로 기준으로 형제를 찾으므
 
 | 무엇 | 왜 |
 |---|---|
-| 리뷰 엔진 — `acpx` + OpenAI codex CLI **및/또는** 로그인된 `claude` CLI | `red-team` 이 리뷰어를 이 엔진으로 돌린다. 최초 1회 `run_round.py --set-engine <codex\|claude\|codex,claude>` 로 고른다 — 둘 다 저장하면 리뷰어 축별로 분산된다 |
+| 리뷰 엔진 — `acpx` + OpenAI codex CLI **및/또는** 로그인된 `claude` CLI | `red-team` 이 리뷰어를 이 엔진으로 돌린다. 최초 1회 `python3 red-team/scripts/run_round.py --set-engine <codex\|claude\|codex,claude>` 로 고른다 — 둘 다 저장하면 리뷰어 축별로 분산된다 |
 | `gh` CLI 인증 | `pr-triage` 의 코멘트 수집·회신이 전부 `gh api` 다 |
 | Python 3 | 표준 라이브러리만 쓴다. 추가 의존성 없음 |
 

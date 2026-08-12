@@ -12,7 +12,7 @@ usage:
 주의: 리뷰 봇이 **작성자 계정으로** 코멘트를 올리는 경우가 있다.
 그래서 `author == me` 만으로는 리뷰와 내 응답이 갈리지 않는다 — 봇 마커를 함께 본다.
 """
-import argparse, json, os, re, subprocess, sys
+import argparse, json, os, re, shlex, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -315,8 +315,10 @@ def main():
         hits = [f"교정 {t}건" for t in REVIEW_AT_CORRECTED if before_c < t <= after_c]
         hits += [f"누적 {t}건" for t in REVIEW_AT_TOTAL if before_n < t <= after_n]
         if hits:
+            cmd = shlex.join(["python3", str(Path(__file__).resolve().parent.parent / "evals" / "score.py"),
+                              "--log", str(LOG)])
             print(f"\n▶ 검토 시점에 도달했다 ({', '.join(hits)}). 사용자에게 재측정·반영 여부를 묻는다:\n"
-                  f"  python3 {Path(__file__).resolve().parent.parent}/evals/score.py --log {LOG}")
+                  f"  {cmd}")
         return
 
     if a.mark_triaged:

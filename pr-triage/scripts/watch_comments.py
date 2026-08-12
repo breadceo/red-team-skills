@@ -12,7 +12,7 @@ usage:
 처리 여부는 사람이 승인해 게시한 뒤에 표시한다(`triaged`). 알림 직후 세션이 죽어도
 처리 대상이 사라지지 않아야 한다.
 """
-import argparse, os, subprocess, sys, time
+import argparse, os, shlex, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -81,8 +81,10 @@ def main():
     if not seen:
         seen = {cid for _, cid, _, _, _ in incoming(repo, pr, me, a.bot_marker)}
         save_notified(cwd, pr, repo, seen)
+        fetch = shlex.join(["python3", str(Path(__file__).resolve().parent / "fetch_comments.py"),
+                            "--new-only"])
         print(f"[watch] {repo}#{pr} 감시 시작 — 기존 {len(seen)}건은 알리지 않는다 "
-              f"(미처리분은 fetch_comments.py --new-only 로 확인)", flush=True)
+              f"(미처리분은 `{fetch}` 로 확인)", flush=True)
 
     idle = 0.0
     while idle < a.max_empty_hours * 3600:

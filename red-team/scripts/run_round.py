@@ -23,13 +23,17 @@ usage:
 프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
 그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
-import argparse, errno, hashlib, json, os, re, shutil, subprocess, sys, time
+import argparse, errno, hashlib, json, os, re, shlex, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 PROMPTS = SKILL / "prompts"
 HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
+
+
+def shell_command(*args) -> str:
+    return shlex.join(str(arg) for arg in args)
 # v2 라운드 루트. 구 루트(runs/)와 **경로 공간을 통째로 분리**한 이유(issue #8 code-7):
 # 구 레이아웃의 키는 slug 산출물 전체라, 새 키를 아무리 단사로 설계해도 이미 디스크에 있는
 # 구 디렉토리가 새 키 자리를 선점하는 전환기 충돌(스쿼팅)을 막을 수 없었다. 루트가 다르면
@@ -149,8 +153,8 @@ def resolve_engines(cli_engine: str | None) -> list[str]:
             return parse_engines(",".join(stored))
     if not spec:
         sys.exit("리뷰 엔진이 설정되지 않았다. 최초 1회만 정하면 된다:\n"
-                 f"  python3 {__file__} --set-engine codex          # 한 엔진만\n"
-                 f"  python3 {__file__} --set-engine codex,claude   # 축별 분산 (첫 항목이 기본)\n"
+                 f"  {shell_command('python3', Path(__file__).resolve(), '--set-engine', 'codex')}          # 한 엔진만\n"
+                 f"  {shell_command('python3', Path(__file__).resolve(), '--set-engine', 'codex,claude')}   # 축별 분산 (첫 항목이 기본)\n"
                  "이후 바꿀 때도 같은 명령이다. SKILL.md 0단계 참고.")
     return parse_engines(spec)
 
@@ -1257,6 +1261,10 @@ def main():
         print(f"tokens: {total/1000:.1f}k 합계"
               + (f", ${sum(costs):.2f} (API 환산가, {len(costs)}/{len(merged['assignments'])} 리뷰어 집계)"
                  if costs else ""))
+    def heal(reviewers):
+        return shell_command("python3", Path(__file__).resolve(), "--cwd", a.cwd,
+                             "--gate", a.gate, "--merge-into", out,
+                             "--reviewers", ",".join(reviewers))
     if merged["verdict"] == "INVALID":
         print(f"⚠ 리뷰어 전원이 결과를 내지 못했다 — 이 라운드는 판정이 아니다.\n"
               f"  engines={'+'.join(engines)} 이 실제로 돌았는지 확인한다"
@@ -1264,8 +1272,6 @@ def main():
     else:
         # 혼합 라운드에서 한 엔진만 통째로 죽으면(예: claude 로그인 풀림) 나머지 엔진의
         # GO 에 묻혀 조용히 통과한다 — 7/30 `Not logged in` 사고의 재발 경로라 표면화한다.
-        heal = (f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
-                f"      --merge-into {out} --reviewers ")
         by_engine = {}
         for r, parsed, _lost, _tokens in results:
             by_engine.setdefault(assignments[r][0], []).append(parsed is None)
@@ -1274,21 +1280,20 @@ def main():
             print(f"⚠ engine={e} 리뷰어 전원({len(by_engine[e])}명)이 결과를 내지 못했다 — "
                   f"그 축들이 빠진 {merged['verdict']} 는 반쪽짜리다.\n"
                   f"  {e} 상태를 확인한 뒤 그 축만 다시 돌려 이 라운드에 병합한다:\n"
-                  + heal + ",".join(r for r in reviewers if assignments[r][0] == e))
+                  + "    " + heal(r for r in reviewers if assignments[r][0] == e))
         # 엔진이 통째로 죽은 게 아니라 일부만 PARSE-FAIL 이면 라운드를 버리지 않는다 —
         # SKILL.md 가 "그 리뷰어만 1회 재실행" 을 지시하는데, 되돌릴 수단이 병합이다.
         fail = [r for r, v in merged["reviewers"].items() if v == "PARSE-FAIL"]
         if fail and not dead_engines:
             print(f"⚠ PARSE-FAIL: {','.join(fail)} — 그 축이 빠진 {merged['verdict']} 는 반쪽짜리다.\n"
-                  f"  그 리뷰어만 1회 재실행해 이 라운드에 병합한다:\n" + heal + ",".join(fail))
+                  f"  그 리뷰어만 1회 재실행해 이 라운드에 병합한다:\n    " + heal(fail))
     if merged["access_errors"]:
         # 이 리뷰어 결과만 신뢰할 수 없다 — 라운드 전체를 버릴 필요는 없고, 손으로 round.json 을
         # 고칠 필요도 없다. 병합 경로가 verdict·counts·access_errors 를 다시 계산한다.
         print(f"⚠ 파일접근오류: {merged['access_errors']} — 그 리뷰어 결과는 신뢰할 수 없다.\n"
               f"  리뷰 대상 디렉토리가 실행 중 사라지지 않는 위치인지 확인한 뒤,\n"
               f"  그 리뷰어만 다시 돌려 이 라운드에 병합한다:\n"
-              f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
-              f"      --merge-into {out} --reviewers {','.join(merged['access_errors'])}\n"
+              f"    {heal(merged['access_errors'])}\n"
               f"  (round.json 을 손으로 고치지 않는다 — 병합이 verdict·counts·access_errors 를 다시 계산한다)")
     if merged["verdict"] == "GO" and merged.get("coverage") == "partial":
         # 축을 빼는 것은 "생략"이 아니라 "유예"다 — 빠진 축이 못 본 결함은 GO 로 결론나면 안 된다.
@@ -1296,8 +1301,7 @@ def main():
         if merged["skipped"]:
             print(f"⚠ 축 {','.join(merged['skipped'])} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
                   f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
-                  f"    python3 {Path(__file__)} --cwd {a.cwd} --gate {a.gate} \\\n"
-                  f"      --merge-into {out} --reviewers {','.join(merged['skipped'])}")
+                  f"    {heal(merged['skipped'])}")
         if merged["unparsed"]:
             # 재실행 명령은 위 PARSE-FAIL 경고가 이미 안내했다 — 여기서는 그 GO 의 성격을 못 박는다.
             # 경고문을 읽었는지에 의존하지 않으려고 coverage 로 남기는 것이 이 분기의 목적이다.

@@ -100,7 +100,7 @@ python3 "<red-team-skill>/scripts/report_usage.py" [repo/브랜치 조각]
 얹힌다. 사용자가 "리뷰 배정 바꿔줘", "리뷰 모델 조정", "엔진 전환", "claude 아껴야 해",
 "토큰/한도" 같은 요청을 하면 **손으로 config 를 고치지 말고 이 플로우를 탄다**:
 
-1. `run_round.py --show-assignments` 로 현 배정·오버라이드·축 성격(추천 이유)을 확인한다.
+1. `python3 "<red-team-skill>/scripts/run_round.py" --show-assignments` 로 현 배정·오버라이드·축 성격(추천 이유)을 확인한다.
 2. **위의 호스트별 질문 분기로 묻는다.** 첫 질문은 빠른 선택지:
    - `codex only 전환` — claude 한도 소진/절약. `--set-engine codex` 한 방 (배정표 무손상)
    - `claude only 전환` — 반대 방향. `--set-engine claude`

@@ -22,9 +22,9 @@
 표본이 부족해지면 오염된 PR 을 재사용하지 말고 레포·스캔 범위를 넓힌다(org 전체 1631 PR).
 
 ```bash
-python3 evals/harvest_replies.py --repos <org>/<repo-a>,<org>/<repo-b> --top 30 --out pairs.json
-python3 evals/make_blind_set.py --pairs pairs.json --n 20 --exclude-prs "<정답 본 PR>" --out blind.json
-python3 evals/score.py --answers answers.json --predictions preds.json
+python3 "<pr-triage-skill>/evals/harvest_replies.py" --repos <org>/<repo-a>,<org>/<repo-b> --top 30 --out pairs.json
+python3 "<pr-triage-skill>/evals/make_blind_set.py" --pairs pairs.json --n 20 --exclude-prs "<정답 본 PR>" --out blind.json
+python3 "<pr-triage-skill>/evals/score.py" --answers answers.json --predictions preds.json
 ```
 
 **측정이 실제로 고친 것 세 가지** — 이 문서를 바꿀 때 참고한다.

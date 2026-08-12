@@ -3,7 +3,7 @@
 
 usage: python3 test_engine_config.py
 """
-import importlib, json, os, subprocess, sys, tempfile
+import importlib, json, os, shlex, subprocess, sys, tempfile
 from pathlib import Path
 
 
@@ -16,7 +16,7 @@ def load(home: Path):
 
 
 def main():
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(prefix="red team ") as td:
         rr = load(Path(td))
 
         # config 없고 환경변수도 없으면 라운드를 돌리지 않고 최초 설정으로 돌려보낸다
@@ -278,6 +278,21 @@ def main():
         assert "축  가 빠진" not in s3, s3
         assert "--reviewers \n" not in s3, s3
 
+        # 전원 PARSE-FAIL + cwd 접근 오류여도 INVALID 저장 뒤 치유 명령을 출력한다
+        broken = f"echo 'cd: {td}: No such file or directory'"
+        rr.engine_cmd = lambda e, prompt, c, m, ef: (["/bin/sh", "-c", broken], dict(os.environ), None)
+        out_invalid = Path(td) / "e2e-invalid-access"
+        sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
+                    "--gate", "code", "--out", str(out_invalid)]
+        invalid_buf = io.StringIO()
+        with redirect_stdout(invalid_buf):
+            rr.main()
+        invalid = json.loads((out_invalid / "round.json").read_text())
+        assert invalid["verdict"] == "INVALID" and len(invalid["access_errors"]) == 5, invalid
+        healing = invalid_buf.getvalue().split("병합한다:\n", 1)[1].splitlines()[0].strip()
+        healing_argv = shlex.split(healing)
+        assert healing_argv[healing_argv.index("--cwd") + 1] == td, healing_argv
+
         # 그 축을 정상 출력으로 재실행해 병합하면 coverage 가 full 로 돌아온다
         rr.engine_cmd = lambda e, prompt, c, m, ef: (["/bin/sh", "-c", good], dict(os.environ), None)
         sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out3),
@@ -336,6 +351,10 @@ def main():
         assert rj2["skipped"] == ["b1-state-matrix", "b2-interaction", "b3-visibility"], rj2["skipped"]
         s2 = buf2.getvalue()
         assert "게이트 통과가 아니다" in s2 and "--merge-into" in s2, s2
+        cmd = s2.split("판정이다:\n", 1)[1].strip().splitlines()[0]
+        argv = shlex.split(cmd)
+        assert argv[argv.index("--cwd") + 1] == td, argv
+        assert argv[argv.index("--merge-into") + 1] == str(out2), argv
 
         # top-up: 빠진 축을 같은 라운드에 병합하면 coverage 가 full 로 돌아온다
         sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out2),

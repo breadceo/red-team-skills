@@ -16,7 +16,7 @@
 직전 라운드 context.md 를 복사하고 decisions.md 의 `반영`을 `이미 반영된 지적` 절에,
 `후속 티켓`을 `스코프 밖` 절에 옮겨 붙인다. 이 누적이 재제기를 막는다.
 """
-import argparse, json, os, re, shutil, sys
+import argparse, json, os, re, shlex, shutil, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -29,6 +29,16 @@ HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 _HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
 TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
+
+
+def shell_command(*args) -> str:
+    return shlex.join(str(arg) for arg in args)
+
+
+def round_command(cwd, gate, round_dir, reviewers) -> str:
+    return shell_command("python3", HOME_DIR / "scripts" / "run_round.py",
+                         "--cwd", cwd or "<워크트리 경로>", "--gate", gate,
+                         "--merge-into", round_dir, "--reviewers", ",".join(reviewers))
 
 
 def resolve_base(key: str | None, cwd: str):
@@ -385,13 +395,11 @@ def main():
         if rj.get("access_errors"):
             print(f"⚠ 이 라운드에 파일접근오류가 있다 {rj['access_errors']} — 그 리뷰어 결과는 믿을 수 없다.\n"
                   f"  그 축만 다시 돌려 이 라운드에 병합한다(round.json 을 손으로 고치지 않는다):\n"
-                  f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
-                  f"      --gate {gate} --merge-into {rd} --reviewers {','.join(rj['access_errors'])}")
+                  f"    {round_command(repo_cwd, gate, rd, rj['access_errors'])}")
         if (pf := [r for r, v in (rj.get("reviewers") or {}).items() if v == "PARSE-FAIL"]):
             print(f"⚠ PARSE-FAIL 리뷰어가 있다 {pf} — 그 축이 빠진 판정은 반쪽짜리다.\n"
                   f"  1회 재실행해 병합한다:\n"
-                  f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
-                  f"      --gate {gate} --merge-into {rd} --reviewers {','.join(pf)}")
+                  f"    {round_command(repo_cwd, gate, rd, pf)}")
 
     print(f"저장소   : {repo_cwd or '(못 찾음)'}" + (f"  [{how}]" if how else ""))
     print(f"직전 라운드: {rd.name}  (gate={gate}, verdict={verdict})")
@@ -407,9 +415,10 @@ def main():
     if not ran:
         print("\n▶ 이 라운드는 준비만 됐고 아직 실행되지 않았다.")
         if repo_cwd:
-            print(f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n"
-                  f"  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-                  f"    --cwd {repo_cwd} --gate {gate} --context {ctx_path} --out {rd}")
+            print(f"  {ctx_path} 의 '{TODO}' 표시된 절을 채운 뒤 실행한다:\n  "
+                  + shell_command("python3", HOME_DIR / "scripts" / "run_round.py",
+                                  "--cwd", repo_cwd, "--gate", gate,
+                                  "--context", ctx_path, "--out", rd))
         else:
             # 워크트리를 모르면 경로 박힌 명령을 내지 않는다 — 구 레이아웃이면 run_round 가
             # 실행 시작 시점에 자동 이전해 그 경로가 사라진다(code-2 P1). 대상 워크트리에서
@@ -432,8 +441,7 @@ def main():
         print(f"\n⚠ 축 {','.join(missing)} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
               f"  원인 — {' · '.join(why)}\n"
               f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
-              f"    python3 {HOME_DIR/'scripts'/'run_round.py'} --cwd {repo_cwd or '<워크트리 경로>'} \\\n"
-              f"      --gate {gate} --merge-into {rd} --reviewers {','.join(missing)}")
+              f"    {round_command(repo_cwd, gate, rd, missing)}")
         return
     if not dec_path.exists():
         print("\n▶ 다음 할 일: 이 라운드의 findings 가 아직 처리되지 않았다.\n"
@@ -452,10 +460,13 @@ def main():
             if gate == "plan":
                 if doc := next((f.name for f in sorted(rd.glob("plan*.md"))), None):
                     print(f"  구현 대상 계획서: {rd/doc}")
-                print(f"  구현 완료 후:  python3 {Path(__file__)} --next code{keysuf}")
+                print("  구현 완료 후:  " + shell_command(
+                    "python3", Path(__file__).resolve(), "--next", "code",
+                    *([keysuf.strip()] if keysuf else [])))
         else:
-            print(f"\n▶ verdict={verdict} — 같은 게이트로 라운드를 더 돈다:"
-                  f"\n  python3 {Path(__file__)} --next {gate}{keysuf}")
+            print(f"\n▶ verdict={verdict} — 같은 게이트로 라운드를 더 돈다:\n  "
+                  + shell_command("python3", Path(__file__).resolve(), "--next", gate,
+                                  *([keysuf.strip()] if keysuf else [])))
         return
 
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{a.next_gate}-*")
@@ -493,9 +504,9 @@ def main():
         return
     # --out 을 명시한다. 생략하면 run_round.py 가 자동번호로 다음 디렉토리를 새로 만들어
     # 준비한 컨텍스트와 결과가 다른 라운드로 갈라진다.
-    print(f"\n▶ 갱신 후 실행:\n  python3 {HOME_DIR/'scripts'/'run_round.py'} \\\n"
-          f"    --cwd {repo_cwd} --gate {a.next_gate} \\\n"
-          f"    --context {out/'context.md'} --out {out}")
+    print("\n▶ 갱신 후 실행:\n  " + shell_command(
+        "python3", HOME_DIR / "scripts" / "run_round.py", "--cwd", repo_cwd,
+        "--gate", a.next_gate, "--context", out / "context.md", "--out", out))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,40 @@
+README.md
+  h_d82ccb34241a0d 52
+pr-triage/SKILL.md
+  h_d82ccb34241a0d 144
+pr-triage/references/measurement.md
+  h_d82ccb34241a0d 25-27
+pr-triage/scripts/fetch_comments.py
+  h_d82ccb34241a0d 15,318-319,321
+pr-triage/scripts/test_fetch_comments.py
+  h_d82ccb34241a0d 5,8,207-216
+pr-triage/scripts/watch_comments.py
+  h_d82ccb34241a0d 15,84-85,87
+red-team/SKILL.md
+  h_d82ccb34241a0d 183
+red-team/references/engines.md
+  h_d82ccb34241a0d 103
+red-team/references/plan-coverage.md
+  h_d82ccb34241a0d 41
+red-team/scripts/resume.py
+  h_d82ccb34241a0d 19,34-43,398,402,418-421,444,463-465,467-469,507-509
+red-team/scripts/run_round.py
+  h_d82ccb34241a0d 26,33-36,156-157,1264-1267,1283,1289,1296,1304
+red-team/scripts/test_carry_forward.py
+  h_d82ccb34241a0d 122,124,157-161
+red-team/scripts/test_engine_config.py
+  h_d82ccb34241a0d 6,19,281-295,354-357
+tools/check_skill_docs.py
+  h_d82ccb34241a0d 63-66
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "e61ff0d308576e5f23aa5bdc687cc74c07f9b8f7",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

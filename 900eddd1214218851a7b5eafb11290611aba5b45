@@ -1,0 +1,30 @@
+pr-triage/scripts/fetch_comments.py
+  h_d82ccb34241a0d 15,79-193,219,228-250,271-282,289-335,512-513,613,622-636,639-640
+pr-triage/scripts/post_replies.py
+  h_d82ccb34241a0d 140-141,143,145-151,160-161,179-185,203-204
+pr-triage/scripts/test_fetch_comments.py
+  h_d82ccb34241a0d 5,63-65,89-171,244-252,277-291,293,295,297-326,335-380
+pr-triage/scripts/test_post_replies.py
+  h_d82ccb34241a0d 5,14-15,135-140,142-143,162-166,172-217
+pr-triage/scripts/test_watch_comments.py
+  h_d82ccb34241a0d 1-131
+pr-triage/scripts/watch_comments.py
+  h_d82ccb34241a0d 19-20,27-45,53-54,88-89,92,95-101,105,107,125,127,132
+red-team/references/engines.md
+  h_d82ccb34241a0d 14-15
+red-team/scripts/run_round.py
+  h_d82ccb34241a0d 938-939,942-1030
+red-team/scripts/test_engine_config.py
+  h_d82ccb34241a0d 209-401
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "900eddd1214218851a7b5eafb11290611aba5b45",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

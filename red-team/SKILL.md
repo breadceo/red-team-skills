@@ -20,8 +20,7 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 | **계획** | 구현 전, 계획 문서가 있을 때 | `a-plan` + `b5-plan-ordering` |
 | **코드** | 구현 후, 커밋·PR 전 | `a-code` + `b1-state-matrix` + `b2-interaction` + `b3-visibility` + `b4-null-propagation` |
 
-계획 게이트를 건너뛰지 않는다 — 이미 쓴 코드는 버리기 아까워서 계획이 코드에 맞춰 휘어지고,
-계획 단계의 결함이 압도적으로 싸다.
+계획 게이트를 건너뛰지 않는다.
 
 코드 게이트는 **UI 파일이 있든 없든 5축을 다 돌린다** — UI 가 없으면 빈 손 종료가
 정상이다. "이번엔 생략" 판단이 놓치는 결함이 정확히 창립 사례의 그것들이다. 비용 절감은
@@ -222,6 +221,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | `references/zax.md` | zax 워크플로우와 함께 쓸 때만 |
 | `references/moe.md` | `--lean`/MoE 를 켜거나 켜진 상태를 이어받았을 때 |
 | `references/plan-drift.md` | 구현 중 계획 수정 시, 계획서 신선도 경고 시 |
+| `references/archive-runs.md` | `~/.red-team` 용량 계측·오래된 raw 산출물 정리 시 |
 | `references/evidence.md` | 규칙의 실측 근거 확인·규칙 완화 검토 시 |
 | `references/design.md` | 설계 배경·eval 이력·기각 대안, 축·정책 변경 검토 시 |
 | `assets/context-template.md` | 1단계에서 복사해 채우는 context.md 템플릿 |

@@ -42,6 +42,7 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ### 🗜️ red-team — 오래된 리뷰 산출물 아카이브 (#18)
 
+- 완료된 라운드 뒤 30일 지난 `runs2` 대상은 자동으로 압축하며, 실패해도 리뷰 판정은 유지한다.
 - 기본 dry-run으로 30일 지난 raw·prompt·superseded 파일의 예상 절감량을 먼저 확인한다.
 - `coverage == "full"`이고 advisory lock을 잡을 수 있는 완료 라운드만 처리한다.
 - stdlib gzip을 검증한 뒤 원자적 no-clobber 게시하고 원본을 삭제한다.

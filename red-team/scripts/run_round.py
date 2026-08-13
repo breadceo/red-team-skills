@@ -60,6 +60,22 @@ def lock_migrations(home: Path = HOME_DIR, *, exclusive: bool):
     fd = os.open(home, flags)
     fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     return fd
+
+
+def auto_archive(archive_fn=None):
+    if os.environ.get("RED_TEAM_DISABLE_AUTO_ARCHIVE") == "1":
+        return
+    try:
+        if archive_fn is None:
+            from archive_runs import archive as archive_fn
+        result = archive_fn(HOME_DIR, older_than=30, apply=True, include_legacy=False)
+    except Exception as e:
+        print(f"⚠ 자동 아카이브 실패(리뷰 판정은 유지): {e}", flush=True)
+        return
+    if any(result.values()):
+        print(f"auto-archive: files={result['files']} "
+              f"saved={result['original'] - result['compressed']} "
+              f"busy_rounds={result['busy']} conflicts={result['conflicts']}")
 # v2 라운드 루트. 구 루트(runs/)와 **경로 공간을 통째로 분리**한 이유(issue #8 code-7):
 # 구 레이아웃의 키는 slug 산출물 전체라, 새 키를 아무리 단사로 설계해도 이미 디스크에 있는
 # 구 디렉토리가 새 키 자리를 선점하는 전환기 충돌(스쿼팅)을 막을 수 없었다. 루트가 다르면
@@ -1434,6 +1450,10 @@ def main():
             print(f"⚠ 축 {','.join(merged['unparsed'])} 가 결과를 내지 못한 GO 다 (coverage=partial) — "
                   f"게이트 통과가 아니다.\n"
                   f"  위 안내대로 그 축만 재실행해 이 라운드에 병합한 뒤의 verdict 가 판정이다.")
+
+    if round_lock is not None:
+        round_lock.close()
+    auto_archive()
 
 
 if __name__ == "__main__":

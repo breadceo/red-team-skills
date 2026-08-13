@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """오래된 red-team raw 산출물을 계측하거나 검증된 gzip으로 교체한다."""
-import argparse, fcntl, gzip, json, os, re, shutil, stat, tempfile, time
+import argparse, errno, fcntl, gzip, json, os, re, shutil, stat, tempfile, time
 from pathlib import Path
 
 import run_round
@@ -8,6 +8,7 @@ import run_round
 HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 ROUND_RE = re.compile(r"(?:plan|code)-\d+")
 CHUNK = 1024 * 1024
+ROUND_INACCESSIBLE = object()
 
 
 class Counter:
@@ -31,8 +32,10 @@ def lock_round(round_dir: Path, *, exclusive: bool):
         if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
             lock.close()
             return None
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as e:
+        return None if e.errno == errno.ELOOP else ROUND_INACCESSIBLE
     try:
         mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
         fcntl.flock(lock.fileno(), mode | fcntl.LOCK_NB)
@@ -45,7 +48,7 @@ def lock_round(round_dir: Path, *, exclusive: bool):
 def child_dirs(parent: Path):
     try:
         children = sorted(parent.iterdir())
-    except OSError:
+    except FileNotFoundError:
         return
     for child in children:
         if not child.is_symlink() and child.is_dir():
@@ -59,6 +62,9 @@ def locked_rounds(root: Path, *, exclusive: bool):
                 if not ROUND_RE.fullmatch(rd.name):
                     continue
                 lock = lock_round(rd, exclusive=exclusive)
+                if lock is ROUND_INACCESSIBLE:
+                    yield rd, ROUND_INACCESSIBLE, None
+                    continue
                 if lock is False:
                     yield rd, None, None
                     continue
@@ -166,6 +172,9 @@ def archive(home: Path, *, older_than: int, apply: bool, include_legacy: bool):
             if root.is_symlink():
                 continue
             for rd, state, lock in locked_rounds(root, exclusive=apply):
+                if state is ROUND_INACCESSIBLE:
+                    totals["conflicts"] += 1
+                    continue
                 if lock is None:
                     totals["busy"] += 1
                     continue

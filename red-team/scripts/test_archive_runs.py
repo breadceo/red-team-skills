@@ -3,6 +3,7 @@
 import gzip, hashlib, importlib, io, json, os, sys, tempfile, threading, time
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -94,6 +95,33 @@ def main():
         assert empty == {"files": 0, "original": 0, "compressed": 0,
                          "busy": 0, "conflicts": 0}
         assert not missing_home.exists() and {p.name for p in home.iterdir()} == parent_before
+        no_runs_home = home / "no-runs"
+        no_runs_home.mkdir()
+        assert archive_runs.archive(no_runs_home, older_than=30, apply=False,
+                                    include_legacy=False) == empty
+        real_iterdir = Path.iterdir
+        def deny_runs2(path):
+            if path == home / "runs2":
+                raise PermissionError("denied")
+            return real_iterdir(path)
+        with patch.object(Path, "iterdir", deny_runs2):
+            try:
+                archive_runs.archive(home, older_than=30, apply=False, include_legacy=False)
+                raise AssertionError("runs2 열거 실패를 대상 0건으로 숨기면 안 된다")
+            except PermissionError as e:
+                assert str(e) == "denied"
+        denied_home = home / "denied-home"
+        denied_round = write_round(denied_home / "runs2" / "owner" / "main", "plan-1")
+        real_open = os.open
+        def deny_round_json(path, flags, *args):
+            if Path(path) == denied_round / "round.json":
+                raise PermissionError("denied round.json")
+            return real_open(path, flags, *args)
+        with patch.object(archive_runs.os, "open", deny_round_json):
+            denied_result = archive_runs.archive(denied_home, older_than=30, apply=False,
+                                                 include_legacy=False)
+        assert denied_result == {"files": 0, "original": 0, "compressed": 0,
+                                 "busy": 0, "conflicts": 1}, denied_result
         before = fingerprint(home)
         result = archive_runs.archive(home, older_than=30, apply=False, include_legacy=False)
         assert fingerprint(home) == before, "dry-run이 파일 또는 lock을 만들거나 바꿨다"

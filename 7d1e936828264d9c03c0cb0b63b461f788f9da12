@@ -1,0 +1,24 @@
+CHANGELOG.md
+  h_d82ccb34241a0d 45
+red-team/references/archive-runs.md
+  h_d82ccb34241a0d 3-6,16
+red-team/scripts/archive_runs.py
+  h_d82ccb34241a0d 3,11,35,37-38,51,65-67,175-177
+red-team/scripts/run_round.py
+  h_d82ccb34241a0d 63-78,1454-1457
+red-team/scripts/test_archive_runs.py
+  h_d82ccb34241a0d 6,98-124
+red-team/scripts/test_engine_config.py
+  h_d82ccb34241a0d 6-7,14,24-39,426,431-433,435-436,456-457,470-471
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "7d1e936828264d9c03c0cb0b63b461f788f9da12",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

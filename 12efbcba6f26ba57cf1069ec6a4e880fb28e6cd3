@@ -1,0 +1,14 @@
+red-team/scripts/run_round.py
+  h_d82ccb34241a0d 26,37-62,612,614-623,625-638,1152-1157,1275
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "12efbcba6f26ba57cf1069ec6a4e880fb28e6cd3",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

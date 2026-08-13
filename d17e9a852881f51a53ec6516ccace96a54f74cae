@@ -1,0 +1,22 @@
+CHANGELOG.md
+  h_d82ccb34241a0d 41-49
+red-team/SKILL.md
+  h_d82ccb34241a0d 23,224
+red-team/references/archive-runs.md
+  h_d82ccb34241a0d 1-13
+red-team/references/evidence.md
+  h_d82ccb34241a0d 70-74
+tools/check_skill_docs.py
+  h_d82ccb34241a0d 63-64
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "d17e9a852881f51a53ec6516ccace96a54f74cae",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

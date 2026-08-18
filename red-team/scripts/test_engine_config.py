@@ -3,13 +3,15 @@
 
 usage: python3 test_engine_config.py
 """
-import importlib, json, os, shlex, subprocess, sys, tempfile
+import gzip, importlib, io, json, os, shlex, subprocess, sys, tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
 def load(home: Path):
     os.environ["RED_TEAM_HOME"] = str(home)
     os.environ.pop("RED_TEAM_ENGINE", None)
+    os.environ.pop("RED_TEAM_DISABLE_AUTO_ARCHIVE", None)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import run_round
     return importlib.reload(run_round)
@@ -18,6 +20,22 @@ def load(home: Path):
 def main():
     with tempfile.TemporaryDirectory(prefix="red team ") as td:
         rr = load(Path(td))
+
+        archive_calls = []
+        result = {"files": 2, "original": 100, "compressed": 40,
+                  "busy": 0, "conflicts": 0}
+        with redirect_stdout(io.StringIO()) as output:
+            rr.auto_archive(lambda home, **kwargs: archive_calls.append((home, kwargs)) or result)
+        assert archive_calls == [(Path(td), {"older_than": 30, "apply": True,
+                                             "include_legacy": False})]
+        assert "files=2 saved=60" in output.getvalue()
+        os.environ["RED_TEAM_DISABLE_AUTO_ARCHIVE"] = "1"
+        rr.auto_archive(lambda *_args, **_kwargs: archive_calls.append("disabled"))
+        del os.environ["RED_TEAM_DISABLE_AUTO_ARCHIVE"]
+        assert "disabled" not in archive_calls
+        with redirect_stdout(io.StringIO()) as output:
+            rr.auto_archive(lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk")))
+        assert "자동 아카이브 실패" in output.getvalue() and "disk" in output.getvalue()
 
         # config 없고 환경변수도 없으면 라운드를 돌리지 않고 최초 설정으로 돌려보낸다
         try:
@@ -101,8 +119,6 @@ def main():
             pass
 
         # show_assignments: 오버라이드 표시 + 추천(기본) 병기 + 축 성격(why) 출력
-        import io
-        from contextlib import redirect_stdout
         rr.set_assignment("b3-visibility=codex/gpt-5.6-luna/low")
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -407,12 +423,17 @@ def main():
                 "{ echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'; }")
         rr.engine_cmd = lambda e, p, c, m, ef: (["/bin/sh", "-c", fake], dict(os.environ), p)
         rr.set_engine("codex,claude")
-        out = Path(td) / "e2e"
+        out = Path(td) / "runs2" / "owner__repo" / "branch" / "code-1"
         ctx = Path(td) / "ctx.md"
         ctx.write_text("## 리뷰 대상\n(테스트) STDIN-MARKER\n")
         sys.argv = ["run_round.py", "--cwd", td, "--context", str(ctx),
                     "--gate", "code", "--out", str(out)]
+        original_auto_archive = rr.auto_archive
+        auto_triggers = []
+        rr.auto_archive = lambda: auto_triggers.append(True)
         rr.main()
+        rr.auto_archive = original_auto_archive
+        assert auto_triggers == [True], auto_triggers
         rj = json.loads((out / "round.json").read_text())
         assert rj["verdict"] == "GO" and rj["engine"] == "codex+claude", rj
         assert set(rj["assignments"]) == set(rj["reviewers"]) and len(rj["reviewers"]) == 5
@@ -432,6 +453,8 @@ def main():
                            "severity": "P2", "claim": "남아야 한다"}]
         (out / "round.json").write_text(json.dumps(rj, ensure_ascii=False))
         (out / "b1-state-matrix.txt").write_text("이전 raw")
+        old = 0
+        os.utime(out / "b1-state-matrix.txt", (old, old))
         sys.argv = ["run_round.py", "--gate", "code",
                     "--merge-into", str(out), "--reviewers", "b1-state-matrix"]
         rr.main()
@@ -444,8 +467,8 @@ def main():
         # 감사 기록: 교체 사실이 남고 이전 raw 출력이 보존된다
         assert m["reruns"][0]["reviewer"] == "b1-state-matrix", m.get("reruns")
         assert m["reruns"][0]["was"] == "PARSE-FAIL" and m["reruns"][0]["was_access_errors"] == 3
-        sup = list(out.glob("b1-state-matrix.superseded-*.txt"))
-        assert len(sup) == 1 and sup[0].read_text() == "이전 raw", sup
+        sup = list(out.glob("b1-state-matrix.superseded-*.txt.gz"))
+        assert len(sup) == 1 and gzip.open(sup[0], "rt").read() == "이전 raw", sup
         assert m["repo_cwd"] == str(Path(td).resolve()), "병합이 repo_cwd 를 잃었다"
 
         # e2e: 한 축만 파싱 불가한 출력을 내는 라운드 — 출력 문구·round.json 까지 실제 경로로 확인

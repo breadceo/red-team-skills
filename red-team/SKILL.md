@@ -225,6 +225,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | `references/moe.md` | `--lean`/MoE 를 켜거나 켜진 상태를 이어받았을 때 |
 | `references/plan-drift.md` | 구현 중 계획 수정 시, 계획서 신선도 경고 시 |
 | `references/fix-writing.md` | **fix 에 *같은·기존·둘 다·N곳에* 류가 들어갈 때** (findings 처리) |
+| `references/archive-runs.md` | `~/.red-team` 용량 계측·오래된 raw 산출물 정리 시 |
 | `references/evidence.md` | 규칙의 실측 근거 확인·규칙 완화 검토 시 |
 | `references/design.md` | 설계 배경·eval 이력·기각 대안, 축·정책 변경 검토 시 |
 | `assets/context-template.md` | 1단계에서 복사해 채우는 context.md 템플릿 |

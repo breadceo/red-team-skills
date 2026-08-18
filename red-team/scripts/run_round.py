@@ -23,7 +23,7 @@ usage:
 프롬프트를 stdin 으로 받는 엔진(codex)은 프롬프트를 흘려보낸 뒤 stdin 을 닫아 EOF 를 준다.
 그렇지 않은 엔진은 stdin 을 DEVNULL 로 고정한다 — 열어 두면 EOF 를 기다리며 교착한다.
 """
-import argparse, errno, hashlib, json, os, re, shlex, shutil, subprocess, sys, time
+import argparse, errno, fcntl, hashlib, json, os, re, shlex, shutil, stat, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -34,6 +34,48 @@ HOME_DIR = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 
 def shell_command(*args) -> str:
     return shlex.join(str(arg) for arg in args)
+
+
+def lock_round(out: Path):
+    path = out / "round.json"
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lock = os.fdopen(os.open(path, flags), "r+b")
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+            raise OSError("regular file이 아니다")
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        if "lock" in locals():
+            lock.close()
+        if not isinstance(e, BlockingIOError):
+            sys.exit(f"라운드 lock을 안전하게 열 수 없다: {path}: {e}")
+        sys.exit(f"라운드가 이미 아카이브 중이거나 round.json을 안전하게 잠글 수 없다: {path}")
+    return lock
+
+
+def lock_migrations(home: Path = HOME_DIR, *, exclusive: bool):
+    if not home.is_dir() or home.is_symlink():
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(home, flags)
+    fcntl.flock(fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    return fd
+
+
+def auto_archive(archive_fn=None):
+    if os.environ.get("RED_TEAM_DISABLE_AUTO_ARCHIVE") == "1":
+        return
+    try:
+        if archive_fn is None:
+            from archive_runs import archive as archive_fn
+        result = archive_fn(HOME_DIR, older_than=30, apply=True, include_legacy=False)
+    except Exception as e:
+        print(f"⚠ 자동 아카이브 실패(리뷰 판정은 유지): {e}", flush=True)
+        return
+    if any(result.values()):
+        print(f"auto-archive: files={result['files']} "
+              f"saved={result['original'] - result['compressed']} "
+              f"busy_rounds={result['busy']} conflicts={result['conflicts']}")
 # v2 라운드 루트. 구 루트(runs/)와 **경로 공간을 통째로 분리**한 이유(issue #8 code-7):
 # 구 레이아웃의 키는 slug 산출물 전체라, 새 키를 아무리 단사로 설계해도 이미 디스크에 있는
 # 구 디렉토리가 새 키 자리를 선점하는 전환기 충돌(스쿼팅)을 막을 수 없었다. 루트가 다르면
@@ -583,28 +625,33 @@ def _migrate_legacy(cwd: str, branch: str, new: Path) -> None:
     v2 루트는 구 루트와 경로 공간이 분리돼 있어 new 가 있으면 항상 v2 코드가 만든
     정당한 기록이다 — 스쿼팅 검사(code-3·4·7 의 경고들)가 필요 없어졌다.
     """
-    src, blocked = _migration_state(cwd, branch, new)
-    if blocked:
-        state, p = blocked
-        why = (f"기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전"
-               if state == "foreign" else
-               f"기록의 워크트리 {p} 의 소유 확인에 실패했다(권한·I/O 등) — "
-               f"불일치로 단정하지 않는다. 확인 가능해지면 다시 시도된다")
-        print(f"⚠ 구 라운드 디렉토리를 두고 간다\n  ({why})", flush=True)
-        return
-    if src is None:
-        return
-    new.parent.mkdir(parents=True, exist_ok=True)
+    migration_fd = lock_migrations(HOME_DIR, exclusive=True)
     try:
-        src.rename(new)
-    except OSError:
-        # 동시 branch_dir() 경합 — 같은 목적지끼리는 new 가 생겨 있고, 서로 다른 저장소가
-        # 판정 불가 legacy 를 각자의 키로 다투면 src 만 사라진다(code-5 P2). 어느 쪽이든
-        # "다른 소비처가 먼저 이전했다"이므로 정상 반환한다.
-        if new.exists() or not src.is_dir():
+        src, blocked = _migration_state(cwd, branch, new)
+        if blocked:
+            state, p = blocked
+            why = (f"기록의 워크트리 {p} 의 origin 이 현재와 다르다 — 필요하면 수동 이전"
+                   if state == "foreign" else
+                   f"기록의 워크트리 {p} 의 소유 확인에 실패했다(권한·I/O 등) — "
+                   f"불일치로 단정하지 않는다. 확인 가능해지면 다시 시도된다")
+            print(f"⚠ 구 라운드 디렉토리를 두고 간다\n  ({why})", flush=True)
             return
-        raise
-    print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
+        if src is None:
+            return
+        new.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            src.rename(new)
+        except OSError:
+            # 동시 branch_dir() 경합 — 같은 목적지끼리는 new 가 생겨 있고, 서로 다른 저장소가
+            # 판정 불가 legacy 를 각자의 키로 다투면 src 만 사라진다(code-5 P2). 어느 쪽이든
+            # "다른 소비처가 먼저 이전했다"이므로 정상 반환한다.
+            if new.exists() or not src.is_dir():
+                return
+            raise
+        print(f"runs2/ 키 이전(issue #8): {src} → {new}", flush=True)
+    finally:
+        if migration_fd is not None:
+            os.close(migration_fd)
 
 
 def migration_blocked(cwd: str):
@@ -1118,8 +1165,12 @@ def merge_prepare(target: Path, reviewers: list[str]) -> dict:
     stamp = time.strftime("%Y%m%dT%H%M%S")
     for r in reviewers:
         for suf in (".txt", ".json", ".prompt.md"):
-            if (old := target / f"{r}{suf}").exists():
-                old.rename(target / f"{r}.superseded-{stamp}{suf}")
+            plain = target / f"{r}{suf}"
+            compressed = target / f"{r}{suf}.gz"
+            if plain.exists():
+                plain.rename(target / f"{r}.superseded-{stamp}{suf}")
+            if compressed.exists():
+                compressed.rename(target / f"{r}.superseded-{stamp}{suf}.gz")
         merged.setdefault("reruns", []).append(
             {"reviewer": r, "at": stamp, "was": (merged.get("reviewers") or {}).get(r),
              "was_access_errors": (merged.get("access_errors") or {}).get(r),
@@ -1237,6 +1288,7 @@ def main():
                          if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
     out = Path(a.merge_into) if a.merge_into else (Path(a.out) if a.out else resolve_out(a.cwd, a.gate))
     out.mkdir(parents=True, exist_ok=True)
+    round_lock = lock_round(out) if (out / "round.json").exists() else None
     if not a.merge_into:
         # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
         (out / "context.md").write_text(context)
@@ -1398,6 +1450,10 @@ def main():
             print(f"⚠ 축 {','.join(merged['unparsed'])} 가 결과를 내지 못한 GO 다 (coverage=partial) — "
                   f"게이트 통과가 아니다.\n"
                   f"  위 안내대로 그 축만 재실행해 이 라운드에 병합한 뒤의 verdict 가 판정이다.")
+
+    if round_lock is not None:
+        round_lock.close()
+    auto_archive()
 
 
 if __name__ == "__main__":

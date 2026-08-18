@@ -7,9 +7,8 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 
 ## 왜 이 스킬이 있나
 
-혼자 쓴 코드를 혼자 검토하면 이미 옳다고 믿는 축에서만 검토한다. 코드 정합성 축 하나로
-8라운드 GO 를 받은 변경이 PR 자동 리뷰에서 실제 결함 6건을 맞은 것이 창립 사례다
-(`references/evidence.md`) — 그래서 축을 나눠 **독립된 리뷰어를 동시에** 돌린다.
+혼자 쓴 코드를 혼자 검토하면 이미 옳다고 믿는 축에서만 검토한다 — 그래서 축을 나눠
+**독립된 리뷰어를 동시에** 돌린다(창립 사례: `references/evidence.md`).
 **리뷰어는 지목한 곳만 본다** — 축 프롬프트 전부가 "전수 나열하라"로 시작하는 이유이고,
 어겨지면 recall 이 바로 떨어진다.
 
@@ -20,11 +19,11 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 | **계획** | 구현 전, 계획 문서가 있을 때 | `a-plan` + `b5-plan-ordering` |
 | **코드** | 구현 후, 커밋·PR 전 | `a-code` + `b1-state-matrix` + `b2-interaction` + `b3-visibility` + `b4-null-propagation` |
 
-계획 게이트를 건너뛰지 않는다.
+**계획 게이트를 건너뛰지 않는다**(이유: `references/evidence.md`).
 
 코드 게이트는 **UI 파일이 있든 없든 5축을 다 돌린다** — UI 가 없으면 빈 손 종료가
 정상이다. "이번엔 생략" 판단이 놓치는 결함이 정확히 창립 사례의 그것들이다. 비용 절감은
-옵트인 MoE(`references/moe.md`)로 한다 — 생략이 아니라 유예라, GO 는 전체 축에서만 확정된다.
+옵트인 MoE(`references/moe.md`)로 한다 — **생략이 아니라 유예다.**
 
 ## 라운드 실행
 
@@ -41,17 +40,15 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 **`assets/context-template.md` 를 복사해 채운다.** 절별 규칙:
 
 - `## 변경 대상 인벤토리` — **라운드 수를 줄이는 장치.** 목록을 뽑은 **명령을 함께
-  적는다** — 리뷰어가 재실행해 전수 주장을 반증할 수 있다. 외부 신호는 **보장하지 않는
-  것**까지 적는다. SDK·라이브러리 주장의 근거 우선순위는 템플릿에 있다 — 인용 없는 주장은
-  무효다. (실측: `references/evidence.md`)
+  적는다.** 외부 신호는 **보장하지 않는 것**까지 적는다. SDK·라이브러리 주장은 템플릿의
+  근거 우선순위를 따른다 — **인용 없는 주장은 무효다.** (이유: `references/evidence.md`)
 - `## 스코프 밖` 과 `## 이미 반영된 지적` 이 **수렴 장치**다. 비어 있으면 라운드가 같은
   지적을 되풀이하며 끝나지 않는다. 라운드마다 반드시 갱신한다.
 - `## 티켓` 은 선택 절 — 적어두면 게이트 GO 시점에 그 산출물을 최신화한다
   (`references/external-sync.md`). 없으면 그 기능만 조용히 꺼진다. 이관 시 자동 승계된다.
 
-**계획 게이트의 첫 라운드 전에는 `references/plan-coverage.md` 를 읽고 문서 6-구조 +
-계획 생존성 clarify 를 수행한다.** `누락` 행은 사용자에게 물어 해소하고, **보류가 남으면
-라운드를 돌리지 않는다.** 결과는 context.md 의 `## 판정 기준` 절에 남긴다.
+**계획 게이트의 첫 라운드 전에는 `references/plan-coverage.md` 를 읽고 그 clarify 절차를
+수행한다** — **보류가 남으면 라운드를 돌리지 않는다.**
 
 ### 2. 돌린다
 
@@ -62,11 +59,10 @@ python3 "<red-team-skill>/scripts/run_round.py" \
   --cwd "<저장소 경로>" --gate code --context "<context.md 경로>"
 ```
 
-계획 게이트는 `--gate plan`. 코드 게이트는 러너가 `git diff` 를 **한 번** 떠서 리뷰어
-전원의 프롬프트에 `## Diff 스냅샷` 으로 첨부한다(`diff.md` 로 보존 — 실측:
-`references/evidence.md`). 기본은 작업 트리, **브랜치 diff 면 `--diff-base <base>`** —
-`## 리뷰 대상` 과 같은 기준이어야 한다. 200K자 초과면 안내만 한다. context.md 에 diff 를
-직접 붙이지 않는다 — 이관되는 사람 문서라 낡은 채 승계된다.
+계획 게이트는 `--gate plan`. 코드 게이트는 러너가 diff 를 **한 번** 떠서 리뷰어 전원에게
+첨부한다(이유: `references/evidence.md`). 기본은 작업 트리, **브랜치 diff 면
+`--diff-base <base>`** — `## 리뷰 대상` 과 같은 기준이어야 한다. 200K자 초과면 안내만 한다.
+**context.md 에 diff 를 직접 붙이지 않는다.**
 
 ### 산출물은 저장소 밖에 쌓인다
 
@@ -78,11 +74,9 @@ python3 "<red-team-skill>/scripts/run_round.py" \
     <reviewer>.superseded-<stamp>.*  ← 재실행으로 교체된 산출물 (지우지 않는다)
 ```
 
-**포인터 파일은 없다** — `<owner>__<repo>/<branch키>` 가 곧 키다(키 설계·구 `runs/` 자동
-이전·포인터 폐지 이력: `references/evidence.md`). 저장소 안에 쌓으면 `git status` 가
-흔들리고 PR 에 섞인다. "이미 반영된 지적"은 **직전 라운드의 `round.json` 을 그대로
-읽는다** — 기억에 의존하지 않는다. `--out` 은 eval 용 별도 경로 — `resume.py` 가 찾지
-않아 실험이 진행을 오염시키지 않는다.
+**포인터 파일은 없다** — `<owner>__<repo>/<branch키>` 가 곧 키다(설계·자동 이전·저장
+위치의 이유: `references/evidence.md`). "이미 반영된 지적"은 **직전 라운드의 `round.json`
+을 그대로 읽는다** — 기억에 의존하지 않는다. **`--out` 은 eval 용 별도 경로다.**
 
 ### 부분 실패가 나면 — 라운드를 버리지 않는다
 
@@ -111,6 +105,15 @@ python3 "<red-team-skill>/scripts/run_round.py" \
 
 **P1 — 하나씩 보여준다.** `claim`/`failure`/`fix` 를 그대로 보여주고 네 판단(실재하는가,
 어떻게 고칠 것인가)을 한 줄 덧붙인다. 결정을 대신하지 않는다.
+
+### fix 를 쓸 때 — "이미 있는 것" 을 가리키는 순간
+
+**이관된 fix 는 적힌 만큼만 반영된다** — 세션 분리가 기본이라 **fix 문장이 곧 실행 단위다.**
+fix 에 *같은 · 그대로 · 기존 · 둘 다 · 양쪽 · N곳에* 류가 들어갔으면
+**`references/fix-writing.md` 의 세 검사를 통과시킨다** — ① 조건은 가리키지 말고 적는다
+② 묶기 전에 각 자리가 **유일한 출구**인지 본다 ③ "기존 X 가 받는다" 전에 X 의 전제를 본다.
+**심각도와 무관하다**(P2·P1 양쪽에서 나왔다). 통과하지 못하는데 선택을 가르는 값을 잴 수
+없으면 **fix 를 고르지 말고 갈래와 비용만 적어 넘겨도 된다.**
 
 ### 처리 결과를 decisions.md 로 남긴다 — 다음 라운드의 입력이다
 
@@ -154,8 +157,8 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
   닫고 나머지는 근본 원인 기준 별도 티켓 + 다음 컨텍스트 `스코프 밖` 고정으로 GO 를 낸다.
 - 매 라운드 P1 이 **같은 파일**(same-origin) → 구조적 결합 신호다. (a) 그 사용부를 얇은
   어댑터 뒤로 격리하도록 계획을 바꾸거나 (b) 생존성 7·8행을 재심해 사용자에게
-  **중단(ABORTED)/피벗**을 올린다. `resume.py` 가 3라운드 연속 동일 파일을 자동 경고한다 —
-  같은 모듈로 흩어지는 반복은 사람이 같은 신호로 읽는다(실측: `references/evidence.md`).
+  **중단(ABORTED)/피벗**을 올린다. `resume.py` 가 3라운드 연속 동일 파일을 자동
+  경고한다(해석: `references/evidence.md`).
 
 ## 게이트 GO 후 — 외부 산출물 최신화
 
@@ -166,9 +169,9 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 
 ## 다른 세션에서 이어받기
 
-라운드의 입력은 `(저장소 경로, context.md)` 뿐이고 둘 다 디스크에 있다 — 그래서 구현
-세션과 리뷰 세션을 분리할 수 있고, 분리가 **권장 기본**이다(비용 실측:
-`references/evidence.md`). 이어받을 때는 이것만 실행한다:
+라운드의 입력은 `(저장소 경로, context.md)` 뿐이고 둘 다 디스크에 있다 — 구현 세션과
+리뷰 세션의 **분리가 권장 기본**이다(비용 실측: `references/evidence.md`). 이어받을 때는
+이것만 실행한다:
 
 ```bash
 python3 "<red-team-skill>/scripts/resume.py" [TICKET-123]
@@ -203,8 +206,8 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 
 ## 주의
 
-- 리뷰어는 **읽기 전용**으로 돈다(codex `--non-interactive-permissions deny`, claude
-  `--allowedTools Read,Grep,Glob,Bash`). 코드를 고치는 것은 이 스킬을 돌리는 쪽이다.
+- 리뷰어는 **읽기 전용**으로 돈다(엔진별 플래그: `references/engines.md`). 코드를
+  고치는 것은 이 스킬을 돌리는 쪽이다.
 - 전원 `PARSE-FAIL` = `verdict: INVALID`, 일부 실패 = `coverage: partial` — 둘 다 GO 가
   아니다. 처리는 `references/recovery.md`.
 - 커밋되지 않은 변경을 리뷰하는 동안 작업 트리를 건드리지 않는다 — 브랜치 변경·파일
@@ -221,6 +224,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | `references/zax.md` | zax 워크플로우와 함께 쓸 때만 |
 | `references/moe.md` | `--lean`/MoE 를 켜거나 켜진 상태를 이어받았을 때 |
 | `references/plan-drift.md` | 구현 중 계획 수정 시, 계획서 신선도 경고 시 |
+| `references/fix-writing.md` | **fix 에 *같은·기존·둘 다·N곳에* 류가 들어갈 때** (findings 처리) |
 | `references/archive-runs.md` | `~/.red-team` 용량 계측·오래된 raw 산출물 정리 시 |
 | `references/evidence.md` | 규칙의 실측 근거 확인·규칙 완화 검토 시 |
 | `references/design.md` | 설계 배경·eval 이력·기각 대안, 축·정책 변경 검토 시 |

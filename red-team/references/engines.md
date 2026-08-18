@@ -122,3 +122,9 @@ claude(또는 codex) 사용량이 다 떨어졌으면 축별 설정을 건드리
 이 전환을 먼저 제안한다 — 한도가 차기 *전에* 미리 설정해 두겠냐고 묻는 것도 좋다.
 혼합 라운드에서 한 엔진 소속 리뷰어가 전원 PARSE-FAIL 이 났을 때의 처리는
 `recovery.md`(verdict 의미론)를 본다.
+
+## 리뷰어를 읽기 전용으로 묶는 플래그
+
+러너가 엔진별로 붙인다(진실은 `scripts/run_round.py`) — codex 는
+`--non-interactive-permissions deny`, claude 는 `--allowedTools Read,Grep,Glob,Bash`.
+리뷰어가 코드를 고치지 못하는 것이 이 스킬의 전제이므로 이 플래그를 빼고 돌리지 않는다.

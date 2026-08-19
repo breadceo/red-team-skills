@@ -443,6 +443,18 @@ def main():
               f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
               f"    {round_command(repo_cwd, gate, rd, missing)}")
         return
+    # 축은 다 돌았는데(coverage=full) 축 스스로는 NO-GO 를 냈고 findings 가 0 이라 GO 로
+    # 집계된 라운드다 — partial 과 같은 이유로 게이트 통과가 아니고, 같은 자리에서 막는다
+    # (--next 경로도 여기서 함께 걸린다). 치유는 재실행이 아니라 사람이 근거를 읽는 것이다.
+    if verdict == "GO" and (dissent := rj.get("verdict_dissent")):
+        print(f"\n⚠ 축 {','.join(dissent)} 는 NO-GO 를 냈는데 findings 0 이라 GO 로 집계됐다 — "
+              f"게이트 통과가 아니다.\n"
+              f"  리뷰어가 라운드 밖 근거(미반영 지적·컨텍스트 지시)로 NO-GO 를 낸 경우다.\n"
+              f"  그 축의 raw 에서 근거를 읽고 판단한다: "
+              f"{', '.join(str(rd / f'{r}.txt') for r in dissent)}\n"
+              f"  근거가 아직 열린 결함이면 이 게이트로 라운드를 더 돈다 — 근거가 이미 닫혔으면\n"
+              f"  다음 라운드 context.md 의 `이미 반영된 지적` 에 적어 같은 NO-GO 가 반복되지 않게 한다.")
+        return
     if not dec_path.exists():
         print("\n▶ 다음 할 일: 이 라운드의 findings 가 아직 처리되지 않았다.\n"
               f"  {rd/'round.json'} 을 읽어 P1/P2 를 처리하고 {dec_path} 를 쓴다 (형식은 SKILL.md).")

@@ -22,7 +22,7 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 **계획 게이트를 건너뛰지 않는다**(이유: `references/evidence.md`).
 
 코드 게이트는 **UI 파일이 있든 없든 5축을 다 돌린다** — UI 가 없으면 빈 손 종료가
-정상이다. "이번엔 생략" 판단이 놓치는 결함이 정확히 창립 사례의 그것들이다. 비용 절감은
+정상이다(생략 판단이 놓치는 것: `references/evidence.md`). 비용 절감은
 옵트인 MoE(`references/moe.md`)로 한다 — **생략이 아니라 유예다.**
 
 ## 라운드 실행
@@ -140,7 +140,7 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 컨텍스트 작성 → 라운드 → P2 반영 + P1 결정 → '이미 반영/스코프 밖' 누적 → 다음 라운드
 ```
 
-**GO** = 전 리뷰어의 `regression` findings 0 (`round.json` 의 `verdict`). 종결은 **GO,
+**GO** = 전 리뷰어의 `regression` findings 0 + `verdict_dissent` 빔 (`round.json`). 종결은 **GO,
 또는 사람이 선언한 중단(`ABORTED`)** 뿐 — "GO 날 때까지"는 트리거 문구지 중단을 무시하는
 규약이 아니다.
 
@@ -162,7 +162,7 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 
 ## 게이트 GO 후 — 외부 산출물 최신화
 
-`## 티켓` 이 채워져 있고 `verdict: GO` + partial 아님 + `access_errors`·`보류` 없음이면
+`## 티켓` 이 채워져 있고 `verdict: GO` + partial 아님 + `access_errors`·`verdict_dissent`·`보류` 없음이면
 **`references/external-sync.md` 를 읽고 그대로 수행한다** — 계획 GO 는 티켓 본문 최신화,
 코드 GO 는 AC 코멘트 등록. 승인 없이 write 하지 않는다. `## 티켓` 이 없거나 비면 조용히
 건너뛴다(정상 케이스다).
@@ -208,8 +208,8 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 
 - 리뷰어는 **읽기 전용**으로 돈다(엔진별 플래그: `references/engines.md`). 코드를
   고치는 것은 이 스킬을 돌리는 쪽이다.
-- 전원 `PARSE-FAIL` = `verdict: INVALID`, 일부 실패 = `coverage: partial` — 둘 다 GO 가
-  아니다. 처리는 `references/recovery.md`.
+- 전원 `PARSE-FAIL` = `verdict: INVALID`, 일부 실패 = `coverage: partial`, 축이 findings
+  없이 NO-GO = `verdict_dissent` — 셋 다 GO 가 아니다. 처리는 `references/recovery.md`.
 - 커밋되지 않은 변경을 리뷰하는 동안 작업 트리를 건드리지 않는다 — 브랜치 변경·파일
   수정은 리뷰어를 흔들리는 바닥 위에 세운다.
 

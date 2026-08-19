@@ -11,7 +11,7 @@
 있다. 그래서 게이트를 통과한 시점에 최신화 초안을 만들어 사용자 승인을 받고 게시한다.
 
 **트리거** — `verdict: GO` + `coverage` 가 partial 이 아님 + `round.json` 의
-`access_errors` 가 비어 있음 + `decisions.md` 의 `보류` 가 비어 있음. `resume.py` 가
+`access_errors`·`verdict_dissent` 가 비어 있음 + `decisions.md` 의 `보류` 가 비어 있음. `resume.py` 가
 "다음 게이트로 가라"고 알려주는 그 시점이다. 파일접근오류가 남은 GO 는 신뢰 불가라
 외부에 게시하지 않는다 — 해당 축을 `--merge-into` 로 재실행해 오류를 지운 뒤가 트리거다.
 

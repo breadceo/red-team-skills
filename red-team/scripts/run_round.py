@@ -1123,6 +1123,12 @@ def recompute(merged: dict) -> dict:
     엔진이 로그인 안 됐거나 세션이 끊긴 경우와 구별되지 않는다 — claude 엔진 첫 실측에서
     `Not logged in` 한 줄만 받고도 GO 가 찍혔다. 그 GO 를 믿으면 리뷰 없이 커밋한다.
     병합 경로에서 findings 만 보고 재계산하면 이 규칙이 조용히 풀리므로 여기 한 곳에 둔다.
+
+    같은 계열의 세 번째 입구가 `verdict_dissent` 다 — 축이 findings 없이 `NO-GO` 를 내는
+    경우(라운드 밖 근거: 미반영 지적, context.md 의 지시)가 findings 수만 보는 계산에
+    흡수돼 `GO` 로 집계된다(실측: b2b PR #915 code-10, 5축 전원 NO-GO → 라운드 GO).
+    verdict 자체는 여전히 findings 에서만 도출한다 — 근거 없는 NO-GO 가 게이트를 세우는
+    것을 막는 방어라서 풀지 않는다. 대신 불일치를 조용히 버리지 않고 라운드에 남긴다.
     """
     reg = [f for f in merged["findings"] if f.get("classification") == "regression"]
     merged["verdict"] = ("INVALID" if merged["reviewers"]
@@ -1147,6 +1153,11 @@ def recompute(merged: dict) -> dict:
     merged["coverage"] = "partial" if (skipped or unparsed) else "full"
     merged["skipped"] = skipped
     merged["unparsed"] = unparsed
+    # 축이 GO 라고 안 한 GO — coverage 와 같은 성질이라 같은 자리에 남긴다. GO 일 때만
+    # 채운다(NO-GO·INVALID 라운드는 이미 통과가 아니라 불일치가 의미를 갖지 않는다).
+    # 병합(top-up)으로 그 축이 GO 를 내면 여기서 자동으로 비워진다.
+    merged["verdict_dissent"] = (sorted(r for r, v in merged["reviewers"].items() if v == "NO-GO")
+                                 if merged["verdict"] == "GO" else [])
     return merged
 
 
@@ -1450,6 +1461,14 @@ def main():
             print(f"⚠ 축 {','.join(merged['unparsed'])} 가 결과를 내지 못한 GO 다 (coverage=partial) — "
                   f"게이트 통과가 아니다.\n"
                   f"  위 안내대로 그 축만 재실행해 이 라운드에 병합한 뒤의 verdict 가 판정이다.")
+    if merged["verdict_dissent"]:
+        # 축은 다 돌았고(coverage=full) findings 도 0 인데 축 스스로는 NO-GO 를 냈다 —
+        # 라운드 밖 근거를 본 것이다. 치유 명령이 없는 유일한 경고다(재실행이 아니라
+        # 사람이 그 근거를 읽고 판단하는 자리다).
+        print(f"⚠ 축 {','.join(merged['verdict_dissent'])} 는 NO-GO 를 냈는데 findings 0 이라 GO 로 집계됐다.\n"
+              f"  리뷰어가 라운드 밖 근거(미반영 지적·컨텍스트 지시)로 NO-GO 를 낸 경우다 —\n"
+              f"  그 근거를 확인하기 전에는 게이트 통과가 아니다.\n"
+              f"  근거는 그 축의 raw 에 있다: {out}/<축>.txt")
 
     if round_lock is not None:
         round_lock.close()

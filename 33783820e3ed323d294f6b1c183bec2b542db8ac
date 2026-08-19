@@ -1,0 +1,37 @@
+red-team/scripts/run_round.py
+  0bcbaef3f5de5679 1126-1131,1156-1160,1464-1471
+red-team/scripts/resume.py
+  0bcbaef3f5de5679 446-457
+red-team/scripts/test_verdict_dissent.py
+  0bcbaef3f5de5679 1-90
+red-team/references/recovery.md
+  0bcbaef3f5de5679 17-34
+red-team/references/external-sync.md
+  0bcbaef3f5de5679 14
+red-team/SKILL.md
+  0bcbaef3f5de5679 25,143-145,166-167,212-214
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "33783820e3ed323d294f6b1c183bec2b542db8ac",
+  "prompts": {
+    "0bcbaef3f5de5679": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c84fc808-ffcc-41c7-a7aa-caf41eb9d0ef",
+        "model": "claude-opus-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Bash": 26,
+        "Agent": 1,
+        "Read": 3,
+        "Edit": 11,
+        "Write": 1
+      },
+      "total_additions": 181,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

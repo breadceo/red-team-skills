@@ -135,13 +135,15 @@ check("mismatched closer 뒤 내부 조각 거부", extract_json(raw) is None)
 #       진입점을 `{` 만 찾으면 앞의 unmatched `[` 를 보지 못한다
 raw = '[{"verdict":"NO-GO","findings":[]}'
 check("미닫힌 배열 안 조각 거부", extract_json(raw) is None)
-# (c) 산문 속 중괄호(파싱 실패)도 전면 차단 — 유효 JSON 이 아닌 span 의 경계는
-#     신뢰하지 않는다. main 동일 PARSE-FAIL 이라 악화 아님 (code-8 정책)
+# (c) 인라인 중괄호는 후보도 차단자도 아니다 (code-12 P1) — bare 후보는 줄 시작
+#     opener 뿐이라, 산문에 파묻힌 조각(미종결 인용 안 포함)이 판정으로 오인되지
+#     않고, 산문 {foo} 가 뒤의 줄 시작 판정을 차단하지도 않는다
 raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
-check("산문 중괄호 뒤 — 전면 차단 (main 동일)", extract_json(raw) is None)
-# 유효 JSON 조각(인라인 예시 등)이 앞에 있는 경우는 파스로 소비되고 회수는 유지된다
+check("인라인 산문 중괄호 무시 — 판정 회수", extract_json(raw) == VERDICT)
 raw = '인라인 예시 {"a": 1} 와 배열 [1, 2] 뒤.\n' + json.dumps(VERDICT) + "\n"
 check("유효 인라인 JSON 뒤 판정 회수", extract_json(raw) == VERDICT)
+raw = '설명: "깨진 인용 {"verdict":"NO-GO","findings":[]}'
+check("미종결 인용 안 인라인 조각 거부 (code-12 실측)", extract_json(raw) is None)
 
 # 13. count_access_errors 도 같은 입력에서 죽지 않는다 (extract_json 보다 먼저 불린다)
 from run_round import count_access_errors
@@ -171,11 +173,15 @@ check("언어 태그 펜스 뒤 태그 없는 판정 펜스", extract_json(raw) 
 t0 = time.monotonic()
 check("깨진 펜스 다수 — 죽지 않는다", extract_json("x```\n" * 8000 + "tail") is None)
 check("깨진 펜스 다수 — 비선형 폭증 없음 (<2s)", time.monotonic() - t0 < 2)
-# (c) 연속 소객체 다수 뒤 판정 — suffix 재복사 없이 선형으로 끝난다
+# (c) 연속 소객체 다수 뒤 판정 — suffix 재복사 없이 선형으로 끝난다.
+#     한 줄에 이어 붙은 소객체는 첫 개만 줄 시작 후보라 판정 미회수(None) —
+#     줄 단위로 나뉜 형태는 전부 소비되고 판정이 회수된다
 t0 = time.monotonic()
-raw = "{}" * 50000 + json.dumps(VERDICT)
-check("연속 소객체 뒤 판정 회수", extract_json(raw) == VERDICT)
+raw = "{}\n" * 50000 + json.dumps(VERDICT)
+check("연속 소객체(줄 단위) 뒤 판정 회수", extract_json(raw) == VERDICT)
 check("연속 소객체 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
+check("연속 소객체(한 줄) — 인라인이라 미회수",
+      extract_json("{}" * 50000 + json.dumps(VERDICT)) is None)
 # (d) `{` 없는 연속 배열 — opener 재검색이 선형이어야 한다 (code-7 P2)
 t0 = time.monotonic()
 check("연속 배열 — 죽지 않는다", extract_json("[]" * 160000) is None)
@@ -204,6 +210,10 @@ check("기본 닫힘 재확인", extract_json(raw) == VERDICT)
 # (e) 4백틱 opener — main 은 offset 1 에서 ```json 을 찾아 회수했다 (code-11 P2)
 raw = "````json\n" + json.dumps(VERDICT) + "\n````\n"
 check("4백틱 opener+closer 회수", extract_json(raw) == VERDICT)
+# (f) 긴 단일 백틱 run — opener 정규식이 run 첫 위치에서만 시도해야 O(n) (code-12 P2)
+t0 = time.monotonic()
+check("긴 백틱 run — 죽지 않는다", extract_json("`" * 65536) is None)
+check("긴 백틱 run — 비선형 폭증 없음 (<2s)", time.monotonic() - t0 < 2)
 
 # 18. 유효하지만 극단적으로 깊은 객체는 depth 상한(64)으로 거부 — 수락하면 뒤의
 #     json.dumps(indent=2) 저장이 제곱 증폭/RecursionError 로 라운드째 죽는다 (code-9 P1)

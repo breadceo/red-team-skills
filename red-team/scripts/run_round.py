@@ -1031,8 +1031,10 @@ def extract_json(raw: str):
         (lazy 정규식의 O(n²) 재탐색 방지, code-6 P1)."""
         bodies, start = [], None
         # opener 는 3개 이상 백틱 + json — 4백틱 opener(````json)를 3백틱으로 쓰면
-        # closer 대안이 offset 0 에서 먼저 소비해 main 이 회수하던 판정을 잃는다(code-11)
-        for m in re.finditer(r"`{3,}json[^\S\n]*\n|^```", raw, re.M):
+        # closer 대안이 offset 0 에서 먼저 소비해 main 이 회수하던 판정을 잃는다
+        # (code-11). lookbehind 는 백틱 run 의 첫 위치에서만 시도하게 한다 — 없으면
+        # 긴 단일 run("`"*N)에서 위치마다 재시도해 O(n²) 다(code-12, 64k 실측 3.7초)
+        for m in re.finditer(r"(?<!`)`{3,}json[^\S\n]*\n|^```", raw, re.M):
             if start is not None:
                 # 블록 안에서는 줄 시작의 ``` 가 태그 반복 여부와 무관하게 closer 다
                 # — main 의 closer(\n```)는 "```json" 닫는 줄의 앞 세 백틱에도
@@ -1087,24 +1089,23 @@ def extract_json(raw: str):
         doc_last = len(raw.rstrip())
 
         def doc_end():
-            # opener 위치는 둘 다 캐시한다 — 매 반복 raw.find(x, pos) 는 그 문자가
-            # 더 없는 입력에서 남은 문서 전체를 반복 스캔해 그 자체로 O(n²) 다
-            # (code-6 `[` 캐시, code-7 `{` 캐시 — '[]'*N 실측 1.5초)
-            pos, nb, ob = 0, raw.find("["), raw.find("{")
-            while True:
-                if nb != -1 and nb < pos:
-                    nb = raw.find("[", pos)
-                if ob != -1 and ob < pos:
-                    ob = raw.find("{", pos)
-                nexts = [x for x in (ob, nb) if x != -1]
-                if not nexts:
-                    return
-                pos = min(nexts)
-                # `[` 컨테이너도 raw_decode 로 통째로 소비한다 — 진입점을 `{` 만
-                # 찾으면 닫히지 않은 배열 안의 판정 조각이 독립 후보로 오인된다
-                # (code-6 P2). 판정은 dict 뿐이라 배열 자체는 후보가 아니다.
+            # 후보 opener 는 **줄 시작(선행 공백 허용)** 의 `{`/`[` 뿐이다 — 산문에
+            # 인라인으로 파묻힌 중괄호는 산문 구문(미종결 인용부호 등)의 일부일 수
+            # 있어 독립 JSON 블록이 아니다(code-12 P1: 미종결 " 안의 조각 수락).
+            # 인라인 중괄호는 후보도 차단자도 아니다 — 아예 파싱하지 않는다.
+            # 실측 사고(#25)의 판정은 제 줄에서 시작했다.
+            pos = 0
+            for m in re.finditer(r"^[ \t]*([{\[])", raw, re.M):
+                p = m.start(1)
+                # 이미 소비한 span 내부(예: pretty-print 된 판정의 내부 줄)는 후보가
+                # 아니다 — 유효 파스의 연쇄 위에서만 다음 후보를 본다
+                if p < pos:
+                    continue
+                # `[` 컨테이너도 raw_decode 로 통째로 소비한다 — 닫히지 않은 배열
+                # 안의 판정 조각이 독립 후보로 오인되지 않게(code-6 P2). 판정은
+                # dict 뿐이라 배열 자체는 후보가 아니다.
                 try:
-                    cand, end = dec.raw_decode(raw, pos)
+                    cand, end = dec.raw_decode(raw, p)
                 except (ValueError, RecursionError):
                     # 파싱이 실패하면 이후는 아무것도 후보가 아니다. 실패한 span 의
                     # 문법(문자열·escape·주석·인용 규약)은 알 수 없으므로 어떤
@@ -1116,7 +1117,7 @@ def extract_json(raw: str):
                     # 사고(#25) 원본(서술 484자 + bare 판정, 앞선 opener 없음)은
                     # 이 정책에서도 회수됨을 검증했다.
                     return
-                if raw[pos] == "{" and end >= doc_last:
+                if raw[p] == "{" and end >= doc_last:
                     yield cand
                 pos = end
         obj = last(doc_end())

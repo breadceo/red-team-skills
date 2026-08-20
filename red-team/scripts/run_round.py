@@ -992,9 +992,24 @@ def extract_json(raw: str):
         # 호출하므로 비-dict 원소가 섞인 후보는 PARSE-FAIL 로 돌린다
         if isinstance(c, dict) and isinstance(c.get("findings"), list) \
                 and all(isinstance(f, dict) for f in c["findings"]) \
-                and isinstance(c.get("verdict"), str):
+                and isinstance(c.get("verdict"), str) and depth_of(c) <= 64:
             return c
         return None
+
+    def depth_of(o):
+        """반복문 중첩 깊이 — 유효하지만 극단적으로 깊은 객체(실측 62k 중첩)를
+        수락하면 뒤의 json.dumps(indent=2) 저장이 제곱 크기로 증폭되거나
+        RecursionError 로 라운드째 죽는다(code-9). 실제 판정 구조는 depth ~6 —
+        상한 64 는 10배 여유이면서 직렬화 재귀·크기 증폭을 차단한다."""
+        d, stack = 0, [(o, 1)]
+        while stack:
+            v, k = stack.pop()
+            d = max(d, k)
+            if isinstance(v, dict):
+                stack.extend((x, k + 1) for x in v.values())
+            elif isinstance(v, list):
+                stack.extend((x, k + 1) for x in v)
+        return d
 
     def last(candidates):
         found = None
@@ -1004,13 +1019,33 @@ def extract_json(raw: str):
                 found = got
         return found
 
-    def fenced(tag):
-        """줄 단위 단일 패스로 펜스를 여닫아 짝짓고 tag 펜스의 본문만 낸다.
+    def json_fenced():
+        """1순위 경로 — main 파리티의 json 펜스 단일 패스.
 
-        lazy 정규식은 닫는 펜스 없는 opener 유사 문자열마다 문서 끝까지 재탐색해
-        O(n²) 가 되고(code-6 P1), 앞선 언어 태그 펜스의 닫는 ``` 를 태그 없는
-        펜스의 opener 로 오인했다(code-3 pre-existing — 이 스캐너가 함께 해소).
-        Markdown 규칙대로 줄 경계의 ``` 만 여닫이로 인정한다."""
+        opener 는 줄 위치와 무관한 ```json 토큰이다 — 실제 리뷰어가 인라인 opener
+        (`…하겠습니다.```json`)로 출력한 실측이 있고(code-9 b4, main 은 회수),
+        ```json 은 closer 일 수 없어 줄 경계를 요구할 이유가 없다. closer 는 main
+        의 정규식(`\\n``` `)과 같은 줄 시작 ``` — `\\n``` 토큰으로 잡으면 blank line
+        뒤 opener 의 선행 개행을 closer 가 먼저 소비한다(줄 시작 앵커는 무소비).
+        알터네이션 finditer 한 번이라 닫는 펜스 없는 opener 가 많아도 O(n) 이다
+        (lazy 정규식의 O(n²) 재탐색 방지, code-6 P1)."""
+        bodies, start = [], None
+        for m in re.finditer(r"```json[^\S\n]*\n|^```", raw, re.M):
+            if start is None and m.group(0) != "```":
+                start = m.end()
+            elif start is not None and m.group(0) == "```":
+                bodies.append(raw[start:m.start()])
+                start = None
+        return bodies
+
+    def untagged_fenced():
+        """2순위 경로 — 태그 없는 펜스, 줄 단위 전역 짝짓기.
+
+        모든 펜스를 여닫아 짝짓고 태그 없는 펜스의 본문만 낸다 — 태그별로 따로
+        스캔하면 언어 태그 펜스의 닫는 ``` 가 태그 없는 opener 로 오인된다
+        (code-3 실측). 이 경로 전체가 이 브랜치에서 추가된 것이라 main 대비
+        회수 손실이 없다. closer 는 opener 길이 이상의 백틱만으로 된 줄
+        (Markdown 규칙 — 4백틱 closer, code-7)."""
         bodies, body, info, opener = [], None, None, 0
         for line in raw.split("\n"):
             stripped = line.strip()
@@ -1018,19 +1053,17 @@ def extract_json(raw: str):
             if body is None:
                 if ticks >= 3:
                     opener, info, body = ticks, stripped[ticks:].strip(), []
-            # closer 는 opener 길이 이상의 백틱만으로 된 줄 (Markdown 규칙 —
-            # 4백틱 closer 를 못 닫으면 main 이 회수하던 판정을 유실한다, code-7)
             elif ticks >= opener and stripped == "`" * len(stripped):
-                if info == tag:
+                if info == "":
                     bodies.append("\n".join(body))
                 body = None
             else:
                 body.append(line)
         return bodies
 
-    obj = last(fenced("json"))
+    obj = last(json_fenced())
     if obj is None:
-        obj = last(fenced(""))
+        obj = last(untagged_fenced())
     if obj is None:
         # bare JSON — 정방향 span-skip: `{` 마다 raw_decode 를 시도하고 성공하면
         # 그 객체의 끝으로 점프한다. 내부 중첩 객체를 따로 보지 않으므로 바깥 판정

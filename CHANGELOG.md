@@ -48,9 +48,11 @@ b3-visibility — raw 528k 정상, 엔진 에러 0, 서술 끝에 판정이 그�
 형식은 매 실행 흔들리므로 간헐 재현되는 유실이고, 재실행은 같은 결과를 다시 사 온다.
 
 - **3단 폴백**: ① json 태그 펜스(1순위 유지) → ② 언어 태그 없는 펜스 → ③ bare JSON.
-  펜스는 **줄 단위 단일 패스 스캐너**로 여닫아 짝짓는다(Markdown 줄 경계만 인정) —
-  lazy 정규식의 O(n²) 재탐색과, 언어 태그 펜스의 닫는 ``` 를 태그 없는 펜스의 opener
-  로 오인해 판정을 잃던 pre-existing 결함이 함께 사라진다. bare 는 정방향 span-skip
+  json 펜스는 **main 파리티 단일 패스**다 — opener 는 줄 위치와 무관한 ```json 토큰
+  (실제 리뷰어가 인라인 opener 로 출력한 실측), closer 는 줄 시작 ```. 태그 없는
+  펜스는 줄 단위 전역 짝짓기다 — 태그별로 따로 스캔하면 언어 태그 펜스의 닫는 ```
+  가 태그 없는 opener 로 오인돼 판정을 잃는다(pre-existing 결함 해소). 둘 다 단일
+  패스라 lazy 정규식의 O(n²) 재탐색이 없다. bare 는 정방향 span-skip
   `raw_decode` 스캔 — 성공한 객체의 끝으로 점프해 중첩 내부 객체가 판정으로 오인되지
   않고, 각 경로에서 마지막 수락 후보가 이긴다(서술 중간 예시 JSON 보다 진짜 판정).
   bare 는 **문서를 끝내는 객체만** 수락한다 — 산문 속 형식 예시를 미완주 리뷰어의
@@ -62,8 +64,9 @@ b3-visibility — raw 528k 정상, 엔진 에러 0, 서술 끝에 판정이 그�
   비선형 폭증과 깨진 컨테이너 내부 조각 오인을 증명 가능하게 함께 없앤다. 실패 이후
   판정 유실은 main 과 같은 PARSE-FAIL 이며, 실측 사고 원본은 이 정책에서도 회수됨을
   검증했다. 전 경로가 입력 길이에 선형이다(opener 위치 캐시 포함).
-- **수락 조건 강화**: dict + `findings` 가 dict 만 담은 list + `verdict` 가 str(세
-  경로 공통). `findings` 키 존재만 보던 기존 조건은 `findings: null` 이 뒤의 `len()`
+- **수락 조건 강화**: dict + `findings` 가 dict 만 담은 list + `verdict` 가 str +
+  중첩 깊이 ≤ 64(세 경로 공통 — 유효하지만 극단적으로 깊은 객체를 수락하면 뒤의
+  indent 직렬화가 제곱 증폭/RecursionError 로 라운드를 죽인다). `findings` 키 존재만 보던 기존 조건은 `findings: null` 이 뒤의 `len()`
   을 죽이고, `[null]` 원소가 집계부 `setdefault` 를 죽이고, verdict 없는 객체를 성공
   축으로 집계했다. 거대 정수(4300자리 초과)의 `ValueError` 와 극단 중첩의
   `RecursionError` 도 라운드를 죽이지 않고 건너뛴다 — 파서·진단 루프·
@@ -72,7 +75,7 @@ b3-visibility — raw 528k 정상, 엔진 에러 0, 서술 끝에 판정이 그�
 - **PARSE-FAIL 진단 한 줄**: raw 크기·엔진 에러 수를 병기해 실측 3유형(모델 용량 /
   실행 환경 / 파서 미스)이 로그에서 바로 갈린다 — 사람이 raw 를 열어 재지 않아도 된다.
   claude 엔진의 `is_error` 표기도 에러로 센다.
-- 테스트: `test_extract_json.py` 신규(48건 — 기존 경로 회귀 방지, 실측 bare 형태,
+- 테스트: `test_extract_json.py` 신규(53건 — 기존 경로 회귀 방지, 실측 bare 형태,
   마지막 판정 우선, 수락 조건, 예시 오인 거부, 중첩·거대 정수·극단 중첩, 깨진
   외곽·미닫힌 배열·인용부호/주석/escape 안 closer 오인 거부, 선형 시간 바운드 4종,
   parse_output·count_access_errors 생존).

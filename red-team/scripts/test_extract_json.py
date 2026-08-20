@@ -180,4 +180,23 @@ check("연속 배열 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 <
 raw = "```json\n" + json.dumps(VERDICT) + "\n````\n"
 check("4백틱 closer 펜스 회수", extract_json(raw) == VERDICT)
 
+# 17. json 펜스는 main 파리티 (code-9 P1 + b4 실측 회귀)
+# (a) 인라인 opener — 실제 리뷰어가 줄 중간에서 펜스를 열었다 (code-9 b4 실측)
+raw = ("main 의 동작을 대조하겠습니다.```json\n"
+       + json.dumps(VERDICT, indent=2) + "\n```")
+check("인라인 ```json opener 회수 (b4 실측)", extract_json(raw) == VERDICT)
+# (b) 미닫힌 비-json 펜스 뒤의 json 판정 펜스 — main 이 회수하던 입력
+raw = ("설명\n```python\nprint(1)\n최종 판정:\n```json\n"
+       + json.dumps(VERDICT) + "\n```\n")
+check("미닫힌 python 펜스 뒤 json 펜스 회수", extract_json(raw) == VERDICT)
+
+# 18. 유효하지만 극단적으로 깊은 객체는 depth 상한(64)으로 거부 — 수락하면 뒤의
+#     json.dumps(indent=2) 저장이 제곱 증폭/RecursionError 로 라운드째 죽는다 (code-9 P1)
+deep_valid = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 62000 + "1" + "}" * 62001
+check("유효 62k 중첩 — 거부", extract_json(deep_valid) is None)
+mid_valid = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 200 + "1" + "}" * 201
+check("유효 200 중첩 — depth 상한(64) 거부", extract_json(mid_valid) is None)
+ok_depth = {"verdict": "GO", "findings": [{"a": {"b": {"c": [1, 2]}}}]}
+check("정상 깊이 통과", extract_json(json.dumps(ok_depth)) == ok_depth)
+
 print("all ok")

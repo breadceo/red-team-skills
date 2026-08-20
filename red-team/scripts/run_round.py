@@ -964,16 +964,42 @@ def rel_to_root(v: str, root: str) -> str:
 
 
 def extract_json(raw: str):
-    """마지막 fenced json 블록을 findings 로 읽는다. 없으면 None."""
-    blocks = re.findall(r"```json\s*\n(.*?)\n```", raw, re.S)
-    for b in reversed(blocks):
-        try:
-            obj = json.loads(b)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and "findings" in obj:
-            return obj
-    return None
+    """서술에서 판정 객체를 읽는다. 없으면 None.
+
+    모델 출력 형식은 매 실행 흔들린다 — json 태그 펜스를 1순위로 두되(기존 동작),
+    태그 없는 펜스·bare JSON 폴백을 둔다(issue #25: 판정을 낸 리뷰어가 펜스 없이
+    출력해 PARSE-FAIL 로 버려지고, 재실행이 같은 결과를 다시 사 왔다).
+    세 경로 모두 같은 수락 조건(dict + "findings" 키)을 통과해야 하고 뒤에서부터
+    찾는다 — 진짜 판정은 문서 끝에 있어 서술 중간 예시 JSON 보다 먼저 걸린다.
+    """
+    def accept(candidates):
+        for c in candidates:
+            if isinstance(c, str):
+                try:
+                    c = json.loads(c)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(c, dict) and "findings" in c:
+                return c
+        return None
+
+    obj = accept(reversed(re.findall(r"```json\s*\n(.*?)\n```", raw, re.S)))
+    if obj is None:
+        obj = accept(reversed(re.findall(r"```[^\S\n]*\n(.*?)\n```", raw, re.S)))
+    if obj is None:
+        # bare JSON — 끝쪽 `{` 위치마다 raw_decode 시도. 정규식으로 중괄호 균형을
+        # 맞추지 않는다(문자열 리터럴 안 중괄호가 카운팅을 어긋나게 한다).
+        dec = json.JSONDecoder()
+        def decoded():
+            pos = raw.rfind("{")
+            while pos != -1:
+                try:
+                    yield dec.raw_decode(raw, pos)[0]
+                except json.JSONDecodeError:
+                    pass
+                pos = raw.rfind("{", 0, pos)
+        obj = accept(decoded())
+    return obj
 
 
 def count_access_errors(raw: str, cwd: str) -> int:
@@ -1109,7 +1135,19 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         label += f" {tokens['total']/1000:.1f}k tok" \
                  + (f" ${tokens['cost_usd']:.2f}" if tokens.get("cost_usd") is not None else "")
     if parsed is None:
-        print(f"  {reviewer:24} PARSE-FAIL  {label}{warn}", flush=True)
+        # raw 크기·엔진 에러 수로 실측 3유형이 로그 한 줄에서 갈린다(issue #25) —
+        # 2k 내외+에러 = 모델 용량/실행 환경(산출물 없음, 재실행), 정상 크기+에러 0 =
+        # 파서 미스 의심(raw 끝에 판정이 있을 수 있다).
+        errs = 0
+        for line in raw.splitlines():
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(ev, dict) and ev.get("error"):
+                errs += 1
+        print(f"  {reviewer:24} PARSE-FAIL  {label}"
+              f"  raw {len(raw)/1000:.1f}k, error {errs}건{warn}", flush=True)
     else:
         print(f"  {reviewer:24} {len(parsed['findings'])} findings  "
               f"{parsed.get('verdict', '?')}  {label}{warn}", flush=True)

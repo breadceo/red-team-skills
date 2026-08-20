@@ -1,0 +1,37 @@
+red-team/scripts/run_round.py
+  4568766cd43a0a6b 1034-1042
+red-team/scripts/test_extract_json.py
+  4568766cd43a0a6b 192-198
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "b71cce2072f7ee4e16e88e9c5023767d11373952",
+  "prompts": {
+    "4568766cd43a0a6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15a1fa7-31fd-4371-983f-e056932d5fef",
+        "model": "claude-fable-5"
+      },
+      "skills": [
+        {
+          "id": "red-team:issue",
+          "ts": "2026-08-20T01:02:25.581Z"
+        }
+      ],
+      "tool_counts": {
+        "Bash": 92,
+        "Agent": 11,
+        "Read": 13,
+        "Write": 14,
+        "AskUserQuestion": 12,
+        "Edit": 62,
+        "Skill": 1,
+        "ToolSearch": 1
+      },
+      "total_additions": 16,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

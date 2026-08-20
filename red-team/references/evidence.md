@@ -40,6 +40,24 @@ ceo-client `84e5524ed` 가 fallback 스토리지 호출의 동기 throw 를 잡�
 
 근거는 이 티켓 2건뿐이다 — **같은 유형이 다른 티켓에서 또 나오면 독립 축 신설을 재검토한다.**
 
+## 선언된 방어 규칙의 실효 검사를 a-code 5번에 넣은 이유 — B2C-53709 (PR #915)
+
+`packages/zigbang-crm-admin/.eslintrc.js`는 `document.cookie`·`localStorage`·`sessionStorage`
+접근을 막는다고 선언했지만, 사용한 ESLint 규칙은 `window.localStorage`·
+`globalThis.sessionStorage`·`window.document.cookie` 같은 한정·중첩 접근을 잡지 못했다.
+파일은 code-1부터 diff에 있었고 결함은 code-20의 `a-code`에서 처음 검출됐다. 그 사이
+5축 × 20라운드, 약 100축 실행이 지났다.
+
+미검출은 침묵으로 끝나지 않았다. code-4의 결정 대기 항목은 해당 lint 규칙을 실효 있는
+방어선으로 전제했고, 실제로는 규칙을 풀지 않고도 우회할 수 있었던 선택지를 16라운드 동안
+잘못 설명했다. 선언된 가드를 확인하지 않으면 리뷰 결과가 틀린 전제를 생산할 수 있다는
+실측이다.
+
+**새 축은 필요하지 않다.** 설정 파일의 코드 정합성과 선언·실제 동작의 차이는 이미
+`a-code` 관할이고, code-20에서 실제로 그 축이 찾았다. 누락 원인은 축 부재가 아니라 기존
+1~5번 어디에도 설정 파일과 방어 규칙의 실효로 주의를 보내는 트리거가 없었던 것이다.
+따라서 기존 5번의 “통과와 보장은 다르다”는 원칙을 lint·CI·타입·런타임 가드까지 넓힌다.
+
 ## 축별 모델 배정의 근거 (deep 축 = recall 우선)
 
 CodeRabbit 리뷰 벤치마크에서 Sol recall 69.7% vs Terra 52.5% — 절제형(precision 우선)

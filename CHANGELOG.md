@@ -40,6 +40,16 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ## 2026-08-20
 
+### 📝 red-team — a-code가 선언된 방어 규칙의 실효를 검증한다 (#26)
+
+테스트·lint 규칙·CI 게이트·타입 가드·런타임 assert가 선언됐다는 사실을 실제 보장으로
+간주하지 않고, 금지 대상의 한정·중첩·우회 표기를 직접 대입해 판별력을 확인한다.
+
+- 기존 `a-code` 5번의 테스트 판별력 검사 (a)·(b)는 보존하고 가드 우회 검사 (c)를 추가했다.
+- `.eslintrc*`·`tsconfig*`·`next.config*`·CI 워크플로·`package.json` 스크립트가 diff에 있으면
+  (c)를 반드시 수행한다.
+- 확인 근거가 없으면 결함으로 단정하지 않고 `확인 못 함`으로 남긴다.
+
 ### 🐛 red-team — 판정을 낸 리뷰어가 출력 형식 때문에 PARSE-FAIL 로 버려지지 않는다 (#25)
 
 `extract_json` 이 `` ```json `` 태그 펜스만 찾아서, 리뷰어가 정상 완주하고도 판정 JSON 을

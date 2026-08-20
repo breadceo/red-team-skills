@@ -135,15 +135,16 @@ check("mismatched closer 뒤 내부 조각 거부", extract_json(raw) is None)
 #       진입점을 `{` 만 찾으면 앞의 unmatched `[` 를 보지 못한다
 raw = '[{"verdict":"NO-GO","findings":[]}'
 check("미닫힌 배열 안 조각 거부", extract_json(raw) is None)
-# (c) 인라인 중괄호는 후보도 차단자도 아니다 (code-12 P1) — bare 후보는 줄 시작
-#     opener 뿐이라, 산문에 파묻힌 조각(미종결 인용 안 포함)이 판정으로 오인되지
-#     않고, 산문 {foo} 가 뒤의 줄 시작 판정을 차단하지도 않는다
-raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
-check("인라인 산문 중괄호 무시 — 판정 회수", extract_json(raw) == VERDICT)
+# (c) 통합 정책 (code-12·13) — 모든 opener(인라인 포함)가 유효 파스 연쇄에 포함되고
+#     후보 자격은 줄 시작 opener 뿐이다.
 raw = '인라인 예시 {"a": 1} 와 배열 [1, 2] 뒤.\n' + json.dumps(VERDICT) + "\n"
 check("유효 인라인 JSON 뒤 판정 회수", extract_json(raw) == VERDICT)
 raw = '설명: "깨진 인용 {"verdict":"NO-GO","findings":[]}'
 check("미종결 인용 안 인라인 조각 거부 (code-12 실측)", extract_json(raw) is None)
+raw = '설명: {\n{"verdict":"NO-GO","findings":[{"claim":"inner"}]}\n'
+check("인라인 미종결 컨테이너 안 줄 시작 조각 거부 (code-13)", extract_json(raw) is None)
+raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
+check("파스 불가 인라인 중괄호 — 전면 차단 (main 동일)", extract_json(raw) is None)
 
 # 13. count_access_errors 도 같은 입력에서 죽지 않는다 (extract_json 보다 먼저 불린다)
 from run_round import count_access_errors
@@ -223,5 +224,10 @@ mid_valid = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 200 + "1" + "}"
 check("유효 200 중첩 — depth 상한(64) 거부", extract_json(mid_valid) is None)
 ok_depth = {"verdict": "GO", "findings": [{"a": {"b": {"c": [1, 2]}}}]}
 check("정상 깊이 통과", extract_json(json.dumps(ok_depth)) == ok_depth)
+# 경계: 정확히 64단 컨테이너는 수락 (scalar leaf 를 세면 65로 오거부 — code-13 P2)
+b64 = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 63 + "0" + "}" * 64
+check("정확히 64단 컨테이너 수락", extract_json(b64) is not None)
+b65 = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 64 + "0" + "}" * 65
+check("65단 컨테이너 거부", extract_json(b65) is None)
 
 print("all ok")

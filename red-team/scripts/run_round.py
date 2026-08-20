@@ -1004,10 +1004,13 @@ def extract_json(raw: str):
         d, stack = 0, [(o, 1)]
         while stack:
             v, k = stack.pop()
-            d = max(d, k)
+            # 컨테이너 방문 시에만 깊이를 갱신한다 — scalar leaf 까지 세면 정확히
+            # 64단 컨테이너 판정(main 이 수락)이 65로 계산돼 오거부된다(code-13)
             if isinstance(v, dict):
+                d = max(d, k)
                 stack.extend((x, k + 1) for x in v.values())
             elif isinstance(v, list):
+                d = max(d, k)
                 stack.extend((x, k + 1) for x in v)
         return d
 
@@ -1089,14 +1092,16 @@ def extract_json(raw: str):
         doc_last = len(raw.rstrip())
 
         def doc_end():
-            # 후보 opener 는 **줄 시작(선행 공백 허용)** 의 `{`/`[` 뿐이다 — 산문에
-            # 인라인으로 파묻힌 중괄호는 산문 구문(미종결 인용부호 등)의 일부일 수
-            # 있어 독립 JSON 블록이 아니다(code-12 P1: 미종결 " 안의 조각 수락).
-            # 인라인 중괄호는 후보도 차단자도 아니다 — 아예 파싱하지 않는다.
-            # 실측 사고(#25)의 판정은 제 줄에서 시작했다.
+            # 통합 정책(code-13): **모든 opener(인라인 포함)가 유효 파스 연쇄에
+            # 포함**되고, **후보 자격은 줄 시작(선행 공백 허용) opener 뿐**이다.
+            # - 인라인 opener 도 raw_decode 로 소비한다 — 무시하면 인라인에서 열린
+            #   미종결 컨테이너 안의 줄 시작 조각이 판정으로 오인된다(code-13 P1).
+            # - 인라인이 유효해도 후보는 아니다 — 산문 구문(미종결 인용 등)의
+            #   일부일 수 있어 독립 JSON 블록이 아니다(code-12 P1).
+            # 실측 사고(#25)의 판정은 제 줄에서 시작했고 서술에 중괄호가 없다.
             pos = 0
-            for m in re.finditer(r"^[ \t]*([{\[])", raw, re.M):
-                p = m.start(1)
+            for m in re.finditer(r"^[ \t]*([{\[])|[{\[]", raw, re.M):
+                p = m.start(1) if m.group(1) else m.start()
                 # 이미 소비한 span 내부(예: pretty-print 된 판정의 내부 줄)는 후보가
                 # 아니다 — 유효 파스의 연쇄 위에서만 다음 후보를 본다
                 if p < pos:
@@ -1117,7 +1122,7 @@ def extract_json(raw: str):
                     # 사고(#25) 원본(서술 484자 + bare 판정, 앞선 opener 없음)은
                     # 이 정책에서도 회수됨을 검증했다.
                     return
-                if raw[p] == "{" and end >= doc_last:
+                if m.group(1) and raw[p] == "{" and end >= doc_last:
                     yield cand
                 pos = end
         obj = last(doc_end())

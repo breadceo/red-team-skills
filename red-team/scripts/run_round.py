@@ -969,36 +969,56 @@ def extract_json(raw: str):
     모델 출력 형식은 매 실행 흔들린다 — json 태그 펜스를 1순위로 두되(기존 동작),
     태그 없는 펜스·bare JSON 폴백을 둔다(issue #25: 판정을 낸 리뷰어가 펜스 없이
     출력해 PARSE-FAIL 로 버려지고, 재실행이 같은 결과를 다시 사 왔다).
-    세 경로 모두 같은 수락 조건(dict + "findings" 키)을 통과해야 하고 뒤에서부터
-    찾는다 — 진짜 판정은 문서 끝에 있어 서술 중간 예시 JSON 보다 먼저 걸린다.
+    세 경로 모두 같은 수락 조건을 통과해야 한다 — dict 이고 "findings" 가 list 이고
+    "verdict" 가 str 이어야 한다("findings" 키 존재만 보면 findings:null 이 뒤의
+    len() 을 죽이고, verdict 없는/null 객체가 verdict None 인 성공 축으로 집계된다).
+    각 경로 안에서는 마지막 후보가 이긴다 — 진짜 판정은 문서 끝에 있고 서술 중간
+    예시 JSON 은 그보다 앞이다.
     """
-    def accept(candidates):
-        for c in candidates:
-            if isinstance(c, str):
-                try:
-                    c = json.loads(c)
-                except json.JSONDecodeError:
-                    continue
-            if isinstance(c, dict) and "findings" in c:
-                return c
+    def accept(c):
+        if isinstance(c, str):
+            try:
+                c = json.loads(c)
+            # JSONDecodeError 가 아니라 상위형 ValueError — 4300자리 초과 정수는
+            # int 변환 제한으로 ValueError 를 낸다(파서가 여기서 죽으면 라운드째 죽는다)
+            except ValueError:
+                return None
+        if isinstance(c, dict) and isinstance(c.get("findings"), list) \
+                and isinstance(c.get("verdict"), str):
+            return c
         return None
 
-    obj = accept(reversed(re.findall(r"```json\s*\n(.*?)\n```", raw, re.S)))
+    def last(candidates):
+        found = None
+        for c in candidates:
+            got = accept(c)
+            if got is not None:
+                found = got
+        return found
+
+    obj = last(re.findall(r"```json\s*\n(.*?)\n```", raw, re.S))
     if obj is None:
-        obj = accept(reversed(re.findall(r"```[^\S\n]*\n(.*?)\n```", raw, re.S)))
+        obj = last(re.findall(r"```[^\S\n]*\n(.*?)\n```", raw, re.S))
     if obj is None:
-        # bare JSON — 끝쪽 `{` 위치마다 raw_decode 시도. 정규식으로 중괄호 균형을
-        # 맞추지 않는다(문자열 리터럴 안 중괄호가 카운팅을 어긋나게 한다).
+        # bare JSON — 정방향 span-skip: `{` 마다 raw_decode 를 시도하고 성공하면
+        # 그 객체의 끝으로 점프한다. 내부 중첩 객체를 따로 보지 않으므로 바깥 판정
+        # 안의 findings 원소가 판정으로 오인되지 않고(역방향 스캔의 실측 결함),
+        # 정규식 중괄호 균형 카운팅의 문자열-리터럴 문제도 없다.
         dec = json.JSONDecoder()
-        def decoded():
-            pos = raw.rfind("{")
-            while pos != -1:
+        def spans():
+            pos = 0
+            while True:
+                pos = raw.find("{", pos)
+                if pos == -1:
+                    return
                 try:
-                    yield dec.raw_decode(raw, pos)[0]
-                except json.JSONDecodeError:
-                    pass
-                pos = raw.rfind("{", 0, pos)
-        obj = accept(decoded())
+                    cand, end = dec.raw_decode(raw, pos)
+                except ValueError:
+                    pos += 1
+                    continue
+                yield cand
+                pos = end
+        obj = last(spans())
     return obj
 
 

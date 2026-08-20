@@ -2,6 +2,8 @@
 """extract_json 폴백 계약 (issue #25).
 
 판정을 낸 리뷰어가 출력 형식(펜스 유무) 때문에 PARSE-FAIL 로 버려지면 안 된다.
+수락 조건: dict + findings 가 list + verdict 가 str — 이보다 약하면 findings:null 이
+뒤의 len() 을 죽이고, verdict 없는 객체가 성공 축으로 집계된다(code-1 리뷰 실측).
 프레임워크 없이 `python3 test_extract_json.py` 로 돈다.
 """
 import json
@@ -46,12 +48,17 @@ raw = ("```json\n" + json.dumps(VERDICT) + "\n```\n"
        "덧붙여 이런 예시도 있다: " + json.dumps(example) + "\n")
 check("태그 펜스 > 뒤따르는 bare", extract_json(raw) == VERDICT)
 
-# 6. 수락 조건 — findings 없는 dict / dict 아닌 JSON / JSON 없음 → None
+# 6. 수락 조건 — dict + findings:list + verdict:str 전부 있어야 한다
 check("findings 없는 dict 거부", extract_json('{"verdict": "GO"}') is None)
-check("findings 담은 객체는 리스트 안이라도 회수", extract_json('[{"findings": []}]') == {"findings": []})
-check("findings 없는 리스트 거부", extract_json('["a", {"verdict": "GO"}]') is None)
+check("verdict 없는 dict 거부", extract_json('{"findings": []}') is None)
+check("verdict:null 거부", extract_json('{"verdict": null, "findings": []}') is None)
+check("findings:null 거부", extract_json('{"verdict": "GO", "findings": null}') is None)
+check("findings:list 아님 거부", extract_json('{"verdict": "GO", "findings": {}}') is None)
 check("JSON 없음", extract_json("그냥 산문입니다.") is None)
 check("빈 입력", extract_json("") is None)
+
+# 리스트 안의 완전한 판정 객체는 span-skip 이 그 원소의 `{` 에서 회수한다
+check("리스트 안 판정 객체 회수", extract_json('[' + json.dumps(VERDICT) + ']') == VERDICT)
 
 # 7. 문자열 리터럴 안 중괄호 — 정규식 균형 카운팅이면 어긋나는 케이스
 tricky = {"verdict": "GO", "findings": [{"title": "코드 `a}b{` 인용"}]}
@@ -62,10 +69,24 @@ check("문자열 안 중괄호", extract_json(raw) == tricky)
 raw = '{"findings": 깨짐\n\n' + json.dumps(VERDICT) + "\n"
 check("깨진 JSON 건너뛰기", extract_json(raw) == VERDICT)
 
-# 9. bare 판정 안의 중첩 객체가 잘못 걸리지 않는다 (역방향이라 안쪽 { 를 먼저 보지만
-#    findings 키가 없어 거부되고 바깥 판정이 걸린다)
-nested = {"verdict": "NO-GO", "findings": [{"title": "t", "file": "a.py"}]}
+# 9. 중첩 — 바깥 판정의 findings 원소가 자체로 "findings" 키를 가져도
+#    span-skip 이 바깥 객체를 통째로 읽으므로 안쪽이 판정으로 오인되지 않는다
+#    (code-1 P1: 역방향 스캔은 안쪽을 먼저 수락해 진짜 NO-GO 를 잃었다)
+nested = {"verdict": "NO-GO", "findings": [{"findings": [], "title": "nested"}]}
 raw = "서술.\n" + json.dumps(nested) + "\n"
-check("중첩 객체 무해", extract_json(raw) == nested)
+check("중첩 내부 객체가 판정을 가리지 않는다", extract_json(raw) == nested)
+
+nested2 = {"verdict": "NO-GO", "findings": [{"title": "t", "file": "a.py"}]}
+raw = "서술.\n" + json.dumps(nested2) + "\n"
+check("중첩 객체 무해", extract_json(raw) == nested2)
+
+# 10. 4300자리 초과 정수 — json 이 JSONDecodeError 가 아닌 ValueError 를 낸다.
+#     파서가 죽으면 라운드째 죽으므로(code-1 P2) 건너뛰고 계속 가야 한다.
+big = '{"verdict": "GO", "findings": [], "n": ' + "9" * 5000 + "}"
+check("거대 정수 bare — 죽지 않는다", extract_json("서술.\n" + big + "\n") is None)
+check("거대 정수 펜스 — 죽지 않는다",
+      extract_json("```json\n" + big + "\n```") is None)
+raw = "```json\n" + big + "\n```\n```json\n" + json.dumps(VERDICT) + "\n```\n"
+check("거대 정수 건너뛰고 다음 판정", extract_json(raw) == VERDICT)
 
 print("all ok")

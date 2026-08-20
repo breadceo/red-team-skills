@@ -230,4 +230,12 @@ check("정확히 64단 컨테이너 수락", extract_json(b64) is not None)
 b65 = '{"verdict":"GO","findings":[],"extra":' + '{"x":' * 64 + "0" + "}" * 65
 check("65단 컨테이너 거부", extract_json(b65) is None)
 
+# 19. lone surrogate — 수락하면 reviewer.json 기록(UTF-8)이 UnicodeEncodeError 로
+#     라운드째 죽는다 (code-14). 수락의 계약은 '기록 가능한 판정' 이다.
+sur = '{"verdict":"GO","findings":[],"extra":"\\ud800"}'
+check("lone surrogate bare 거부", extract_json(sur) is None)
+check("lone surrogate 펜스 거부", extract_json("```json\n" + sur + "\n```") is None)
+check("정상 유니코드 escape 통과",
+      extract_json('{"verdict":"GO","findings":[],"extra":"\\ud83d\\ude00 한글"}') is not None)
+
 print("all ok")

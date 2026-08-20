@@ -992,9 +992,21 @@ def extract_json(raw: str):
         # 호출하므로 비-dict 원소가 섞인 후보는 PARSE-FAIL 로 돌린다
         if isinstance(c, dict) and isinstance(c.get("findings"), list) \
                 and all(isinstance(f, dict) for f in c["findings"]) \
-                and isinstance(c.get("verdict"), str) and depth_of(c) <= 64:
+                and isinstance(c.get("verdict"), str) and depth_of(c) <= 64 \
+                and storable(c):
             return c
         return None
+
+    def storable(c):
+        """수락의 계약은 '기록 가능한 판정' 이다 — reviewer.json/round.json 이 쓰는
+        직렬화 연산 그 자체를 프로브한다. lone surrogate(\\ud800 escape 복원)는
+        UTF-8 인코딩이 불가능해, 수락하면 기록 단계에서 라운드째 죽는다(code-14 —
+        UnicodeEncodeError 는 ValueError 하위형)."""
+        try:
+            json.dumps(c, ensure_ascii=False).encode("utf-8")
+            return True
+        except (ValueError, RecursionError):
+            return False
 
     def depth_of(o):
         """반복문 중첩 깊이 — 유효하지만 극단적으로 깊은 객체(실측 62k 중첩)를

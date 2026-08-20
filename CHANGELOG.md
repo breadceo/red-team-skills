@@ -68,7 +68,7 @@ b3-visibility — raw 528k 정상, 엔진 에러 0, 서술 끝에 판정이 그�
   판정 유실은 main 과 같은 PARSE-FAIL 이며, 실측 사고 원본은 이 정책에서도 회수됨을
   검증했다. 전 경로가 입력 길이에 선형이다(opener 위치 캐시 포함).
 - **수락 조건 강화**: dict + `findings` 가 dict 만 담은 list + `verdict` 가 str +
-  컨테이너 중첩 깊이 ≤ 64(세 경로 공통, scalar leaf 는 세지 않음 — 유효하지만 극단적으로 깊은 객체를 수락하면 뒤의
+  컨테이너 중첩 깊이 ≤ 64(scalar leaf 미포함) + 기록 가능성 프로브(lone surrogate 등 UTF-8 저장 불가 후보 거부 — 수락하면 기록 단계에서 라운드가 죽는다)(세 경로 공통 — 유효하지만 극단적으로 깊은 객체를 수락하면 뒤의
   indent 직렬화가 제곱 증폭/RecursionError 로 라운드를 죽인다). `findings` 키 존재만 보던 기존 조건은 `findings: null` 이 뒤의 `len()`
   을 죽이고, `[null]` 원소가 집계부 `setdefault` 를 죽이고, verdict 없는 객체를 성공
   축으로 집계했다. 거대 정수(4300자리 초과)의 `ValueError` 와 극단 중첩의
@@ -78,7 +78,7 @@ b3-visibility — raw 528k 정상, 엔진 에러 0, 서술 끝에 판정이 그�
 - **PARSE-FAIL 진단 한 줄**: raw 크기·엔진 에러 수를 병기해 실측 3유형(모델 용량 /
   실행 환경 / 파서 미스)이 로그에서 바로 갈린다 — 사람이 raw 를 열어 재지 않아도 된다.
   claude 엔진의 `is_error` 표기도 에러로 센다.
-- 테스트: `test_extract_json.py` 신규(64건 — 기존 경로 회귀 방지, 실측 bare 형태,
+- 테스트: `test_extract_json.py` 신규(67건 — 기존 경로 회귀 방지, 실측 bare 형태,
   마지막 판정 우선, 수락 조건, 예시 오인 거부, 중첩·거대 정수·극단 중첩, 깨진
   외곽·미닫힌 배열·인용부호/주석/escape 안 closer 오인 거부, 선형 시간 바운드 4종,
   parse_output·count_access_errors 생존).

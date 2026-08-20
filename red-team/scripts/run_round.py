@@ -908,7 +908,9 @@ def parse_output(engine: str, stdout: str, model: str | None):
             out = u.get("output_tokens", 0)
             return d.get("result") or "", {"input": inp, "output": out,
                                            "total": inp + out, "cost_usd": d.get("total_cost_usd")}
-        except (ValueError, KeyError, TypeError):
+        # RecursionError — 극단 중첩 JSON 이 여기서 죽으면 PARSE-FAIL 기록 전에
+        # 라운드가 죽는다(extract_json 의 생존 보장과 같은 계열)
+        except (ValueError, KeyError, TypeError, RecursionError):
             return stdout, None
     if engine == "codex":
         # acpx `--format json`: ACP JSON-RPC 스트림. 본문은 agent_message_chunk 조각의 연결,
@@ -920,7 +922,9 @@ def parse_output(engine: str, stdout: str, model: str | None):
                 continue
             try:
                 d = json.loads(line)
-            except json.JSONDecodeError:
+            # 거대 정수는 ValueError, 극단 중첩은 RecursionError — 한 줄이
+            # 스트림 전체 파싱을 죽이면 안 된다
+            except (ValueError, RecursionError):
                 continue
             upd = (d.get("params") or {}).get("update") or {}
             if upd.get("sessionUpdate") == "agent_message_chunk":
@@ -964,16 +968,177 @@ def rel_to_root(v: str, root: str) -> str:
 
 
 def extract_json(raw: str):
-    """마지막 fenced json 블록을 findings 로 읽는다. 없으면 None."""
-    blocks = re.findall(r"```json\s*\n(.*?)\n```", raw, re.S)
-    for b in reversed(blocks):
+    """서술에서 판정 객체를 읽는다. 없으면 None.
+
+    모델 출력 형식은 매 실행 흔들린다 — json 태그 펜스를 1순위로 두되(기존 동작),
+    태그 없는 펜스·bare JSON 폴백을 둔다(issue #25: 판정을 낸 리뷰어가 펜스 없이
+    출력해 PARSE-FAIL 로 버려지고, 재실행이 같은 결과를 다시 사 왔다).
+    세 경로 모두 같은 수락 조건을 통과해야 한다 — dict 이고 "findings" 가 list 이고
+    "verdict" 가 str 이어야 한다("findings" 키 존재만 보면 findings:null 이 뒤의
+    len() 을 죽이고, verdict 없는/null 객체가 verdict None 인 성공 축으로 집계된다).
+    각 경로 안에서는 마지막 후보가 이긴다 — 진짜 판정은 문서 끝에 있고 서술 중간
+    예시 JSON 은 그보다 앞이다.
+    """
+    def accept(c):
+        if isinstance(c, str):
+            try:
+                c = json.loads(c)
+            # JSONDecodeError 가 아니라 상위형 ValueError — 4300자리 초과 정수는 int
+            # 변환 제한으로 ValueError 를, 극단 중첩은 RecursionError 를 낸다(파서가
+            # 여기서 죽으면 라운드째 죽는다 — PARSE-FAIL 로 남는 것이 계약이다)
+            except (ValueError, RecursionError):
+                return None
+        # findings 원소는 dict 만 — 집계부(recompute 병합)가 원소에 setdefault 를
+        # 호출하므로 비-dict 원소가 섞인 후보는 PARSE-FAIL 로 돌린다
+        if isinstance(c, dict) and isinstance(c.get("findings"), list) \
+                and all(isinstance(f, dict) for f in c["findings"]) \
+                and isinstance(c.get("verdict"), str) and depth_of(c) <= 64 \
+                and storable(c):
+            return c
+        return None
+
+    def storable(c):
+        """수락의 계약은 '기록 가능한 판정' 이다 — reviewer.json/round.json 이 쓰는
+        직렬화 연산 그 자체를 프로브한다. lone surrogate(\\ud800 escape 복원)는
+        UTF-8 인코딩이 불가능해, 수락하면 기록 단계에서 라운드째 죽는다(code-14 —
+        UnicodeEncodeError 는 ValueError 하위형)."""
         try:
-            obj = json.loads(b)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and "findings" in obj:
-            return obj
-    return None
+            json.dumps(c, ensure_ascii=False).encode("utf-8")
+            return True
+        except (ValueError, RecursionError):
+            return False
+
+    def depth_of(o):
+        """반복문 중첩 깊이 — 유효하지만 극단적으로 깊은 객체(실측 62k 중첩)를
+        수락하면 뒤의 json.dumps(indent=2) 저장이 제곱 크기로 증폭되거나
+        RecursionError 로 라운드째 죽는다(code-9). 실제 판정 구조는 depth ~6 —
+        상한 64 는 10배 여유이면서 직렬화 재귀·크기 증폭을 차단한다."""
+        d, stack = 0, [(o, 1)]
+        while stack:
+            v, k = stack.pop()
+            # 컨테이너 방문 시에만 깊이를 갱신한다 — scalar leaf 까지 세면 정확히
+            # 64단 컨테이너 판정(main 이 수락)이 65로 계산돼 오거부된다(code-13)
+            if isinstance(v, dict):
+                d = max(d, k)
+                stack.extend((x, k + 1) for x in v.values())
+            elif isinstance(v, list):
+                d = max(d, k)
+                stack.extend((x, k + 1) for x in v)
+        return d
+
+    def last(candidates):
+        found = None
+        for c in candidates:
+            got = accept(c)
+            if got is not None:
+                found = got
+        return found
+
+    def json_fenced():
+        """1순위 경로 — main 파리티의 json 펜스 단일 패스.
+
+        opener 는 줄 위치와 무관한 ```json 토큰이다 — 실제 리뷰어가 인라인 opener
+        (`…하겠습니다.```json`)로 출력한 실측이 있고(code-9 b4, main 은 회수),
+        ```json 은 closer 일 수 없어 줄 경계를 요구할 이유가 없다. closer 는 main
+        의 정규식(`\\n``` `)과 같은 줄 시작 ``` — `\\n``` 토큰으로 잡으면 blank line
+        뒤 opener 의 선행 개행을 closer 가 먼저 소비한다(줄 시작 앵커는 무소비).
+        알터네이션 finditer 한 번이라 닫는 펜스 없는 opener 가 많아도 O(n) 이다
+        (lazy 정규식의 O(n²) 재탐색 방지, code-6 P1)."""
+        bodies, start = [], None
+        # opener 는 3개 이상 백틱 + json — 4백틱 opener(````json)를 3백틱으로 쓰면
+        # closer 대안이 offset 0 에서 먼저 소비해 main 이 회수하던 판정을 잃는다
+        # (code-11). lookbehind 는 백틱 run 의 첫 위치에서만 시도하게 한다 — 없으면
+        # 긴 단일 run("`"*N)에서 위치마다 재시도해 O(n²) 다(code-12, 64k 실측 3.7초)
+        for m in re.finditer(r"(?<!`)`{3,}json[^\S\n]*\n|^```", raw, re.M):
+            if start is not None:
+                # 블록 안에서는 줄 시작의 ``` 가 태그 반복 여부와 무관하게 closer 다
+                # — main 의 closer(\n```)는 "```json" 닫는 줄의 앞 세 백틱에도
+                # 매치했다(code-10). 닫은 줄은 재개방하지 않고(main 의 소비 동작과
+                # 동일), 인라인 ```json 은 블록을 닫지 않는다(main 도 안 닫았다).
+                if m.start() == 0 or raw[m.start() - 1] == "\n":
+                    bodies.append(raw[start:m.start()])
+                    start = None
+            elif m.group(0) != "```":
+                start = m.end()
+        return bodies
+
+    def untagged_fenced():
+        """2순위 경로 — 태그 없는 펜스, 줄 단위 전역 짝짓기.
+
+        모든 펜스를 여닫아 짝짓고 태그 없는 펜스의 본문만 낸다 — 태그별로 따로
+        스캔하면 언어 태그 펜스의 닫는 ``` 가 태그 없는 opener 로 오인된다
+        (code-3 실측). 이 경로 전체가 이 브랜치에서 추가된 것이라 main 대비
+        회수 손실이 없다. closer 는 opener 길이 이상의 백틱만으로 된 줄
+        (Markdown 규칙 — 4백틱 closer, code-7)."""
+        bodies, body, info, opener = [], None, None, 0
+        for line in raw.split("\n"):
+            stripped = line.strip()
+            ticks = len(stripped) - len(stripped.lstrip("`"))
+            if body is None:
+                if ticks >= 3:
+                    opener, info, body = ticks, stripped[ticks:].strip(), []
+            elif ticks >= opener and stripped == "`" * len(stripped):
+                if info == "":
+                    bodies.append("\n".join(body))
+                body = None
+            else:
+                body.append(line)
+        return bodies
+
+    obj = last(json_fenced())
+    if obj is None:
+        obj = last(untagged_fenced())
+    if obj is None:
+        # bare JSON — 정방향 span-skip: `{` 마다 raw_decode 를 시도하고 성공하면
+        # 그 객체의 끝으로 점프한다. 내부 중첩 객체를 따로 보지 않으므로 바깥 판정
+        # 안의 findings 원소가 판정으로 오인되지 않고(역방향 스캔의 실측 결함),
+        # 정규식 중괄호 균형 카운팅의 문자열-리터럴 문제도 없다.
+        # 단 **문서를 끝내는 객체만** 수락한다(뒤가 공백뿐) — 산문 속에 파묻힌
+        # 형식 예시를 미완주 리뷰어의 판정으로 오인하지 않기 위해서다(code-2 P1).
+        # 실측 사고(#25)의 판정은 서술 마지막에 있었고, 판정 뒤에 서술이 더 붙는
+        # 출력은 변경 전과 같은 PARSE-FAIL 로 남는다 — 악화가 아니다.
+        dec = json.JSONDecoder()
+
+        # 문서끝 인덱스는 1회만 계산한다 — 후보마다 raw[end:] 를 slice+strip 하면
+        # 연속 객체 입력에서 복사량이 제곱으로 는다(code-6 P2)
+        doc_last = len(raw.rstrip())
+
+        def doc_end():
+            # 통합 정책(code-13): **모든 opener(인라인 포함)가 유효 파스 연쇄에
+            # 포함**되고, **후보 자격은 줄 시작(선행 공백 허용) opener 뿐**이다.
+            # - 인라인 opener 도 raw_decode 로 소비한다 — 무시하면 인라인에서 열린
+            #   미종결 컨테이너 안의 줄 시작 조각이 판정으로 오인된다(code-13 P1).
+            # - 인라인이 유효해도 후보는 아니다 — 산문 구문(미종결 인용 등)의
+            #   일부일 수 있어 독립 JSON 블록이 아니다(code-12 P1).
+            # 실측 사고(#25)의 판정은 제 줄에서 시작했고 서술에 중괄호가 없다.
+            pos = 0
+            for m in re.finditer(r"^[ \t]*([{\[])|[{\[]", raw, re.M):
+                p = m.start(1) if m.group(1) else m.start()
+                # 이미 소비한 span 내부(예: pretty-print 된 판정의 내부 줄)는 후보가
+                # 아니다 — 유효 파스의 연쇄 위에서만 다음 후보를 본다
+                if p < pos:
+                    continue
+                # `[` 컨테이너도 raw_decode 로 통째로 소비한다 — 닫히지 않은 배열
+                # 안의 판정 조각이 독립 후보로 오인되지 않게(code-6 P2). 판정은
+                # dict 뿐이라 배열 자체는 후보가 아니다.
+                try:
+                    cand, end = dec.raw_decode(raw, p)
+                except (ValueError, RecursionError):
+                    # 파싱이 실패하면 이후는 아무것도 후보가 아니다. 실패한 span 의
+                    # 문법(문자열·escape·주석·인용 규약)은 알 수 없으므로 어떤
+                    # 휴리스틱 경계도 그 안의 closer 에 속아 내부 조각을 판정으로
+                    # 오인시킬 수 있다 — double quote 추적(code-4)→종류 stack(code-5)
+                    # →인용부호 의심(code-7)→escape·주석(code-8) 4연속 실측이 증명.
+                    # bare 수락은 "유효 JSON 파스의 연쇄" 위에만 놓는다. 실패 이후의
+                    # 판정 유실은 main 과 같은 PARSE-FAIL 이라 악화가 아니고, 실측
+                    # 사고(#25) 원본(서술 484자 + bare 판정, 앞선 opener 없음)은
+                    # 이 정책에서도 회수됨을 검증했다.
+                    return
+                if m.group(1) and raw[p] == "{" and end >= doc_last:
+                    yield cand
+                pos = end
+        obj = last(doc_end())
+    return obj
 
 
 def count_access_errors(raw: str, cwd: str) -> int:
@@ -989,23 +1154,29 @@ def count_access_errors(raw: str, cwd: str) -> int:
     outputs = []
 
     def add_output(value):
-        if isinstance(value, str):
-            outputs.extend(value.splitlines())
-        elif isinstance(value, list):
-            for item in value:
-                add_output(item)
-        elif isinstance(value, dict):
-            for key in ("formatted_output", "error", "text", "message",
-                        "stdout", "stderr", "content", "output"):
-                if key in value:
-                    add_output(value[key])
+        # 명시적 스택 반복문 — json.loads 가 성공한 깊은 중첩 이벤트를 재귀로
+        # 순회하면 RecursionError 로 extract_json 전에 라운드가 죽는다(code-11)
+        stack = [value]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, str):
+                outputs.extend(v.splitlines())
+            elif isinstance(v, list):
+                stack.extend(reversed(v))
+            elif isinstance(v, dict):
+                stack.extend(v[key] for key in reversed(
+                    ("formatted_output", "error", "text", "message",
+                     "stdout", "stderr", "content", "output")) if key in v)
 
     terminal_requests = {}
     terminal_outputs = {}
     for line in raw.splitlines():
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        # JSONDecodeError 만 잡으면 거대 정수(ValueError)·극단 중첩(RecursionError)
+        # 한 줄이 라운드째 죽인다 — 이 함수는 extract_json 보다 먼저 불리므로
+        # 여기가 뚫리면 파서의 생존 보장에 도달하지 못한다(code-4 지적)
+        except (ValueError, RecursionError):
             outputs.append(line)
             continue
         if not isinstance(event, dict) or event.get("jsonrpc") != "2.0":
@@ -1109,7 +1280,22 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         label += f" {tokens['total']/1000:.1f}k tok" \
                  + (f" ${tokens['cost_usd']:.2f}" if tokens.get("cost_usd") is not None else "")
     if parsed is None:
-        print(f"  {reviewer:24} PARSE-FAIL  {label}{warn}", flush=True)
+        # raw 크기·엔진 에러 수로 실측 3유형이 로그 한 줄에서 갈린다(issue #25) —
+        # 2k 내외+에러 = 모델 용량/실행 환경(산출물 없음, 재실행), 정상 크기+에러 0 =
+        # 파서 미스 의심(raw 끝에 판정이 있을 수 있다).
+        errs = 0
+        for line in raw.splitlines():
+            try:
+                ev = json.loads(line)
+            # ValueError(거대 정수)·RecursionError(극단 중첩) — 진단 루프가
+            # 라운드를 죽이면 extract_json 의 생존 보장이 무효가 된다(code-2·3 P2)
+            except (ValueError, RecursionError):
+                continue
+            # claude 는 에러를 최상위 error 키가 아니라 is_error 로 표시한다
+            if isinstance(ev, dict) and (ev.get("error") or ev.get("is_error")):
+                errs += 1
+        print(f"  {reviewer:24} PARSE-FAIL  {label}"
+              f"  raw {len(raw)/1000:.1f}k, error {errs}건{warn}", flush=True)
     else:
         print(f"  {reviewer:24} {len(parsed['findings'])} findings  "
               f"{parsed.get('verdict', '?')}  {label}{warn}", flush=True)

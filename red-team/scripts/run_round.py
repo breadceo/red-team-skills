@@ -1031,11 +1031,16 @@ def extract_json(raw: str):
         (lazy 정규식의 O(n²) 재탐색 방지, code-6 P1)."""
         bodies, start = [], None
         for m in re.finditer(r"```json[^\S\n]*\n|^```", raw, re.M):
-            if start is None and m.group(0) != "```":
+            if start is not None:
+                # 블록 안에서는 줄 시작의 ``` 가 태그 반복 여부와 무관하게 closer 다
+                # — main 의 closer(\n```)는 "```json" 닫는 줄의 앞 세 백틱에도
+                # 매치했다(code-10). 닫은 줄은 재개방하지 않고(main 의 소비 동작과
+                # 동일), 인라인 ```json 은 블록을 닫지 않는다(main 도 안 닫았다).
+                if m.start() == 0 or raw[m.start() - 1] == "\n":
+                    bodies.append(raw[start:m.start()])
+                    start = None
+            elif m.group(0) != "```":
                 start = m.end()
-            elif start is not None and m.group(0) == "```":
-                bodies.append(raw[start:m.start()])
-                start = None
         return bodies
 
     def untagged_fenced():

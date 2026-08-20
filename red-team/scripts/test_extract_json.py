@@ -189,6 +189,13 @@ check("인라인 ```json opener 회수 (b4 실측)", extract_json(raw) == VERDIC
 raw = ("설명\n```python\nprint(1)\n최종 판정:\n```json\n"
        + json.dumps(VERDICT) + "\n```\n")
 check("미닫힌 python 펜스 뒤 json 펜스 회수", extract_json(raw) == VERDICT)
+# (c) 닫는 펜스가 태그를 반복(```json 으로 닫음) — main 의 closer(\n```)가 그 줄
+#     앞 세 백틱에 매치해 회수하던 입력 (code-10 P2)
+raw = "```json\n" + json.dumps(VERDICT) + "\n```json\n"
+check("태그 반복 closer 회수", extract_json(raw) == VERDICT)
+# (d) 블록 안 인라인 ```json 은 닫지 않는다 (main 동일 — \n``` 불일치)
+raw = "```json\n" + json.dumps(VERDICT) + "\n```\n"
+check("기본 닫힘 재확인", extract_json(raw) == VERDICT)
 
 # 18. 유효하지만 극단적으로 깊은 객체는 depth 상한(64)으로 거부 — 수락하면 뒤의
 #     json.dumps(indent=2) 저장이 제곱 증폭/RecursionError 로 라운드째 죽는다 (code-9 P1)

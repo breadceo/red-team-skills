@@ -54,6 +54,8 @@ check("verdict 없는 dict 거부", extract_json('{"findings": []}') is None)
 check("verdict:null 거부", extract_json('{"verdict": null, "findings": []}') is None)
 check("findings:null 거부", extract_json('{"verdict": "GO", "findings": null}') is None)
 check("findings:list 아님 거부", extract_json('{"verdict": "GO", "findings": {}}') is None)
+check("findings 비-dict 원소 거부",
+      extract_json('{"verdict": "NO-GO", "findings": [null]}') is None)
 check("JSON 없음", extract_json("그냥 산문입니다.") is None)
 check("빈 입력", extract_json("") is None)
 
@@ -95,5 +97,11 @@ check("거대 정수 펜스 — 죽지 않는다",
       extract_json("```json\n" + big + "\n```") is None)
 raw = "```json\n" + big + "\n```\n```json\n" + json.dumps(VERDICT) + "\n```\n"
 check("거대 정수 건너뛰고 다음 판정", extract_json(raw) == VERDICT)
+
+# 11. 극단 중첩 — json 이 RecursionError 를 낸다. 죽지 않고 건너뛴다 (code-3 P2).
+deep = '{"verdict": "GO", "findings": [' + "[" * 50000 + "]" * 50000 + "]}"
+check("극단 중첩 bare — 죽지 않는다", extract_json("서술.\n" + deep + "\n") is None)
+check("극단 중첩 펜스 — 죽지 않는다",
+      extract_json("```json\n" + deep + "\n```") is None)
 
 print("all ok")

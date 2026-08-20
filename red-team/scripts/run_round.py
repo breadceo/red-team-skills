@@ -979,11 +979,15 @@ def extract_json(raw: str):
         if isinstance(c, str):
             try:
                 c = json.loads(c)
-            # JSONDecodeError 가 아니라 상위형 ValueError — 4300자리 초과 정수는
-            # int 변환 제한으로 ValueError 를 낸다(파서가 여기서 죽으면 라운드째 죽는다)
-            except ValueError:
+            # JSONDecodeError 가 아니라 상위형 ValueError — 4300자리 초과 정수는 int
+            # 변환 제한으로 ValueError 를, 극단 중첩은 RecursionError 를 낸다(파서가
+            # 여기서 죽으면 라운드째 죽는다 — PARSE-FAIL 로 남는 것이 계약이다)
+            except (ValueError, RecursionError):
                 return None
+        # findings 원소는 dict 만 — 집계부(recompute 병합)가 원소에 setdefault 를
+        # 호출하므로 비-dict 원소가 섞인 후보는 PARSE-FAIL 로 돌린다
         if isinstance(c, dict) and isinstance(c.get("findings"), list) \
+                and all(isinstance(f, dict) for f in c["findings"]) \
                 and isinstance(c.get("verdict"), str):
             return c
         return None
@@ -1017,7 +1021,7 @@ def extract_json(raw: str):
                     return
                 try:
                     cand, end = dec.raw_decode(raw, pos)
-                except ValueError:
+                except (ValueError, RecursionError):
                     pos += 1
                     continue
                 if not raw[end:].strip():
@@ -1167,9 +1171,9 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         for line in raw.splitlines():
             try:
                 ev = json.loads(line)
-            # ValueError — 거대 정수 라인이 진단 루프에서 라운드를 죽이면
-            # extract_json 의 생존 보장이 무효가 된다(code-2 P2)
-            except ValueError:
+            # ValueError(거대 정수)·RecursionError(극단 중첩) — 진단 루프가
+            # 라운드를 죽이면 extract_json 의 생존 보장이 무효가 된다(code-2·3 P2)
+            except (ValueError, RecursionError):
                 continue
             # claude 는 에러를 최상위 error 키가 아니라 is_error 로 표시한다
             if isinstance(ev, dict) and (ev.get("error") or ev.get("is_error")):

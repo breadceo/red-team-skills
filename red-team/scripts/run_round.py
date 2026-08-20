@@ -1013,6 +1013,30 @@ def extract_json(raw: str):
         # 실측 사고(#25)의 판정은 서술 마지막에 있었고, 판정 뒤에 서술이 더 붙는
         # 출력은 변경 전과 같은 PARSE-FAIL 로 남는다 — 악화가 아니다.
         dec = json.JSONDecoder()
+
+        def skip_span(i):
+            """i 의 `{` 에서 시작하는 중괄호 덩어리의 끝(exclusive)을 문자열·escape
+            인식 단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝."""
+            depth, in_str, esc = 0, False, False
+            for j in range(i, len(raw)):
+                ch = raw[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                elif ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    depth += 1
+                elif ch in "}]":
+                    depth -= 1
+                    if depth <= 0:
+                        return j + 1
+            return len(raw)
+
         def doc_end():
             pos = 0
             while True:
@@ -1022,7 +1046,12 @@ def extract_json(raw: str):
                 try:
                     cand, end = dec.raw_decode(raw, pos)
                 except (ValueError, RecursionError):
-                    pos += 1
+                    # 실패한 span 을 통째로 건너뛴다 — 한 글자 전진은 (a) 깊은 중첩의
+                    # 여는 중괄호마다 재귀 한계까지 재파싱해 시간이 비선형으로 폭증하고
+                    # (b) 깨진 외곽 객체의 내부 조각을 독립 후보로 오인한다(code-4 P1
+                    # 두 건). 고아 `{` 뒤의 판정을 놓치는 쪽은 main 과 같은 PARSE-FAIL
+                    # 이라 악화가 아니다.
+                    pos = skip_span(pos)
                     continue
                 if not raw[end:].strip():
                     yield cand
@@ -1060,7 +1089,10 @@ def count_access_errors(raw: str, cwd: str) -> int:
     for line in raw.splitlines():
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        # JSONDecodeError 만 잡으면 거대 정수(ValueError)·극단 중첩(RecursionError)
+        # 한 줄이 라운드째 죽인다 — 이 함수는 extract_json 보다 먼저 불리므로
+        # 여기가 뚫리면 파서의 생존 보장에 도달하지 못한다(code-4 지적)
+        except (ValueError, RecursionError):
             outputs.append(line)
             continue
         if not isinstance(event, dict) or event.get("jsonrpc") != "2.0":

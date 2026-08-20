@@ -74,9 +74,13 @@ tricky = {"verdict": "GO", "findings": [{"title": "코드 `a}b{` 인용"}]}
 raw = "서술.\n" + json.dumps(tricky, ensure_ascii=False) + "\n"
 check("문자열 안 중괄호", extract_json(raw) == tricky)
 
-# 8. 깨진 JSON 뒤에 정상 판정 — 깨진 것을 건너뛰고 찾는다
+# 8. 깨진 JSON 뒤에 정상 판정 — 중괄호가 균형이면 span 을 건너뛰고 찾는다.
+#    닫히지 않은 고아 `{` 뒤의 판정은 못 찾는다(None) — main 과 같은 PARSE-FAIL 로
+#    남는 수용된 트레이드오프다(code-4 P1 의 span-skip 정책).
+raw = '{"findings": 깨짐}\n\n' + json.dumps(VERDICT) + "\n"
+check("깨진 JSON(균형) 건너뛰기", extract_json(raw) == VERDICT)
 raw = '{"findings": 깨짐\n\n' + json.dumps(VERDICT) + "\n"
-check("깨진 JSON 건너뛰기", extract_json(raw) == VERDICT)
+check("닫히지 않은 고아 { 뒤 — main 동일 PARSE-FAIL", extract_json(raw) is None)
 
 # 9. 중첩 — 바깥 판정의 findings 원소가 자체로 "findings" 키를 가져도
 #    span-skip 이 바깥 객체를 통째로 읽으므로 안쪽이 판정으로 오인되지 않는다
@@ -103,5 +107,27 @@ deep = '{"verdict": "GO", "findings": [' + "[" * 50000 + "]" * 50000 + "]}"
 check("극단 중첩 bare — 죽지 않는다", extract_json("서술.\n" + deep + "\n") is None)
 check("극단 중첩 펜스 — 죽지 않는다",
       extract_json("```json\n" + deep + "\n```") is None)
+
+# 12. 실패 span 건너뛰기 (code-4 P1 두 건)
+# (a) 깊은 객체 중첩 — 여는 { 마다 재파싱하면 시간이 비선형으로 폭증한다(실측 16s+).
+#     span-skip 은 각 문자를 1회만 방문하므로 즉시 끝나야 한다.
+import time
+deep_obj = '{"a":' * 50000 + "1" + "}" * 50000
+t0 = time.monotonic()
+check("깊은 객체 중첩 bare — 죽지 않는다", extract_json("서술.\n" + deep_obj + "\n") is None)
+check("깊은 객체 중첩 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
+# (b) 닫히지 않은 외곽 객체의 내부 조각을 판정으로 오인하지 않는다
+raw = '{"verdict":"GO","findings":[ 깨진 외곽… {"verdict":"NO-GO","findings":[]}'
+check("깨진 외곽의 내부 조각 거부", extract_json(raw) is None)
+# (c) 산문 속 균형 잡힌 고아 중괄호는 건너뛰고 뒤의 판정을 찾는다
+raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
+check("산문 중괄호 건너뛰고 판정 회수", extract_json(raw) == VERDICT)
+
+# 13. count_access_errors 도 같은 입력에서 죽지 않는다 (extract_json 보다 먼저 불린다)
+from run_round import count_access_errors
+big_line = '{"result": ' + "9" * 5000 + "}"
+deep_line = "[" * 50000 + "]" * 50000
+assert count_access_errors(big_line + "\n" + deep_line, "/tmp/x") == 0
+print("  ok  count_access_errors — 거대 정수·극단 중첩 생존")
 
 print("all ok")

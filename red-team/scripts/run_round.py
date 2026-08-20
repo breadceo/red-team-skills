@@ -1042,33 +1042,6 @@ def extract_json(raw: str):
         # 출력은 변경 전과 같은 PARSE-FAIL 로 남는다 — 악화가 아니다.
         dec = json.JSONDecoder()
 
-        def skip_span(i):
-            """raw_decode 가 실패한 opener 에서 시작하는 덩어리의 끝(exclusive)을
-            단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝.
-
-            여닫이 종류는 stack 으로 대응시킨다 — 단일 depth 카운터는 짝이 안 맞는
-            closer(`{…]`)가 span 을 조기 종료시켜 깨진 외곽 안의 내부 조각을 다시
-            후보로 만든다(code-5). **인용부호 의심 정책**(code-7 P1): 실패한 span 은
-            유효 JSON 이 아니므로 어떤 문자열 문법이 쓰였는지 알 수 없다 — 특정
-            인용 규약(double quote)만 추적하면 다른 규약(single quote 등) 안의 closer
-            가 span 을 조기 종료시킨다. 인용부호(\" ' `)가 하나라도 있으면 closer 를
-            신뢰하지 않고 문서 끝까지 건너뛴다. 인용부호 없는 span(산문 `{foo}` 등)은
-            숨은 문자열 문맥이 불가능해 중괄호 균형이 그대로 사실이다."""
-            stack, seen_quote = [], False
-            for j in range(i, len(raw)):
-                ch = raw[j]
-                if ch in "\"'`":
-                    seen_quote = True
-                elif ch == "{":
-                    stack.append("}")
-                elif ch == "[":
-                    stack.append("]")
-                elif ch in "}]" and stack and ch == stack[-1]:
-                    stack.pop()
-                    if not stack:
-                        return len(raw) if seen_quote else j + 1
-            return len(raw)
-
         # 문서끝 인덱스는 1회만 계산한다 — 후보마다 raw[end:] 를 slice+strip 하면
         # 연속 객체 입력에서 복사량이 제곱으로 는다(code-6 P2)
         doc_last = len(raw.rstrip())
@@ -1087,19 +1060,22 @@ def extract_json(raw: str):
                 if not nexts:
                     return
                 pos = min(nexts)
-                # `[` 컨테이너도 통째로 처리한다 — 진입점을 `{` 만 찾으면 닫히지
-                # 않은 배열 안의 판정 조각이 독립 후보로 오인된다(code-6 P2).
-                # 판정은 dict 뿐이라 배열은 후보가 아니고 span 만 소비한다.
+                # `[` 컨테이너도 raw_decode 로 통째로 소비한다 — 진입점을 `{` 만
+                # 찾으면 닫히지 않은 배열 안의 판정 조각이 독립 후보로 오인된다
+                # (code-6 P2). 판정은 dict 뿐이라 배열 자체는 후보가 아니다.
                 try:
                     cand, end = dec.raw_decode(raw, pos)
                 except (ValueError, RecursionError):
-                    # 실패한 span 을 통째로 건너뛴다 — 한 글자 전진은 (a) 깊은 중첩의
-                    # 여는 중괄호마다 재귀 한계까지 재파싱해 시간이 비선형으로 폭증하고
-                    # (b) 깨진 외곽 객체의 내부 조각을 독립 후보로 오인한다(code-4 P1
-                    # 두 건). 고아 `{` 뒤의 판정을 놓치는 쪽은 main 과 같은 PARSE-FAIL
-                    # 이라 악화가 아니다.
-                    pos = skip_span(pos)
-                    continue
+                    # 파싱이 실패하면 이후는 아무것도 후보가 아니다. 실패한 span 의
+                    # 문법(문자열·escape·주석·인용 규약)은 알 수 없으므로 어떤
+                    # 휴리스틱 경계도 그 안의 closer 에 속아 내부 조각을 판정으로
+                    # 오인시킬 수 있다 — double quote 추적(code-4)→종류 stack(code-5)
+                    # →인용부호 의심(code-7)→escape·주석(code-8) 4연속 실측이 증명.
+                    # bare 수락은 "유효 JSON 파스의 연쇄" 위에만 놓는다. 실패 이후의
+                    # 판정 유실은 main 과 같은 PARSE-FAIL 이라 악화가 아니고, 실측
+                    # 사고(#25) 원본(서술 484자 + bare 판정, 앞선 opener 없음)은
+                    # 이 정책에서도 회수됨을 검증했다.
+                    return
                 if raw[pos] == "{" and end >= doc_last:
                     yield cand
                 pos = end

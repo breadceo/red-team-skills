@@ -74,16 +74,21 @@ tricky = {"verdict": "GO", "findings": [{"title": "코드 `a}b{` 인용"}]}
 raw = "서술.\n" + json.dumps(tricky, ensure_ascii=False) + "\n"
 check("문자열 안 중괄호", extract_json(raw) == tricky)
 
-# 8. 깨진 JSON 뒤의 판정 — **인용부호 의심 정책**(code-7 P1): 실패 span 에 인용부호
-#    (" ' `)가 있으면 문자열 문법을 알 수 없으므로 closer 를 신뢰하지 않고 문서
-#    끝까지 건너뛴다(뒤 판정 유실 = main 동일 PARSE-FAIL, 수용된 트레이드오프).
-#    인용부호 없는 균형 span 은 믿고 건너뛴다 — 산문 {foo} 케이스가 아래 12(c).
+# 8. **실패 시 전면 차단 정책**(code-8 P1 최종): bare 스캔에서 raw_decode 가 한 번
+#    실패하면 이후는 아무것도 후보가 아니다 — 실패 span 의 문법(문자열·escape·주석·
+#    인용 규약)은 알 수 없어 어떤 휴리스틱 경계도 속을 수 있다(code-4·5·7·8 4연속
+#    실측). 실패 뒤 판정 유실은 main 동일 PARSE-FAIL. 실측 사고(#25) 원본은 판정 앞
+#    opener 가 없어 이 정책에서도 회수된다(테스트 3).
 raw = '{"findings": 깨짐}\n\n' + json.dumps(VERDICT) + "\n"
-check("인용부호 있는 깨진 span — 문서끝까지 skip", extract_json(raw) is None)
+check("깨진 span 뒤 — 전면 차단", extract_json(raw) is None)
 raw = '{"findings": 깨짐\n\n' + json.dumps(VERDICT) + "\n"
 check("닫히지 않은 고아 { 뒤 — main 동일 PARSE-FAIL", extract_json(raw) is None)
 raw = ("{'comment': '}', 'nested': " + '{"verdict":"NO-GO","findings":[]}')
-check("single-quote 안 closer 로 조기 종료 안 됨", extract_json(raw) is None)
+check("single-quote 안 closer 에 안 속는다", extract_json(raw) is None)
+raw = '{// } 이 닫힘은 주석 안이다\n{"verdict":"GO","findings":[]}'
+check("주석 안 closer 에 안 속는다", extract_json(raw) is None)
+raw = '{\\} still outer {"verdict":"GO","findings":[]}'
+check("escape 뒤 closer 에 안 속는다", extract_json(raw) is None)
 
 # 9. 중첩 — 바깥 판정의 findings 원소가 자체로 "findings" 키를 가져도
 #    span-skip 이 바깥 객체를 통째로 읽으므로 안쪽이 판정으로 오인되지 않는다
@@ -130,9 +135,13 @@ check("mismatched closer 뒤 내부 조각 거부", extract_json(raw) is None)
 #       진입점을 `{` 만 찾으면 앞의 unmatched `[` 를 보지 못한다
 raw = '[{"verdict":"NO-GO","findings":[]}'
 check("미닫힌 배열 안 조각 거부", extract_json(raw) is None)
-# (c) 산문 속 균형 잡힌 고아 중괄호는 건너뛰고 뒤의 판정을 찾는다
+# (c) 산문 속 중괄호(파싱 실패)도 전면 차단 — 유효 JSON 이 아닌 span 의 경계는
+#     신뢰하지 않는다. main 동일 PARSE-FAIL 이라 악화 아님 (code-8 정책)
 raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
-check("산문 중괄호 건너뛰고 판정 회수", extract_json(raw) == VERDICT)
+check("산문 중괄호 뒤 — 전면 차단 (main 동일)", extract_json(raw) is None)
+# 유효 JSON 조각(인라인 예시 등)이 앞에 있는 경우는 파스로 소비되고 회수는 유지된다
+raw = '인라인 예시 {"a": 1} 와 배열 [1, 2] 뒤.\n' + json.dumps(VERDICT) + "\n"
+check("유효 인라인 JSON 뒤 판정 회수", extract_json(raw) == VERDICT)
 
 # 13. count_access_errors 도 같은 입력에서 죽지 않는다 (extract_json 보다 먼저 불린다)
 from run_round import count_access_errors

@@ -1030,7 +1030,9 @@ def extract_json(raw: str):
         알터네이션 finditer 한 번이라 닫는 펜스 없는 opener 가 많아도 O(n) 이다
         (lazy 정규식의 O(n²) 재탐색 방지, code-6 P1)."""
         bodies, start = [], None
-        for m in re.finditer(r"```json[^\S\n]*\n|^```", raw, re.M):
+        # opener 는 3개 이상 백틱 + json — 4백틱 opener(````json)를 3백틱으로 쓰면
+        # closer 대안이 offset 0 에서 먼저 소비해 main 이 회수하던 판정을 잃는다(code-11)
+        for m in re.finditer(r"`{3,}json[^\S\n]*\n|^```", raw, re.M):
             if start is not None:
                 # 블록 안에서는 줄 시작의 ``` 가 태그 반복 여부와 무관하게 closer 다
                 # — main 의 closer(\n```)는 "```json" 닫는 줄의 앞 세 백틱에도
@@ -1134,16 +1136,19 @@ def count_access_errors(raw: str, cwd: str) -> int:
     outputs = []
 
     def add_output(value):
-        if isinstance(value, str):
-            outputs.extend(value.splitlines())
-        elif isinstance(value, list):
-            for item in value:
-                add_output(item)
-        elif isinstance(value, dict):
-            for key in ("formatted_output", "error", "text", "message",
-                        "stdout", "stderr", "content", "output"):
-                if key in value:
-                    add_output(value[key])
+        # 명시적 스택 반복문 — json.loads 가 성공한 깊은 중첩 이벤트를 재귀로
+        # 순회하면 RecursionError 로 extract_json 전에 라운드가 죽는다(code-11)
+        stack = [value]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, str):
+                outputs.extend(v.splitlines())
+            elif isinstance(v, list):
+                stack.extend(reversed(v))
+            elif isinstance(v, dict):
+                stack.extend(v[key] for key in reversed(
+                    ("formatted_output", "error", "text", "message",
+                     "stdout", "stderr", "content", "output")) if key in v)
 
     terminal_requests = {}
     terminal_outputs = {}

@@ -149,6 +149,11 @@ big_line = '{"result": ' + "9" * 5000 + "}"
 deep_line = "[" * 50000 + "]" * 50000
 assert count_access_errors(big_line + "\n" + deep_line, "/tmp/x") == 0
 print("  ok  count_access_errors — 거대 정수·극단 중첩 생존")
+# json.loads 가 성공하는 깊은 중첩 이벤트도 add_output 순회에서 죽지 않는다 (code-11)
+deep_event = ('{"jsonrpc": "2.0", "method": "session/update", "params": {"update": '
+              '{"rawOutput": {"error": ' + "[" * 900 + '"x"' + "]" * 900 + "}}}}")
+assert count_access_errors(deep_event, "/tmp/x") == 0
+print("  ok  count_access_errors — 깊은 중첩 이벤트 순회 생존")
 
 # 14. parse_output 도 같은 계열에서 죽지 않는다 — count_access_errors 다음,
 #     extract_json 이전에 불리는 자리라 여기가 뚫리면 PARSE-FAIL 기록 전에 죽는다
@@ -196,6 +201,9 @@ check("태그 반복 closer 회수", extract_json(raw) == VERDICT)
 # (d) 블록 안 인라인 ```json 은 닫지 않는다 (main 동일 — \n``` 불일치)
 raw = "```json\n" + json.dumps(VERDICT) + "\n```\n"
 check("기본 닫힘 재확인", extract_json(raw) == VERDICT)
+# (e) 4백틱 opener — main 은 offset 1 에서 ```json 을 찾아 회수했다 (code-11 P2)
+raw = "````json\n" + json.dumps(VERDICT) + "\n````\n"
+check("4백틱 opener+closer 회수", extract_json(raw) == VERDICT)
 
 # 18. 유효하지만 극단적으로 깊은 객체는 depth 상한(64)으로 거부 — 수락하면 뒤의
 #     json.dumps(indent=2) 저장이 제곱 증폭/RecursionError 로 라운드째 죽는다 (code-9 P1)

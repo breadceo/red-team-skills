@@ -74,13 +74,16 @@ tricky = {"verdict": "GO", "findings": [{"title": "코드 `a}b{` 인용"}]}
 raw = "서술.\n" + json.dumps(tricky, ensure_ascii=False) + "\n"
 check("문자열 안 중괄호", extract_json(raw) == tricky)
 
-# 8. 깨진 JSON 뒤에 정상 판정 — 중괄호가 균형이면 span 을 건너뛰고 찾는다.
-#    닫히지 않은 고아 `{` 뒤의 판정은 못 찾는다(None) — main 과 같은 PARSE-FAIL 로
-#    남는 수용된 트레이드오프다(code-4 P1 의 span-skip 정책).
+# 8. 깨진 JSON 뒤의 판정 — **인용부호 의심 정책**(code-7 P1): 실패 span 에 인용부호
+#    (" ' `)가 있으면 문자열 문법을 알 수 없으므로 closer 를 신뢰하지 않고 문서
+#    끝까지 건너뛴다(뒤 판정 유실 = main 동일 PARSE-FAIL, 수용된 트레이드오프).
+#    인용부호 없는 균형 span 은 믿고 건너뛴다 — 산문 {foo} 케이스가 아래 12(c).
 raw = '{"findings": 깨짐}\n\n' + json.dumps(VERDICT) + "\n"
-check("깨진 JSON(균형) 건너뛰기", extract_json(raw) == VERDICT)
+check("인용부호 있는 깨진 span — 문서끝까지 skip", extract_json(raw) is None)
 raw = '{"findings": 깨짐\n\n' + json.dumps(VERDICT) + "\n"
 check("닫히지 않은 고아 { 뒤 — main 동일 PARSE-FAIL", extract_json(raw) is None)
+raw = ("{'comment': '}', 'nested': " + '{"verdict":"NO-GO","findings":[]}')
+check("single-quote 안 closer 로 조기 종료 안 됨", extract_json(raw) is None)
 
 # 9. 중첩 — 바깥 판정의 findings 원소가 자체로 "findings" 키를 가져도
 #    span-skip 이 바깥 객체를 통째로 읽으므로 안쪽이 판정으로 오인되지 않는다
@@ -159,5 +162,13 @@ t0 = time.monotonic()
 raw = "{}" * 50000 + json.dumps(VERDICT)
 check("연속 소객체 뒤 판정 회수", extract_json(raw) == VERDICT)
 check("연속 소객체 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
+# (d) `{` 없는 연속 배열 — opener 재검색이 선형이어야 한다 (code-7 P2)
+t0 = time.monotonic()
+check("연속 배열 — 죽지 않는다", extract_json("[]" * 160000) is None)
+check("연속 배열 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
+
+# 16. 4백틱 closer — main 의 정규식은 회수했다. 줄 스캐너도 닫아야 한다 (code-7 P2)
+raw = "```json\n" + json.dumps(VERDICT) + "\n````\n"
+check("4백틱 closer 펜스 회수", extract_json(raw) == VERDICT)
 
 print("all ok")

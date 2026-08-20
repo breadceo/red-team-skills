@@ -1011,14 +1011,16 @@ def extract_json(raw: str):
         O(n²) 가 되고(code-6 P1), 앞선 언어 태그 펜스의 닫는 ``` 를 태그 없는
         펜스의 opener 로 오인했다(code-3 pre-existing — 이 스캐너가 함께 해소).
         Markdown 규칙대로 줄 경계의 ``` 만 여닫이로 인정한다."""
-        bodies, body, info = [], None, None
+        bodies, body, info, opener = [], None, None, 0
         for line in raw.split("\n"):
             stripped = line.strip()
+            ticks = len(stripped) - len(stripped.lstrip("`"))
             if body is None:
-                if stripped.startswith("```"):
-                    info = stripped[3:].strip()
-                    body = []
-            elif stripped == "```":
+                if ticks >= 3:
+                    opener, info, body = ticks, stripped[ticks:].strip(), []
+            # closer 는 opener 길이 이상의 백틱만으로 된 줄 (Markdown 규칙 —
+            # 4백틱 closer 를 못 닫으면 main 이 회수하던 판정을 유실한다, code-7)
+            elif ticks >= opener and stripped == "`" * len(stripped):
                 if info == tag:
                     bodies.append("\n".join(body))
                 body = None
@@ -1041,23 +1043,22 @@ def extract_json(raw: str):
         dec = json.JSONDecoder()
 
         def skip_span(i):
-            """i 의 `{` 에서 시작하는 중괄호 덩어리의 끝(exclusive)을 문자열·escape
-            인식 단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝.
+            """raw_decode 가 실패한 opener 에서 시작하는 덩어리의 끝(exclusive)을
+            단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝.
+
             여닫이 종류는 stack 으로 대응시킨다 — 단일 depth 카운터는 짝이 안 맞는
             closer(`{…]`)가 span 을 조기 종료시켜 깨진 외곽 안의 내부 조각을 다시
-            후보로 만든다(code-5). mismatch 는 무시한다 — 깨진 span 은 안 닫힌 것이다."""
-            stack, in_str, esc = [], False, False
+            후보로 만든다(code-5). **인용부호 의심 정책**(code-7 P1): 실패한 span 은
+            유효 JSON 이 아니므로 어떤 문자열 문법이 쓰였는지 알 수 없다 — 특정
+            인용 규약(double quote)만 추적하면 다른 규약(single quote 등) 안의 closer
+            가 span 을 조기 종료시킨다. 인용부호(\" ' `)가 하나라도 있으면 closer 를
+            신뢰하지 않고 문서 끝까지 건너뛴다. 인용부호 없는 span(산문 `{foo}` 등)은
+            숨은 문자열 문맥이 불가능해 중괄호 균형이 그대로 사실이다."""
+            stack, seen_quote = [], False
             for j in range(i, len(raw)):
                 ch = raw[j]
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == "\\":
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                elif ch == '"':
-                    in_str = True
+                if ch in "\"'`":
+                    seen_quote = True
                 elif ch == "{":
                     stack.append("}")
                 elif ch == "[":
@@ -1065,7 +1066,7 @@ def extract_json(raw: str):
                 elif ch in "}]" and stack and ch == stack[-1]:
                     stack.pop()
                     if not stack:
-                        return j + 1
+                        return len(raw) if seen_quote else j + 1
             return len(raw)
 
         # 문서끝 인덱스는 1회만 계산한다 — 후보마다 raw[end:] 를 slice+strip 하면
@@ -1073,22 +1074,22 @@ def extract_json(raw: str):
         doc_last = len(raw.rstrip())
 
         def doc_end():
-            # `[` 위치는 캐시한다 — 매 반복 raw.find("[", pos) 는 `[` 없는 입력에서
-            # 남은 문서 전체를 반복 스캔해 그 자체로 O(n²) 다
-            pos, nb = 0, raw.find("[")
+            # opener 위치는 둘 다 캐시한다 — 매 반복 raw.find(x, pos) 는 그 문자가
+            # 더 없는 입력에서 남은 문서 전체를 반복 스캔해 그 자체로 O(n²) 다
+            # (code-6 `[` 캐시, code-7 `{` 캐시 — '[]'*N 실측 1.5초)
+            pos, nb, ob = 0, raw.find("["), raw.find("{")
             while True:
                 if nb != -1 and nb < pos:
                     nb = raw.find("[", pos)
-                b = raw.find("{", pos)
-                nexts = [x for x in (b, nb) if x != -1]
+                if ob != -1 and ob < pos:
+                    ob = raw.find("{", pos)
+                nexts = [x for x in (ob, nb) if x != -1]
                 if not nexts:
                     return
                 pos = min(nexts)
-                # `[` 컨테이너는 통째로 건너뛴다 — 진입점을 `{` 만 찾으면 닫히지
-                # 않은 배열 안의 판정 조각이 독립 후보로 오인된다(code-6 P2)
-                if raw[pos] == "[":
-                    pos = skip_span(pos)
-                    continue
+                # `[` 컨테이너도 통째로 처리한다 — 진입점을 `{` 만 찾으면 닫히지
+                # 않은 배열 안의 판정 조각이 독립 후보로 오인된다(code-6 P2).
+                # 판정은 dict 뿐이라 배열은 후보가 아니고 span 만 소비한다.
                 try:
                     cand, end = dec.raw_decode(raw, pos)
                 except (ValueError, RecursionError):
@@ -1099,7 +1100,7 @@ def extract_json(raw: str):
                     # 이라 악화가 아니다.
                     pos = skip_span(pos)
                     continue
-                if end >= doc_last:
+                if raw[pos] == "{" and end >= doc_last:
                     yield cand
                 pos = end
         obj = last(doc_end())

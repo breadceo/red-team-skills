@@ -119,6 +119,10 @@ check("깊은 객체 중첩 — 비선형 폭증 없음 (<5s)", time.monotonic()
 # (b) 닫히지 않은 외곽 객체의 내부 조각을 판정으로 오인하지 않는다
 raw = '{"verdict":"GO","findings":[ 깨진 외곽… {"verdict":"NO-GO","findings":[]}'
 check("깨진 외곽의 내부 조각 거부", extract_json(raw) is None)
+# (b') 짝이 안 맞는 closer 도 span 을 조기 종료시키지 않는다 (code-5 P2) —
+#      단일 depth 카운터면 `]` 가 `{` 를 닫아 내부 조각이 다시 후보가 된다
+raw = '{"outer": ] 아직 외곽 객체 내부 {"verdict":"GO","findings":[]}'
+check("mismatched closer 뒤 내부 조각 거부", extract_json(raw) is None)
 # (c) 산문 속 균형 잡힌 고아 중괄호는 건너뛰고 뒤의 판정을 찾는다
 raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
 check("산문 중괄호 건너뛰고 판정 회수", extract_json(raw) == VERDICT)

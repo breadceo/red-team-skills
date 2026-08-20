@@ -1016,8 +1016,11 @@ def extract_json(raw: str):
 
         def skip_span(i):
             """i 의 `{` 에서 시작하는 중괄호 덩어리의 끝(exclusive)을 문자열·escape
-            인식 단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝."""
-            depth, in_str, esc = 0, False, False
+            인식 단일 패스(반복문 — 재귀 없음)로 찾는다. 닫히지 않으면 문서 끝.
+            여닫이 종류는 stack 으로 대응시킨다 — 단일 depth 카운터는 짝이 안 맞는
+            closer(`{…]`)가 span 을 조기 종료시켜 깨진 외곽 안의 내부 조각을 다시
+            후보로 만든다(code-5). mismatch 는 무시한다 — 깨진 span 은 안 닫힌 것이다."""
+            stack, in_str, esc = [], False, False
             for j in range(i, len(raw)):
                 ch = raw[j]
                 if in_str:
@@ -1029,11 +1032,13 @@ def extract_json(raw: str):
                         in_str = False
                 elif ch == '"':
                     in_str = True
-                elif ch in "{[":
-                    depth += 1
-                elif ch in "}]":
-                    depth -= 1
-                    if depth <= 0:
+                elif ch == "{":
+                    stack.append("}")
+                elif ch == "[":
+                    stack.append("]")
+                elif ch in "}]" and stack and ch == stack[-1]:
+                    stack.pop()
+                    if not stack:
                         return j + 1
             return len(raw)
 

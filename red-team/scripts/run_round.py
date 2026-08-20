@@ -908,7 +908,9 @@ def parse_output(engine: str, stdout: str, model: str | None):
             out = u.get("output_tokens", 0)
             return d.get("result") or "", {"input": inp, "output": out,
                                            "total": inp + out, "cost_usd": d.get("total_cost_usd")}
-        except (ValueError, KeyError, TypeError):
+        # RecursionError — 극단 중첩 JSON 이 여기서 죽으면 PARSE-FAIL 기록 전에
+        # 라운드가 죽는다(extract_json 의 생존 보장과 같은 계열)
+        except (ValueError, KeyError, TypeError, RecursionError):
             return stdout, None
     if engine == "codex":
         # acpx `--format json`: ACP JSON-RPC 스트림. 본문은 agent_message_chunk 조각의 연결,
@@ -920,7 +922,9 @@ def parse_output(engine: str, stdout: str, model: str | None):
                 continue
             try:
                 d = json.loads(line)
-            except json.JSONDecodeError:
+            # 거대 정수는 ValueError, 극단 중첩은 RecursionError — 한 줄이
+            # 스트림 전체 파싱을 죽이면 안 된다
+            except (ValueError, RecursionError):
                 continue
             upd = (d.get("params") or {}).get("update") or {}
             if upd.get("sessionUpdate") == "agent_message_chunk":
@@ -1000,9 +1004,31 @@ def extract_json(raw: str):
                 found = got
         return found
 
-    obj = last(re.findall(r"```json\s*\n(.*?)\n```", raw, re.S))
+    def fenced(tag):
+        """줄 단위 단일 패스로 펜스를 여닫아 짝짓고 tag 펜스의 본문만 낸다.
+
+        lazy 정규식은 닫는 펜스 없는 opener 유사 문자열마다 문서 끝까지 재탐색해
+        O(n²) 가 되고(code-6 P1), 앞선 언어 태그 펜스의 닫는 ``` 를 태그 없는
+        펜스의 opener 로 오인했다(code-3 pre-existing — 이 스캐너가 함께 해소).
+        Markdown 규칙대로 줄 경계의 ``` 만 여닫이로 인정한다."""
+        bodies, body, info = [], None, None
+        for line in raw.split("\n"):
+            stripped = line.strip()
+            if body is None:
+                if stripped.startswith("```"):
+                    info = stripped[3:].strip()
+                    body = []
+            elif stripped == "```":
+                if info == tag:
+                    bodies.append("\n".join(body))
+                body = None
+            else:
+                body.append(line)
+        return bodies
+
+    obj = last(fenced("json"))
     if obj is None:
-        obj = last(re.findall(r"```[^\S\n]*\n(.*?)\n```", raw, re.S))
+        obj = last(fenced(""))
     if obj is None:
         # bare JSON — 정방향 span-skip: `{` 마다 raw_decode 를 시도하고 성공하면
         # 그 객체의 끝으로 점프한다. 내부 중첩 객체를 따로 보지 않으므로 바깥 판정
@@ -1042,12 +1068,27 @@ def extract_json(raw: str):
                         return j + 1
             return len(raw)
 
+        # 문서끝 인덱스는 1회만 계산한다 — 후보마다 raw[end:] 를 slice+strip 하면
+        # 연속 객체 입력에서 복사량이 제곱으로 는다(code-6 P2)
+        doc_last = len(raw.rstrip())
+
         def doc_end():
-            pos = 0
+            # `[` 위치는 캐시한다 — 매 반복 raw.find("[", pos) 는 `[` 없는 입력에서
+            # 남은 문서 전체를 반복 스캔해 그 자체로 O(n²) 다
+            pos, nb = 0, raw.find("[")
             while True:
-                pos = raw.find("{", pos)
-                if pos == -1:
+                if nb != -1 and nb < pos:
+                    nb = raw.find("[", pos)
+                b = raw.find("{", pos)
+                nexts = [x for x in (b, nb) if x != -1]
+                if not nexts:
                     return
+                pos = min(nexts)
+                # `[` 컨테이너는 통째로 건너뛴다 — 진입점을 `{` 만 찾으면 닫히지
+                # 않은 배열 안의 판정 조각이 독립 후보로 오인된다(code-6 P2)
+                if raw[pos] == "[":
+                    pos = skip_span(pos)
+                    continue
                 try:
                     cand, end = dec.raw_decode(raw, pos)
                 except (ValueError, RecursionError):
@@ -1058,7 +1099,7 @@ def extract_json(raw: str):
                     # 이라 악화가 아니다.
                     pos = skip_span(pos)
                     continue
-                if not raw[end:].strip():
+                if end >= doc_last:
                     yield cand
                 pos = end
         obj = last(doc_end())

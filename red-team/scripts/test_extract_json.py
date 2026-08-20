@@ -123,6 +123,10 @@ check("깨진 외곽의 내부 조각 거부", extract_json(raw) is None)
 #      단일 depth 카운터면 `]` 가 `{` 를 닫아 내부 조각이 다시 후보가 된다
 raw = '{"outer": ] 아직 외곽 객체 내부 {"verdict":"GO","findings":[]}'
 check("mismatched closer 뒤 내부 조각 거부", extract_json(raw) is None)
+# (b'') 닫히지 않은 배열 컨테이너 안의 판정 조각도 거부한다 (code-6 P2) —
+#       진입점을 `{` 만 찾으면 앞의 unmatched `[` 를 보지 못한다
+raw = '[{"verdict":"NO-GO","findings":[]}'
+check("미닫힌 배열 안 조각 거부", extract_json(raw) is None)
 # (c) 산문 속 균형 잡힌 고아 중괄호는 건너뛰고 뒤의 판정을 찾는다
 raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
 check("산문 중괄호 건너뛰고 판정 회수", extract_json(raw) == VERDICT)
@@ -133,5 +137,27 @@ big_line = '{"result": ' + "9" * 5000 + "}"
 deep_line = "[" * 50000 + "]" * 50000
 assert count_access_errors(big_line + "\n" + deep_line, "/tmp/x") == 0
 print("  ok  count_access_errors — 거대 정수·극단 중첩 생존")
+
+# 14. parse_output 도 같은 계열에서 죽지 않는다 — count_access_errors 다음,
+#     extract_json 이전에 불리는 자리라 여기가 뚫리면 PARSE-FAIL 기록 전에 죽는다
+from run_round import parse_output
+text, tok = parse_output("codex", big_line + "\n" + deep_line, None)
+check("parse_output codex — 거대 정수·극단 중첩 생존", tok is None)
+text, tok = parse_output("claude", "{" + deep_line + "}", None)
+check("parse_output claude — 극단 중첩 생존", tok is None)
+
+# 15. 펜스 스캐너 (code-6 P1, code-3 pre-existing 해소)
+# (a) 언어 태그 펜스 뒤의 태그 없는 판정 펜스 — 닫는 ``` 를 opener 로 오인하지 않는다
+raw = "```python\ncode()\n```\n\n서술.\n\n```\n" + json.dumps(VERDICT) + "\n```\n"
+check("언어 태그 펜스 뒤 태그 없는 판정 펜스", extract_json(raw) == VERDICT)
+# (b) 닫는 펜스 없는 opener 유사 문자열이 많아도 비선형 폭증이 없다
+t0 = time.monotonic()
+check("깨진 펜스 다수 — 죽지 않는다", extract_json("x```\n" * 8000 + "tail") is None)
+check("깨진 펜스 다수 — 비선형 폭증 없음 (<2s)", time.monotonic() - t0 < 2)
+# (c) 연속 소객체 다수 뒤 판정 — suffix 재복사 없이 선형으로 끝난다
+t0 = time.monotonic()
+raw = "{}" * 50000 + json.dumps(VERDICT)
+check("연속 소객체 뒤 판정 회수", extract_json(raw) == VERDICT)
+check("연속 소객체 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
 
 print("all ok")

@@ -1,0 +1,14 @@
+CHANGELOG.md
+  h_d82ccb34241a0d 41-102
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "18d7a5450ad0e4cd95d3ef3534798e878e1a405e",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

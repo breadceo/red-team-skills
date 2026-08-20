@@ -1004,8 +1004,12 @@ def extract_json(raw: str):
         # 그 객체의 끝으로 점프한다. 내부 중첩 객체를 따로 보지 않으므로 바깥 판정
         # 안의 findings 원소가 판정으로 오인되지 않고(역방향 스캔의 실측 결함),
         # 정규식 중괄호 균형 카운팅의 문자열-리터럴 문제도 없다.
+        # 단 **문서를 끝내는 객체만** 수락한다(뒤가 공백뿐) — 산문 속에 파묻힌
+        # 형식 예시를 미완주 리뷰어의 판정으로 오인하지 않기 위해서다(code-2 P1).
+        # 실측 사고(#25)의 판정은 서술 마지막에 있었고, 판정 뒤에 서술이 더 붙는
+        # 출력은 변경 전과 같은 PARSE-FAIL 로 남는다 — 악화가 아니다.
         dec = json.JSONDecoder()
-        def spans():
+        def doc_end():
             pos = 0
             while True:
                 pos = raw.find("{", pos)
@@ -1016,9 +1020,10 @@ def extract_json(raw: str):
                 except ValueError:
                     pos += 1
                     continue
-                yield cand
+                if not raw[end:].strip():
+                    yield cand
                 pos = end
-        obj = last(spans())
+        obj = last(doc_end())
     return obj
 
 
@@ -1162,9 +1167,12 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         for line in raw.splitlines():
             try:
                 ev = json.loads(line)
-            except json.JSONDecodeError:
+            # ValueError — 거대 정수 라인이 진단 루프에서 라운드를 죽이면
+            # extract_json 의 생존 보장이 무효가 된다(code-2 P2)
+            except ValueError:
                 continue
-            if isinstance(ev, dict) and ev.get("error"):
+            # claude 는 에러를 최상위 error 키가 아니라 is_error 로 표시한다
+            if isinstance(ev, dict) and (ev.get("error") or ev.get("is_error")):
                 errs += 1
         print(f"  {reviewer:24} PARSE-FAIL  {label}"
               f"  raw {len(raw)/1000:.1f}k, error {errs}건{warn}", flush=True)

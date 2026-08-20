@@ -57,8 +57,15 @@ check("findings:list 아님 거부", extract_json('{"verdict": "GO", "findings":
 check("JSON 없음", extract_json("그냥 산문입니다.") is None)
 check("빈 입력", extract_json("") is None)
 
-# 리스트 안의 완전한 판정 객체는 span-skip 이 그 원소의 `{` 에서 회수한다
-check("리스트 안 판정 객체 회수", extract_json('[' + json.dumps(VERDICT) + ']') == VERDICT)
+# bare 는 문서를 끝내는 객체만 수락한다 (code-2 P1) — 산문 속 형식 예시를
+# 미완주 리뷰어의 판정으로 오인하지 않는다
+raw = ('검토 과정에서 사용할 예시: {"verdict":"NO-GO","findings":[]}\n'
+       "실제 검토를 완료하지 못했습니다.")
+check("산문 속 예시만 있으면 거부", extract_json(raw) is None)
+raw = json.dumps(VERDICT) + "\n판정 뒤에 서술이 더 붙었다."
+check("판정 뒤 서술 — bare 거부 (기존 PARSE-FAIL 유지)", extract_json(raw) is None)
+check("리스트 래핑 — 문서끝 객체가 아니므로 거부",
+      extract_json('[' + json.dumps(VERDICT) + ']') is None)
 
 # 7. 문자열 리터럴 안 중괄호 — 정규식 균형 카운팅이면 어긋나는 케이스
 tricky = {"verdict": "GO", "findings": [{"title": "코드 `a}b{` 인용"}]}

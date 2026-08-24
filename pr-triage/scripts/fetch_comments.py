@@ -505,7 +505,11 @@ def main():
                               "--log", str(LOG)])
             print(f"\n▶ 검토 시점에 도달했다 ({', '.join(hits)}). 사용자에게 재측정·반영 여부를 묻는다:\n"
                   f"  {cmd}")
-        return
+        # 두 플래그를 한 호출에 같이 주는 게 자연스러운 사용이다(분류 확인 → 기록 + 커서 갱신).
+        # 여기서 무조건 return 하면 --mark-triaged 가 조용히 no-op 이 되어 같은 코멘트가
+        # 다음 라운드에 재등장한다 — 실측 사고: ceo-client#916 의 LGTM 1건이 마킹되지 않았다.
+        if not a.mark_triaged:
+            return
 
     if a.mark_triaged:
         ids = [int(x) for x in re.findall(r"\d+", a.mark_triaged)]

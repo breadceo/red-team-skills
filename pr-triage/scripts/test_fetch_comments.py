@@ -399,6 +399,16 @@ argv = shlex.split(cmd)
 assert argv[1] == str(Path(fc.__file__).resolve().parent.parent / "evals" / "score.py"), argv
 assert argv[argv.index("--log") + 1] == str(fc.LOG), argv
 
+# ── 9) --log-classification 과 --mark-triaged 를 같이 주면 둘 다 수행한다 ──
+# 실측 사고: ceo-client#916 에서 두 플래그를 한 호출에 줘 마킹이 조용히 no-op 이 됐다.
+assert 777 not in fc.load_state(".", 5)["triaged"], "테스트 전제가 깨졌다 — 777 이 이미 triaged 다"
+stdout = run("--log-classification", '[{"id": 777, "predicted": [], "confirmed": []}]',
+             "--mark-triaged", "777")
+assert "분류 기록 1건" in stdout, "분류 기록이 실행되지 않았다"
+assert "처리 완료 표시 1건" in stdout, "함께 준 --mark-triaged 가 조용히 무시됐다"
+assert 777 in fc.load_state(".", 5)["triaged"], "커서에 마킹이 반영되지 않았다"
+
 print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
       "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "
-      "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first 모두 정상")
+      "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first, "
+      "log+mark 동시 지정 모두 정상")

@@ -95,6 +95,45 @@ hook·skill 을 끄려고 `--bare` 를 쓰면 인증까지 끊겨 `Not logged in
 "라이브러리 동작을 코드로 확인하지 않는다"가 12라운드 반복됐고 리뷰어까지 같은 실수를
 했다. 인용 없는 주장은 무효로 취급하고 리뷰어가 인용을 열어 반증하는 규칙이 여기서 나왔다.
 
+## 인용이 있어도 도달하지 않으면 무효다 — B2C-53629 (code-1)
+
+위 규칙("인용 없는 주장은 무효")이 **있는 상태로** 뚫렸다. 계획서는 인용을 달았다:
+
+```
+`@sendbird/uikit-chat-hooks` — lib/module/channel/useGroupChannelMessages/
+useGroupChannelMessagesWithCollection.js:279-287
+```
+
+그 파일은 실재하고 그 줄의 내용도 정확하다. 틀린 것은 **그 파일이 이 코드경로에서 실행되지
+않는다**는 것이다 — `createGroupChannelFragment.js:5` 가 import 하는 것은
+`@sendbird/uikit-tools` 다. 두 패키지가 **같은 이름의 훅**(`useGroupChannelMessages`)을
+export 한다(UIKit 이 레거시에서 신규로 옮긴 흔적). grep 하면 둘 다 나오고, 어느 쪽이
+실행되는지는 import 체인을 역추적해야만 안다. **"최근접 설치 사본" 규칙도 이 케이스를 가르지
+못한다** — 둘 다 최근접이고 둘 다 실재하기 때문이다.
+
+대가: 계획 게이트 **12라운드**가 이 결함을 놓쳤다. 그 위에서 코드 게이트 code-1 이 P1 을
+냈다 — 채널 전환 후 A 채널의 실패 메시지가 **B 대화방으로 발송**된다(`uikit-tools` 의
+`resendMessage` 가 `channelRef.current` 를 쓰고, SDK `_sendUserMessage` 가 요청 URL 을
+메시지의 channelUrl 이 아니라 **호출 대상 채널의 url** 로 만든다). `a-code` 와
+`b2-interaction` 이 독립 수렴했다.
+
+**메커니즘: 인용은 검증의 종결자로 작동한다.** 파일:줄이 붙어 있으면 리뷰어가 거기서 멈춘다
+— 12라운드 동안 아무도 "그 파일이 실행되긴 하나"를 묻지 않았다. 그래서 규칙을 "인용을
+요구한다"에서 **"인용의 도달을 요구한다"**로 올렸다. 도달 경로를 함께 적게 만들면 그 경로
+자체가 검증 대상이 되어, 인용이 종결자에서 주장으로 내려온다.
+
+확인 비용은 한 줄이다:
+
+```bash
+grep -n "useGroupChannelMessages" .../createGroupChannelFragment.js
+# → import { useGroupChannelMessages } from '@sendbird/uikit-tools'
+```
+
+같은 티켓 code-2 에서 **같은 부류가 한 번 더** 나왔다 — 계획서가 *"UIKit 이
+`onPress: undefined` 로 이중 탭을 막는다"* 로 적었으나 그 분기는 `pending` **렌더**에서만
+돌고, SDK 는 pending dispatch 를 `setTimeout(…, 2)` 뒤로 미룬다. 인용한 코드는 맞았고
+**그 코드가 도는 시점에 대한 전제**가 틀렸다. 도달성 조항이 이 계열까지 덮는다.
+
 ## 변경 대상 인벤토리가 라운드를 줄인다 — B2C-52953
 
 인증 전용 8s 상한을 붙일 위치를 라운드마다 다시 골랐고 네 번 틀렸다 — code-1 은 설정 변경,

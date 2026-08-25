@@ -1,0 +1,24 @@
+red-team/SKILL.md
+  h_d82ccb34241a0d 44-45
+red-team/assets/context-template.md
+  h_d82ccb34241a0d 21-22,32-36
+red-team/prompts/a-code.md
+  h_d82ccb34241a0d 16-19
+red-team/prompts/a-plan.md
+  h_d82ccb34241a0d 36-40
+red-team/prompts/b5-plan-ordering.md
+  h_d82ccb34241a0d 24-26
+red-team/references/evidence.md
+  h_d82ccb34241a0d 98-136
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "6e82357024787cb6df31477896b5a0c35eb76b89",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

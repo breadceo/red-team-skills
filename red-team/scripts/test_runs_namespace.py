@@ -36,7 +36,7 @@ for url, want in [
     ("https://github.com/team-b/app", "team-b__app"),
     ("ssh://git@github.com/team-c/app.git", "team-c__app"),
     ("ssh://git@github.com:22/team-c/app.git", "team-c__app"),  # 명시 포트는 키가 아니다(code-9 P2)
-    ("ssh://git@example.com:22/app.git", "app"),                # 포트 소비 후 단일 세그먼트 → basename
+    ("https://GitHub.com./team-b/app.git", "team-b__app"),      # host 는 대소문자·후행 점 무시(#10)
 ]:
     sh(repo_a, "remote", "set-url", "origin", url)
     assert rr.repo_key(str(repo_a)) == want, (url, rr.repo_key(str(repo_a)))
@@ -51,12 +51,31 @@ for url in ["C:/team/app.git", "C:\\team\\app.git", "file:///C:/team/app.git"]: 
     sh(repo_a, "remote", "set-url", "origin", url)
     assert rr.repo_key(str(repo_a)) == "app", (url, rr.repo_key(str(repo_a)))
 sh(repo_a, "remote", "set-url", "origin", "ssh://git@[2001:db8::1]/app.git")  # IPv6 host 직결(code-10 P2)
-assert rr.repo_key(str(repo_a)) == "app", rr.repo_key(str(repo_a))
+k_v6 = rr.repo_key(str(repo_a))                          # 기본 host 가 아니므로 host 가 키에 든다
+assert k_v6 != "app" and "--" in k_v6, k_v6              # slug 가 뭉갠 host → 해시로 단사 유지
 sh(repo_a, "remote", "set-url", "origin", "ssh://git@[::1]:2222/team-v6/app.git")
-assert rr.repo_key(str(repo_a)) == "team-v6__app", rr.repo_key(str(repo_a))
+assert rr.repo_key(str(repo_a)) != "team-v6__app", rr.repo_key(str(repo_a))
 
 no_origin = make_repo("standalone", None, "main")  # origin 없음 — 디렉토리명 폴백
 assert rr.repo_key(str(no_origin)) == "standalone", rr.repo_key(str(no_origin))
+
+# ── 1b) repo_key: cross-host 충돌 (issue #10) ──────────────────────────────
+def key_for(url):
+    sh(repo_a, "remote", "set-url", "origin", url)
+    return rr.repo_key(str(repo_a))
+
+
+# 같은 owner/repo 라도 host 가 다르면 다른 키 — 기본 host 만 무접두 2단 키를 쓴다
+assert key_for("git@gitlab.com:team/app.git") == "gitlab.com__team__app"
+assert key_for("https://git.corp.example/team/app.git") == "git.corp.example__team__app"
+assert key_for("git@github.com:team/app.git") == "team__app"
+# 기본 host 아닌 host 직결(세그먼트 1개)은 owner 가 host 인 GitHub 저장소와 렌더가 겹친다
+# — 강제 해시로 가른다. 예전엔 둘 다 basename `app` 이라 아예 같은 디렉토리였다.
+k_direct = key_for("ssh://git@gitlab.com:22/app.git")
+assert k_direct.startswith("gitlab.com__app--"), k_direct
+assert k_direct != key_for("git@github.com:gitlab.com/app.git")
+# host 안의 `__` 도 경계 모호성 대상 — a__b/c/d 와 a/b__c/d 가 같은 렌더를 낸다(code-1 P1 확장)
+assert key_for("git@a__b:c/d.git") != key_for("git@a:b__c/d.git")
 
 sh(repo_a, "remote", "set-url", "origin", "git@github.com:team-a/app.git")  # 원복
 
@@ -125,6 +144,15 @@ new_b = runs2 / "team-b__app" / lossy
 assert rr.branch_dir(str(repo_b), migrate=True) == new_b
 assert (legacy / "code-1" / "round.json").exists(), "남의 기록을 가져갔다"
 assert not new_b.exists()
+
+# 3c-2) cross-host 오귀속(issue #10) — owner/repo 가 같아도 host 가 다르면 남의 기록이다.
+# host 를 키에서 버리던 때는 양쪽 키가 `team-a__app` 이라 GitLab 저장소가 GitHub 저장소의
+# 구 기록을 경고 없이 가져갔다.
+repo_gl = make_repo("gl", "git@gitlab.com:team-a/app.git", "feature/foo")
+new_gl = runs2 / "gitlab.com__team-a__app" / lossy
+assert rr.branch_dir(str(repo_gl), migrate=True) == new_gl
+assert (legacy / "code-1" / "round.json").exists(), "cross-host 인데 남의 기록을 가져갔다"
+assert not new_gl.exists()
 
 # 3d) 판정 불가 — round.json 이 없으면(준비만 된 라운드) 이전한다
 import shutil; shutil.rmtree(legacy)

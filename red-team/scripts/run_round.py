@@ -310,6 +310,21 @@ def slug(s: str) -> str:
 # 파일시스템에서 `--87171AD4` 브랜치가 소문자 접미 키와 같은 inode 를 얻는다(code-4 P2).
 _RESERVED_SUF = re.compile(r"--[0-9a-f]{8}$", re.I)
 
+# 키에서 생략하는 기본 host — 이 host 의 저장소만 `owner__repo` 2단 키를 쓴다. 생략하는
+# 이유는 가독성과 재마이그레이션 비용이다(issue #10): 현행 기록은 전부 GitHub 이라, 항상
+# host 를 붙이면 실익 없이 모든 키가 바뀌어 `_v2_predecessor` 승계에 기댄 대이동이 된다.
+DEFAULT_HOST = "github.com"
+
+
+def _host_key(host: str):
+    """origin host → 키에 넣을 정규화 host, 기본 host 면 None(생략).
+
+    DNS 는 대소문자·후행 점을 구분하지 않는다 — 정규화하지 않으면 `GitHub.com` 이
+    기본 host 로 안 걸려 같은 저장소가 host 접두 유무로 갈린다.
+    """
+    h = host.strip().rstrip(".").lower()
+    return None if h == DEFAULT_HOST else h
+
 
 def _suffixed(rendered: str, raw: str) -> str:
     # rendered 는 slug 산출물(ASCII)이라 문자수 == 바이트수다. NAME_MAX(255) 안에 접미
@@ -338,9 +353,9 @@ def branch_key(branch: str) -> str:
 def _single_key(name: str) -> str:
     """owner 가 없는 repo 키(로컬 경로 origin·origin 부재 폴백).
 
-    pair 키(`owner__repo`)와 출력 공간이 겹치면 안 된다 — basename 이 `team__app` 인
-    저장소가 `team/app` 의 pair 키와 같은 디렉토리를 얻는다(code-3 P1). 그래서
-    `__` 를 담은 이름은 branch_key 규칙에 더해 해시로 가른다.
+    pair 키(`owner__repo`)·host 키(`host__owner__repo`)와 출력 공간이 겹치면 안 된다 —
+    basename 이 `team__app` 인 저장소가 `team/app` 의 pair 키와 같은 디렉토리를 얻는다
+    (code-3 P1). 그래서 `__` 를 담은 이름은 branch_key 규칙에 더해 해시로 가른다.
     """
     s = slug(name)
     if s == name and "__" not in s and not _RESERVED_SUF.search(s) and len(s) <= 255:
@@ -353,12 +368,17 @@ def repo_key(cwd: str) -> str:
     `team-b/app` 이 같은 `runs/app/` 을 공유한다(issue #8).
 
     URL(https·ssh·scp형)에서 host 뒤 마지막 두 path segment 를 owner/repo 로 본다.
-    owner 가 안 나오는 origin(로컬 경로, host 직결 단일 segment)은 basename,
+    owner 가 안 나오는 origin(로컬 경로, 기본 host 직결 단일 segment)은 basename,
     origin 이 없으면 toplevel 디렉토리명 — 구 키와 같다.
 
-    구분자 `__` 는 owner·repo 안에도 올 수 있어 경계가 모호해진다(`a__b/c` 와
-    `a/b__c` — code-1 P1). 렌더링을 다시 split 해 원문 쌍이 유일 복원될 때만
-    무접미로 쓰고, 아니면(slug 손실 포함) 원문 `owner/repo` 해시를 접미한다.
+    **기본 host 가 아니면 host 를 키에 넣는다**(`gitlab.com__team__app` — issue #10).
+    안 넣으면 `github.com:team/app` 과 `gitlab.com:team/app` 이 같은 디렉토리를 쓰고,
+    마이그레이션의 외부 저장소 검사(`repo_key(p) != parent_name`)도 host 차이를 못 봐
+    남의 구 기록을 가져간다.
+
+    구분자 `__` 는 host·owner·repo 안에도 올 수 있어 경계가 모호해진다(`a__b/c` 와
+    `a/b__c` — code-1 P1). 렌더링을 다시 split 해 원문 조각들이 유일 복원될 때만
+    무접미로 쓰고, 아니면(slug 손실 포함) 원문을 `/` 로 이은 문자열의 해시를 접미한다.
     """
     origin = git(cwd, "remote", "get-url", "origin")
     if not origin:
@@ -379,16 +399,21 @@ def repo_key(cwd: str) -> str:
         url = re.sub(r"^(\w+://[^/]+?):\d+(/)", r"\1\2", url)
     # host 는 bracketed IPv6 도 된다 — `[2001:db8::1]` 내부 콜론을 경로 구분자로 읽으면
     # host 직결 저장소에 가짜 owner 가 생긴다(code-10 P2).
-    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?(?:\[[^\]]+\]|[^/:]+)[:/](.+)$", url)
+    m = re.match(r"^(?:\w+://)?(?:[^/@]+@)?(\[[^\]]+\]|[^/:]+)[:/](.+)$", url)
     if m:
-        parts = re.sub(r"\.git/?$", "", m.group(1)).strip("/").split("/")
-        if len(parts) >= 2:
-            owner, repo = parts[-2], parts[-1]
-            rendered = f"{slug(owner)}__{slug(repo)}"
-            if rendered.split("__") == [owner, repo] and not _RESERVED_SUF.search(rendered) \
+        host = _host_key(m.group(1))
+        segs = re.sub(r"\.git/?$", "", m.group(2)).strip("/").split("/")
+        if host or len(segs) >= 2:
+            parts = ([host] if host else []) + segs[-2:]
+            rendered = "__".join(slug(p) for p in parts)
+            # 무접미는 조각 수가 스킴을 유일하게 지시할 때만 쓴다 — 기본 host 는 2개,
+            # 그 외 host 는 3개. `gitlab.com:app.git`(host+repo 2개)은 owner 가
+            # `gitlab.com` 인 GitHub 저장소와 같은 렌더를 내므로 강제로 해시를 받는다.
+            if len(parts) == (3 if host else 2) and rendered.split("__") == parts \
+                    and not _RESERVED_SUF.search(rendered) \
                     and len(rendered) <= 255:  # 무접미 초과분은 절단+해시 경로로(code-3 P2)
                 return rendered
-            return _suffixed(rendered, f"{owner}/{repo}")
+            return _suffixed(rendered, "/".join(parts))
     return _single_key(re.sub(r"\.git/?$", "", origin.rstrip("/")).rsplit("/", 1)[-1])
 
 

@@ -1,0 +1,24 @@
+CHANGELOG.md
+  h_d82ccb34241a0d 43-71
+red-team/SKILL.md
+  h_d82ccb34241a0d 10-11,41-42,75-77,82,110-111,119,125,144-149,160-163,167-169,173-174,186-188,191,225
+red-team/assets/context-template.md
+  h_d82ccb34241a0d 43-48
+red-team/assets/decisions-template.md
+  h_d82ccb34241a0d 11-28
+red-team/references/evidence.md
+  h_d82ccb34241a0d 314-343
+red-team/references/long-gate.md
+  h_d82ccb34241a0d 1-51
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "11f77d28ac1dcb29824f9f78cadeb695cd2391a9",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

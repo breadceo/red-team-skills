@@ -515,7 +515,11 @@ def main():
         ids = [int(x) for x in re.findall(r"\d+", a.mark_triaged)]
         st = merge_state(cwd, pr, {"triaged": ids, "repo": repo})
         print(f"처리 완료 표시 {len(ids)}건 → 누적 {len(st['triaged'])}건\n{state_path(cwd, pr)}")
-        return
+        # --log-classification 과 같은 이유로 여기서도 무조건 return 하지 않는다(#30).
+        # 다만 조회는 gh API 가 붙으므로, 출력 플래그를 실제로 준 호출만 이어서 태운다 —
+        # 단독 --mark-triaged(라운드 종료 시 대부분) 는 지금처럼 즉시 끝난다.
+        if not (a.new_only or a.show_scope or a.show_files or a.out):
+            return
 
     me = (gh("api", "user", "-q", ".login") or "").strip()
 

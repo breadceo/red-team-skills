@@ -408,7 +408,19 @@ assert "분류 기록 1건" in stdout, "분류 기록이 실행되지 않았다"
 assert "처리 완료 표시 1건" in stdout, "함께 준 --mark-triaged 가 조용히 무시됐다"
 assert 777 in fc.load_state(".", 5)["triaged"], "커서에 마킹이 반영되지 않았다"
 
+# ── 10) --mark-triaged 뒤에 준 출력 플래그가 조용히 무시되지 않는다 (#30) ──
+files_before = FILES_CALLS[0]
+stdout = run("--mark-triaged", "888")
+assert "처리 완료 표시 1건" in stdout, "단독 --mark-triaged 가 마킹하지 않았다"
+assert "미처리 리뷰만" not in stdout, "단독 --mark-triaged 가 조회까지 태웠다"
+assert FILES_CALLS[0] == files_before, "단독 --mark-triaged 에 gh 조회 비용이 붙었다"
+
+stdout = run("--mark-triaged", "889", "--new-only")
+assert "처리 완료 표시 1건" in stdout, "마킹이 실행되지 않았다"
+assert "미처리 리뷰만" in stdout, "함께 준 --new-only 가 조용히 무시됐다"
+assert 889 in fc.load_state(".", 5)["triaged"], "커서에 마킹이 반영되지 않았다"
+
 print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
       "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "
       "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first, "
-      "log+mark 동시 지정 모두 정상")
+      "log+mark 동시 지정, mark+출력 플래그 동시 지정 모두 정상")

@@ -1,7 +1,8 @@
 """resume.carry_forward 2라운드 누적 검증 — 이전 라운드 반영분이 살아남는지."""
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # 설치 위치를 가정하지 않는다
-from resume import carry_forward, pending
+from resume import (carry_forward, pending, inventory_banner,
+                    worktree_inventory, INV_MARK, INV_END)
 
 CTX = """## 리뷰 대상
 
@@ -117,6 +118,50 @@ assert r5.count("### code-1 에서 반영 (요약") == 1, "요약 마커가 중�
 assert "### code-2 에서 반영 (요약" in r5, "code-2 가 오래된 블록이 됐는데 접히지 않았다"
 assert "버튼 A 가 죽어 있었다" in r5 and "대비 미달" in r5, "접힌 식별자가 유실됐다"
 
+# 10) 인벤토리 실측 배너 — 이월되는 `변경 대상 인벤토리` 절이 stale 해지는 것을 막는다 (issue #33)
+INV_CTX = CTX.replace("## 검증 상태", """## 변경 대상 인벤토리 (전수 주장)
+
+| 파일 | 무엇 | 의도 |
+|---|---|---|
+| a.ts | x | y |
+
+**변경 파일은 12 다.**
+
+## 검증 상태""")
+b1 = inventory_banner(13, ["new1.ts", "new2.ts"], 1)
+i1 = carry_forward(INV_CTX, DEC1, "code-1", b1)
+assert "변경 **13**" in i1 and "신규(untracked) **2**" in i1, i1
+assert "`new1.ts`" in i1 and "`new2.ts`" in i1, "untracked 목록이 생성되지 않았다"
+assert "**변경 파일은 12 다.**" in i1, "사람이 쓴 본문이 배너 삽입으로 유실됐다"
+assert "계획 시점 판" not in i1, "라운드 1 에 staleness 배너가 붙었다"
+# 배너는 표 앞(절 머리)에 온다 — 뒤에 붙으면 표를 읽고 나서야 보인다
+assert i1.index(INV_MARK) < i1.index("| 파일 |")
+
+# 라운드가 쌓이면 staleness 배너가 함께 붙고, 옛 배너는 쌓이지 않고 교체된다
+b5 = inventory_banner(14, ["new1.ts"], 5)
+i5 = carry_forward(i1, DEC2, "code-2", b5)
+assert i5.count(INV_MARK) == 1 == i5.count(INV_END), f"배너가 누적됐다: {i5.count(INV_MARK)}"
+assert "변경 **14**" in i5 and "변경 **13**" not in i5, "옛 실측이 남았다"
+assert "계획 시점 판" in i5 and "변경 표면의 전수성" in i5, "라운드 5 staleness 배너 누락"
+assert "**변경 파일은 12 다.**" in i5, "재삽입 때 본문이 유실됐다"
+assert "버튼 A 가 죽어 있었다" in i5, "다른 절 누적이 깨졌다"
+
+# 작업 트리가 깨끗하면(0/0) 실측 줄은 내지 않는다 — `변경 0` 은 커밋된 diff 를 오도한다
+assert inventory_banner(0, [], 1) == "", "빈 실측에 배너를 냈다"
+assert "계획 시점 판" in inventory_banner(0, [], 5), "실측이 없어도 staleness 는 붙어야 한다"
+assert "…외 3개" in inventory_banner(1, [f"f{i}.ts" for i in range(23)], 1), "목록 상한 미적용"
+# 라운드를 계속 돌려도 배너가 쌓이지 않고, 표 앞 빈 줄이 유지된다(빈 줄이 없으면 표가
+# HTML 주석 블록에 먹혀 렌더되지 않는다)
+loop = INV_CTX
+for k in range(1, 8):
+    loop = carry_forward(loop, DEC1, f"code-{k}", inventory_banner(k, [f"n{k}.ts"], k))
+assert loop.count(INV_MARK) == 1 == loop.count(INV_END), "7라운드 뒤 배너가 누적됐다"
+assert "\n\n| 파일 |" in loop, "배너와 표 사이 빈 줄이 사라졌다"
+assert "`n7.ts`" in loop and "`n6.ts`" not in loop, "옛 실측 목록이 남았다"
+
+# 배너가 없으면 절은 손대지 않는다
+assert INV_MARK not in carry_forward(INV_CTX, DEC1, "code-1", "")
+
 # --- resume 게이트: coverage=partial 인 GO 는 다음 라운드로 넘기지 않는다 ---
 # unparsed(PARSE-FAIL) 만으로 partial 이 된 라운드도 skipped 와 똑같이 막혀야 한다.
 import json, os, shlex, subprocess, tempfile
@@ -160,5 +205,26 @@ with tempfile.TemporaryDirectory(prefix="red team ") as home:
     merged = pathlib.Path(argv[argv.index("--merge-into") + 1])
     assert merged.name == "code-1" and "red team " in str(merged), argv
 
+# 11) worktree_inventory — 실제 git 출력으로 변경/untracked 를 가른다
+#     git() 이 stdout 을 strip 하므로 첫 줄의 선행 공백(` M path`)이 사라진다 — 고정 슬라이스로
+#     자르면 첫 파일명이 한 글자 깎인다. 그래서 상태 토큰으로 가른다.
+with tempfile.TemporaryDirectory() as wt:
+    for cmd in (["init", "-q", "-b", "m"],
+                ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                 "--allow-empty", "-m", "seed"]):
+        subprocess.run(["git", *cmd], cwd=wt, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (pathlib.Path(wt) / "tracked.ts").write_text("a\n")
+    subprocess.run(["git", "add", "tracked.ts"], cwd=wt, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "-m", "add"], cwd=wt, check=True)
+    (pathlib.Path(wt) / "tracked.ts").write_text("b\n")          # 변경 1
+    (pathlib.Path(wt) / "sub").mkdir()
+    (pathlib.Path(wt) / "sub" / "new.ts").write_text("c\n")      # untracked (-uall 로 펼쳐진다)
+    changed, new = worktree_inventory(wt)
+    assert changed == 1, f"변경 수 {changed}"
+    assert new == ["sub/new.ts"], f"untracked {new} — 디렉토리로 뭉쳤거나 이름이 깎였다"
+assert worktree_inventory(None) == (0, []), "워크트리 미확정이면 조용히 비운다"
+
 print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
-      "오래된 반영 블록 접기(diet)·멱등, PARSE-FAIL partial 차단 모두 정상")
+      "오래된 반영 블록 접기(diet)·멱등, 인벤토리 실측 배너, PARSE-FAIL partial 차단 모두 정상")

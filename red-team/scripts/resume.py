@@ -29,6 +29,11 @@ HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 _HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
 TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
+INV = "## 변경 대상 인벤토리"
+INV_MARK, INV_END = "<!-- resume:inventory -->", "<!-- /resume:inventory -->"
+INV_RE = re.compile(re.escape(INV_MARK) + r".*?" + re.escape(INV_END) + r"\n*", re.S)
+STALE_AFTER = 5   # 이 라운드부터 "표는 계획 시점 판" 배너를 함께 붙인다
+UNTRACKED_CAP = 20
 
 
 def shell_command(*args) -> str:
@@ -247,6 +252,52 @@ def same_origin_p1(base: Path, gate: str) -> list[str]:
     return sorted(set.intersection(*sets))
 
 
+def worktree_inventory(cwd: str | None) -> tuple[int, list[str]]:
+    """작업 트리에서 **셀 수 있는 것만** 센다 — 변경 파일 수와 untracked 목록.
+
+    컨텍스트의 `변경 대상 인벤토리` 는 스스로 "전수" 를 주장하는데, 라운드가 쌓이는 동안
+    새 파일이 합류하면 그 주장이 조용히 깨진다(실측: 변경 12→13, 테스트 5→6). 사람은
+    이월된 표를 다시 세지 않으므로, 세는 일은 스크립트가 매 라운드 한다.
+    """
+    out = git(cwd, "status", "--porcelain", "-uall") if cwd else ""
+    changed, new = 0, []
+    for line in out.splitlines():
+        st, _, path = line.strip().partition(" ")
+        if st == "??":
+            new.append(path.strip())
+        elif st:
+            changed += 1
+    return changed, new
+
+
+def inventory_banner(changed: int, new: list[str], n: int) -> str:
+    """`## 변경 대상 인벤토리` 머리에 붙는, **매 라운드 재생성되는** 블록.
+
+    사람이 갱신하는 절이 아니므로 손으로 넣게 두면 라운드 17쯤에나 들어간다(실측).
+    """
+    body = []
+    if changed or new:
+        body += [f"> **작업 트리 실측** (`git status --porcelain -uall`): "
+                 f"변경 **{changed}** · 신규(untracked) **{len(new)}**. "
+                 f"아래 표·목록의 수와 다르면 **표가 낡은 것이다.**",
+                 "> **커밋된 변경은 이 수에 잡히지 않는다** — 리뷰 대상이 "
+                 "`git diff <base>..HEAD` 면 이 수는 작업 트리 몫뿐이다."]
+        if new:
+            body += [">"] + [f"> - `{p}`" for p in new[:UNTRACKED_CAP]]
+            if len(new) > UNTRACKED_CAP:
+                body.append(f"> - …외 {len(new) - UNTRACKED_CAP}개")
+    if n >= STALE_AFTER:
+        body += [">"] if body else []
+        body.append("> 이 절의 표는 **계획 시점 판**이다 — 이후 라운드가 서술을 뒤집었을 수 "
+                    "있다. 표와 코드가 어긋나면 `이미 반영된 지적` 절과 코드가 우선이다. "
+                    "**이 표의 역할은 서술의 정확성이 아니라 변경 표면의 전수성**"
+                    "(빠진 파일이 없다)이다.")
+    if not body:
+        return ""
+    # 끝에 빈 줄 하나 — 뒤따르는 표가 HTML 주석 블록에 먹히지 않게 한다
+    return "\n".join([INV_MARK, *body, INV_END]) + "\n\n"
+
+
 PER_ROUND = ("## 리뷰 대상", "## 검증 상태")
 KEEP_FULL = 2  # '이미 반영된 지적'에서 전문을 유지할 최근 라운드 블록 수
 
@@ -295,7 +346,7 @@ def collapse_per_round(secs):
     return keep, dropped
 
 
-def carry_forward(prev_ctx: str, decisions: str, prev_round: str) -> str:
+def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = "") -> str:
     """직전 컨텍스트에 직전 라운드의 결정을 **누적**한다.
 
     decisions.md 는 그 라운드 몫만 담는 규격이므로 두 절 모두 append 다.
@@ -319,6 +370,9 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str) -> str:
             secs[i] = (h, merged)
         elif h.startswith("## 스코프 밖") and deferred:
             secs[i] = (h, b.rstrip() + f"\n\n### {prev_round} 에서 후속 티켓으로 분리\n\n{deferred}\n")
+        elif h.startswith(INV) and banner:
+            # 옛 배너는 통째로 걷어내고 다시 넣는다 — 라운드마다 쌓이면 그것대로 stale 이다
+            secs[i] = (h, "\n" + banner + INV_RE.sub("", b).lstrip("\n"))
         elif h.startswith(("## 리뷰 대상", "## 검증 상태")) and TODO not in b:
             # 라운드마다 다시 붙으면 마커가 쌓인다 — 이미 있으면 그대로 둔다
             secs[i] = (h, f"\n{TODO}\n" + b.lstrip("\n"))
@@ -484,7 +538,9 @@ def main():
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{a.next_gate}-*")
                  if (m := re.fullmatch(rf"{a.next_gate}-(\d+)", d.name))), default=0)
     out = base / f"{a.next_gate}-{n}"
-    new_ctx = carry_forward(ctx_path.read_text(), dec, rd.name)
+    changed, untracked = worktree_inventory(repo_cwd)
+    new_ctx = carry_forward(ctx_path.read_text(), dec, rd.name,
+                            inventory_banner(changed, untracked, n))
     if a.dry_run:
         # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
         # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).
@@ -509,6 +565,14 @@ def main():
             shutil.copy2(f, out / f.name)
     print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/후속티켓을 이관했다.")
     print(f"   손으로 갱신할 절 2개만 남았다 ({TODO} 표시됨): '## 리뷰 대상', '## 검증 상태'")
+    if changed or untracked:
+        print(f"   작업 트리 실측: 변경 {changed} · 신규(untracked) {len(untracked)} — "
+              f"'{INV}' 절이 주장하는 수와 다르면 그 표가 낡은 것이다")
+        if INV_MARK not in new_ctx:
+            print(f"   ↳ '{INV}' 절이 컨텍스트에 없어 실측 배너를 넣지 못했다 — 손으로 대조하라")
+    if n >= STALE_AFTER:
+        print(f"   라운드 {n} 이다 — 이월된 '{INV}' 표는 계획 시점 판이라 서술이 뒤집혔을 수 "
+              f"있다. 갱신까지는 아니어도 **한 번은 눈으로** 대조한다")
     if not repo_cwd:
         # 위 준비-라운드 안내와 같은 이유(code-2 P1) — 낡을 수 있는 경로 명령을 내지 않는다
         print("\n▶ 워크트리를 못 찾아 실행 명령을 생략한다 — 대상 워크트리로 이동해\n"

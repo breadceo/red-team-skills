@@ -9,8 +9,7 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 
 혼자 쓴 코드를 혼자 검토하면 이미 옳다고 믿는 축에서만 검토한다 — 그래서 축을 나눠
 **독립된 리뷰어를 동시에** 돌린다(창립 사례: `references/evidence.md`).
-**리뷰어는 지목한 곳만 본다** — 축 프롬프트 전부가 "전수 나열하라"로 시작하는 이유이고,
-어겨지면 recall 이 바로 떨어진다.
+**리뷰어는 지목한 곳만 본다** — 축 프롬프트 전부가 "전수 나열하라"로 시작하는 이유다.
 
 ## 두 개의 게이트
 
@@ -68,14 +67,14 @@ python3 "<red-team-skill>/scripts/run_round.py" \
 ### 산출물은 저장소 밖에 쌓인다
 
 ```
-~/.red-team/runs2/<owner>__<repo>/<branch키>/<gate>-<n>/
+~/.red-team/runs2/<repo키>/<branch키>/<gate>-<n>/
     context.md · <reviewer>.prompt.md · <reviewer>.txt/.json · diff.md
     round.json      ← 병합 결과 + verdict + counts + access_errors (+ reruns)
     decisions.md    ← 처리 결과 (사람이 쓴다)
     <reviewer>.superseded-<stamp>.*  ← 재실행으로 교체된 산출물 (지우지 않는다)
 ```
 
-**포인터 파일은 없다** — `<owner>__<repo>/<branch키>` 가 곧 키다(설계·자동 이전·저장
+**포인터 파일은 없다** — `<repo키>/<branch키>` 가 곧 키다(도출·설계·자동 이전·저장
 위치의 이유: `references/evidence.md`). "이미 반영된 지적"은 **직전 라운드의 `round.json`
 을 그대로 읽는다** — 기억에 의존하지 않는다. **`--out` 은 eval 용 별도 경로다.**
 

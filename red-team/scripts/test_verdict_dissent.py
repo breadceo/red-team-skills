@@ -63,7 +63,7 @@ def main():
     with tempfile.TemporaryDirectory() as t:
         home = pathlib.Path(t)
         repo = make_repo(home)
-        rd = home / "runs" / "org__repo" / "branch" / "code-1"
+        rd = home / "runs" / "example.com__org__repo" / "branch" / "code-1"
         rd.mkdir(parents=True)
         (rd / "context.md").write_text("## 의도\nx\n")
         (rd / "decisions.md").write_text("## 반영\n- 없음\n## 보류\n")

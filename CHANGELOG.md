@@ -38,6 +38,28 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-08-26
+
+### 🐛 red-team — runs2/ 키에 원격 **host** 가 들어간다 (#10)
+
+`repo_key()` 가 origin 의 owner/repo 만 쓰고 host 를 버려서, `github.com:team/app` 과
+`gitlab.com:team/app` 이 **같은 `runs2/team__app/` 을 공유**했다. 라운드 산출물이 섞이는
+것으로 끝나지 않는다 — 마이그레이션의 외부 저장소 검사(`repo_key(p) != parent_name`)도
+같은 함수를 쓰기 때문에, GitHub 저장소의 구 기록만 있는 `runs/app/main` 을 GitLab
+저장소에서 조회하면 **불일치 경고 없이 GitLab 의 새 키로 rename** 될 수 있었다.
+
+이제 키는 **기본 host(`github.com`)면 `owner__repo`, 그 외 host 면 `host__owner__repo`**
+다. 기본 host 를 생략하는 이유는 재마이그레이션 비용이다 — 현행 기록은 전부 GitHub 이라,
+항상 host 를 붙이면 실익 없이 모든 키가 바뀌어 소유 증거가 없는 디렉토리가 고아가 된다.
+**GitHub 저장소만 쓰고 있다면 디렉토리 이동은 한 건도 없다.**
+
+- host 는 소문자·후행 점 제거로 정규화한다 — `GitHub.com` 이 기본 host 로 안 걸리면 같은
+  저장소가 접두 유무로 갈린다.
+- `gitlab.com:app.git`(host 직결, 세그먼트 1개)은 owner 가 `gitlab.com` 인 GitHub 저장소와
+  렌더가 겹치므로 강제로 해시 접미를 받는다 — 예전엔 둘 다 basename `app` 이라 아예 같은
+  디렉토리였다.
+- 설계 근거·기각한 대안: `red-team/references/evidence.md`.
+
 ## 2026-08-25
 
 ### 📝 red-team — 벤더 인용은 **도달을 증명해야** 유효하다 (#31)

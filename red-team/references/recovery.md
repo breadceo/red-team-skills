@@ -40,7 +40,7 @@
 
 ```bash
 python3 "<red-team-skill>/scripts/run_round.py" \
-  --gate code --merge-into ~/.red-team/runs2/<owner>__<repo>/<branch키>/code-9 \
+  --gate code --merge-into ~/.red-team/runs2/<repo키>/<branch키>/code-9 \
   --reviewers b1-state-matrix
 ```
 
@@ -62,14 +62,14 @@ python3 "<red-team-skill>/scripts/run_round.py" \
 ## 티켓을 접을 때 — `ABORTED` 마커 파일
 
 GO 전에 리뷰 루프 자체를 끝내기로 결정했다면(설계 대상 소멸, 전제 붕괴 — SKILL.md 루프
-절의 세 번째 escape 참고) `runs2/<owner>__<repo>/<branch키>/ABORTED` 파일에 사유를 쓴다 —
+절의 세 번째 escape 참고) `runs2/<repo키>/<branch키>/ABORTED` 파일에 사유를 쓴다 —
 정확한 브랜치 디렉토리는 `resume.py` 출력의 `경로` 줄에서 확인한다. **이 파일의 존재가 곧
 중단 상태다** — `resume.py` 가 이후 어떤 진행 안내(다음 라운드, top-up, 재실행)도 거부하고,
 재개는 그 파일을 지우는 것으로만 한다. `run_round.py` 를 직접 실행하면 경고가 뜬다(차단은
 하지 않는다 — `--out` 실험·eval 흐름을 막지 않기 위해서다).
 
-- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — cross-host 동일
-  owner/repo(#10) 같은 잔여 충돌이 있고, 안내에 표시되는 본문으로 어느 작업의 중단인지
+- 본문에 **저장소 원격 URL 과 원본 브랜치명을 함께 적는 것을 권장**한다 — 키가 같아도 워크트리는
+  여러 개일 수 있고, 안내에 표시되는 본문으로 어느 작업의 중단인지
   즉시 식별되는 가치가 있다.
 - decisions.md 에는 서사(사유·보존할 발견·재개 조건)를 남기는 것을 권장한다 — 단 그것은
   사람용이고, **기계가 읽는 것은 마커 파일뿐이다.** 산문을 판정 입력으로 삼지 않는 것이

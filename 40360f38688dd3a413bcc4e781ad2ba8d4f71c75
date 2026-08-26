@@ -1,0 +1,18 @@
+red-team/references/long-gate.md
+  h_d82ccb34241a0d 52-70
+red-team/scripts/resume.py
+  h_d82ccb34241a0d 32-36,255-300,349,373-375,541-543,568-575
+red-team/scripts/test_carry_forward.py
+  h_d82ccb34241a0d 4-5,121-164,208-228,230
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "40360f38688dd3a413bcc4e781ad2ba8d4f71c75",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

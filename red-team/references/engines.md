@@ -95,6 +95,10 @@ python3 "<red-team-skill>/scripts/report_usage.py" [repo/브랜치 조각]
 분자는 `classification == regression` 이다 — 이유는 `evidence.md`(축별 모델 배정의 근거).
 표는 판단 재료이고 배정 축소는 사람이 결정한다.
 
+같은 출력의 마지막 절은 **namespace 별 plan/code 라운드 수와 plan 비율**이다 — **plan
+라운드가 0인 namespace 를 눈에 띄게 하는 표**이고, 변경 단위 생략률이 아니다(분모·비병합
+규칙과 근거: `evidence.md` 의 「계획 게이트를 건너뛰지 않는 이유」 절).
+
 ## 배정 바꾸기 (사용자가 명시적으로 요청할 때)
 
 기본 배정은 코드의 **추천값**이고, 사용자별 조정은 `config.json` 의 `assignments` 에

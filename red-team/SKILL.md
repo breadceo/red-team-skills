@@ -215,7 +215,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | `references/plan-coverage.md` | **계획 게이트 첫 라운드 전 필수** — clarify, code-hub 확인 |
 | `references/engines.md` | 엔진 최초 설정(0단계), 배정 조정·전환·한도, 토큰 기록 해석 |
 | `references/recovery.md` | `PARSE-FAIL`·접근오류·`partial`·`INVALID`, 티켓 중단(ABORTED) |
-| `references/external-sync.md` | **`## 티켓` 이 채워진 라운드가 GO 를 받았을 때** — 최신화 대상·승인 규약 |
+| `references/external-sync.md` | GO 후 티켓 최신화 · approve 후 인계 코멘트 — 대상·승인 규약 |
 | `references/zax.md` | zax 워크플로우와 함께 쓸 때만 |
 | `references/moe.md` | `--lean`/MoE 를 켜거나 켜진 상태를 이어받았을 때 |
 | `references/long-gate.md` | **라운드가 3회를 넘었을 때** — 성격 전이·탈출 조건 규약, 상한 5 초과의 네 패턴 |

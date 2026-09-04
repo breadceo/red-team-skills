@@ -822,6 +822,64 @@ def section(text: str, heading: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def sections(text: str) -> list[tuple[str, str]]:
+    """`## ` 단위로 (heading, body) 로 쪼갠다. `###` 은 body 에 남는다."""
+    parts = re.split(r"^(## .+)$", text, flags=re.M)
+    out = [("", parts[0])] if parts[0].strip() else []
+    for i in range(1, len(parts), 2):
+        out.append((parts[i], parts[i + 1]))
+    return out
+
+
+TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
+# 마커 문자열은 붙이는 쪽(resume.py)과 검사하는 쪽(여기)이 같아야 한다 — 한쪽만 고치면
+# 검사가 조용히 아무것도 안 잡는다. 그래서 정의는 여기 하나이고 resume 가 가져다 쓴다.
+
+
+def heading_keys(text: str) -> dict[str, str]:
+    """`## ` 제목 → 원문 제목. 키는 꼬리 괄호(`(선택)`)를 떼어 비교용으로 정규화한다."""
+    return {re.sub(r"\s*\([^)]*\)\s*$", "", h.strip()): h.strip()
+            for h in re.findall(r"^## .+$", text, re.M)}
+
+
+def prev_context(base: Path, gate: str) -> Path | None:
+    """직전 라운드의 context.md — 절 집합 비교의 기준. 첫 라운드면 None."""
+    rounds = [(rj.stat().st_mtime, str(rj), ctx) for d in base.glob(f"{gate}-*")
+              if re.fullmatch(rf"{gate}-\d+", d.name) and (rj := d / "round.json").exists()
+              and (ctx := d / "context.md").exists()]
+    return max(rounds)[2] if rounds else None  # round.json mtime 기준 (lean_reviewers 와 같다)
+
+
+def check_context(context: str, ctx_src: Path, prev: Path | None, allow_drop: bool) -> None:
+    """잘렸거나 갱신되지 않은 컨텍스트로 라운드가 도는 것을 막는다 (#43).
+
+    리뷰어는 diff.md 를 따로 받으므로 컨텍스트가 절반 날아가도 findings 는 계속 나오고,
+    억제 절(`스코프 밖`·`이미 반영된 지적`)이 사라지면 오히려 **늘어서** 라운드가 활발해
+    보인다 — 결과만 보고는 알 수 없어 실측 6라운드가 잘린 컨텍스트로 GO 까지 났다.
+    필수 절 하드코딩 대신 직전 라운드와 비교한다: 조건부 절(`## 계획 전문` 등)이 목록
+    관리 없이 그대로 처리되고, 첫 라운드는 비교 대상이 없어 자연히 건너뛴다.
+    """
+    if TODO in context:
+        stale = [h.strip() for h, b in sections(context) if TODO in b]
+        sys.exit(f"{ctx_src} 에 갱신되지 않은 절이 있다: {', '.join(stale)}\n"
+                 f"  TODO 마커가 남아 있다는 건 그 절을 이번 라운드 기준으로 안 고쳤다는 뜻이다 —\n"
+                 f"  그대로 돌리면 리뷰어가 직전 라운드 기준으로 판정한다.\n"
+                 f"  채운 뒤 마커 줄을 지우고 다시 실행한다.")
+    if prev is None:
+        return
+    now, before = heading_keys(context), heading_keys(prev.read_text())
+    if gone := [before[k] for k in before if k not in now]:
+        msg = (f"직전 라운드({prev.parent.name})에 있던 절이 {ctx_src.name} 에서 사라졌다:\n"
+               + "".join(f"    {h}\n" for h in gone))
+        if allow_drop:
+            print(f"⚠ {msg}  --allow-section-drop 이 있어 그대로 진행한다.", flush=True)
+            return
+        sys.exit(f"{msg}"
+                 f"  컨텍스트가 잘렸을 수 있다 — 직전 라운드의 context.md 에서 복구한 뒤 다시 실행한다:\n"
+                 f"    {prev}\n"
+                 f"  (절을 의도적으로 지웠으면 --allow-section-drop 을 준다)")
+
+
 def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
     """zax:task 산출물에서 리뷰 컨텍스트 초안을 만든다.
 
@@ -1421,6 +1479,9 @@ def main():
     ap.add_argument("--diff-base", default=None, metavar="REF",
                     help="코드 게이트 diff 스냅샷의 기준 (git diff REF...HEAD 로 뜬다). "
                          "생략 시 작업 트리(git diff HEAD)")
+    ap.add_argument("--allow-section-drop", action="store_true",
+                    help="직전 라운드에 있던 절이 컨텍스트에서 사라져도 중단하지 않는다 "
+                         "(기본은 중단 — 잘린 컨텍스트로 GO 가 나는 것을 막는다)")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--model", default=None, help="전 리뷰어 모델 강제 (생략 시 축별 tier 배정)")
     ap.add_argument("--effort", default=None, help="전 리뷰어 effort 강제 (생략 시 축별 tier 배정)")
@@ -1508,6 +1569,13 @@ def main():
     ctx_mtime = ctx_src.stat().st_mtime
     plan_mtimes = sorted((p.name, p.stat().st_mtime) for p in ctx_src.parent.iterdir()
                          if p.is_file() and re.fullmatch(r"plan.*\.md", p.name, re.I))
+    if not a.merge_into:
+        # 새 라운드의 입력만 검사한다 — 병합은 그 라운드가 이미 쓴 context.md 로 돈다.
+        # 비교 기준은 새 라운드가 놓일 자리의 형제 라운드들이다(--out 이면 그 부모 —
+        # ABORTED 마커와 같은 이유로 cwd 만 보면 다른 브랜치를 가리키는 --out 이 검사를 우회한다).
+        # resolve_out 앞이어야 방금 만든 빈 디렉토리를 직전 라운드로 오인하지 않는다.
+        base = Path(a.out).resolve().parent if a.out else branch_dir(a.cwd)
+        check_context(context, ctx_src, prev_context(base, a.gate), a.allow_section_drop)
     out = Path(a.merge_into) if a.merge_into else (Path(a.out) if a.out else resolve_out(a.cwd, a.gate))
     out.mkdir(parents=True, exist_ok=True)
     round_lock = lock_round(out) if (out / "round.json").exists() else None

@@ -21,14 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE)를 끄기 위해
-from run_round import branch_dir, git, GATES  # 경로 파생은 한 곳에서만 한다
+from run_round import branch_dir, git, GATES, sections, TODO  # 경로 파생·절 규격은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 # 검색은 v2 루트(runs2/)와 구 루트(runs/) 둘 다 본다 — 아직 이전되지 않은 작업도
 # 키로 찾을 수 있어야 하고, 발견 후의 이전은 대상 확정 후 선행 이전이 한다.
 _HOME = Path(os.environ.get("RED_TEAM_HOME", Path.home() / ".red-team"))
 RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
-TODO = "<!-- TODO(resume): 이 절을 이번 라운드 기준으로 갱신하라 -->"
 INV = "## 변경 대상 인벤토리"
 INV_MARK, INV_END = "<!-- resume:inventory -->", "<!-- /resume:inventory -->"
 INV_RE = re.compile(re.escape(INV_MARK) + r".*?" + re.escape(INV_END) + r"\n*", re.S)
@@ -148,15 +147,6 @@ def latest_round(base: Path):
         return None
     rounds.sort()
     return rounds[-1][1:]
-
-
-def sections(text: str) -> list[tuple[str, str]]:
-    """`## ` 단위로 (heading, body) 로 쪼갠다. `###` 은 body 에 남는다."""
-    parts = re.split(r"^(## .+)$", text, flags=re.M)
-    out = [("", parts[0])] if parts[0].strip() else []
-    for i in range(1, len(parts), 2):
-        out.append((parts[i], parts[i + 1]))
-    return out
 
 
 def render(secs: list[tuple[str, str]]) -> str:

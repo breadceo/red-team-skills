@@ -226,5 +226,29 @@ with tempfile.TemporaryDirectory() as wt:
     assert new == ["sub/new.ts"], f"untracked {new} — 디렉토리로 뭉쳤거나 이름이 깎였다"
 assert worktree_inventory(None) == (0, []), "워크트리 미확정이면 조용히 비운다"
 
+# 12) `## 이번 라운드에서 특히 볼 것` 도 TODO 대상이다 (#42)
+#     서술이 아니라 살아있는 지시라, 낡으면 리뷰어가 그 라운드가 없앤 것을 검사한다.
+WATCH = CTX.replace("## 검증 상태", """## 이번 라운드에서 특히 볼 것 (선택)
+
+- 삭제된 라인번호 12개를 설치본과 대조하라 (직전 라운드 지시)
+
+## 검증 상태""")
+w = carry_forward(WATCH, DEC1, "code-1")
+head = w[w.index("## 이번 라운드에서 특히 볼 것"):]
+assert "TODO(resume)" in head[:head.index("## 검증 상태")], "'특히 볼 것' 에 TODO 가 안 붙었다"
+assert w.count("TODO(resume)") == 3, f"TODO 개수 {w.count('TODO(resume)')}"
+# 절이 없는 컨텍스트에서는 조용히 통과한다 (템플릿에서 '선택' 절이다)
+assert carry_forward(CTX, DEC1, "code-1").count("TODO(resume)") == 2, "선택 절 부재 시 개수가 변했다"
+# 멱등 — 이미 붙은 마커를 두 번 붙이지 않는다
+assert carry_forward(w, DEC1, "code-2").count("TODO(resume)") == 3, "TODO 마커가 쌓였다"
+# 중복되면 마지막 것만 남는다 (다른 per-round 절과 같은 규칙)
+dupw = WATCH.replace("## 이번 라운드에서 특히 볼 것 (선택)",
+                     "## 이번 라운드에서 특히 볼 것 (선택)\n\n- 철 지난 지목\n\n"
+                     "## 이번 라운드에서 특히 볼 것 (선택)")
+dw = carry_forward(dupw, DEC1, "code-1")
+assert dw.count("## 이번 라운드에서 특히 볼 것") == 1, "중복 절이 남았다"
+assert "철 지난 지목" not in dw, "철 지난 기재가 남았다"
+
 print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
-      "오래된 반영 블록 접기(diet)·멱등, 인벤토리 실측 배너, PARSE-FAIL partial 차단 모두 정상")
+      "오래된 반영 블록 접기(diet)·멱등, 인벤토리 실측 배너, PARSE-FAIL partial 차단, "
+      "'특히 볼 것' TODO 표시 모두 정상")

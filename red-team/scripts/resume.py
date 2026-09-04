@@ -298,7 +298,10 @@ def inventory_banner(changed: int, new: list[str], n: int) -> str:
     return "\n".join([INV_MARK, *body, INV_END]) + "\n\n"
 
 
-PER_ROUND = ("## 리뷰 대상", "## 검증 상태")
+PER_ROUND = ("## 리뷰 대상", "## 검증 상태", "## 이번 라운드에서 특히 볼 것")
+# `특히 볼 것` 은 서술이 아니라 **살아있는 지시**다 — 낡으면 리뷰어가 그 라운드가
+# 방금 없앤 것을 검사한다(#42: 삭제된 라인번호 12개 대조 지시가 이월됐다).
+# 인벤토리 표(서술, 코드가 이김)와 달리 여기는 TODO 로 갱신을 요구한다.
 KEEP_FULL = 2  # '이미 반영된 지적'에서 전문을 유지할 최근 라운드 블록 수
 
 
@@ -373,7 +376,7 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = 
         elif h.startswith(INV) and banner:
             # 옛 배너는 통째로 걷어내고 다시 넣는다 — 라운드마다 쌓이면 그것대로 stale 이다
             secs[i] = (h, "\n" + banner + INV_RE.sub("", b).lstrip("\n"))
-        elif h.startswith(("## 리뷰 대상", "## 검증 상태")) and TODO not in b:
+        elif h.startswith(PER_ROUND) and TODO not in b:
             # 라운드마다 다시 붙으면 마커가 쌓인다 — 이미 있으면 그대로 둔다
             secs[i] = (h, f"\n{TODO}\n" + b.lstrip("\n"))
     return render(secs)
@@ -564,7 +567,10 @@ def main():
         for f in rd.glob(f"{extra}*"):
             shutil.copy2(f, out / f.name)
     print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/후속티켓을 이관했다.")
-    print(f"   손으로 갱신할 절 2개만 남았다 ({TODO} 표시됨): '## 리뷰 대상', '## 검증 상태'")
+    todo_secs = [h for h, _ in sections(new_ctx) if h.startswith(PER_ROUND)]
+    if todo_secs:
+        print(f"   손으로 갱신할 절 {len(todo_secs)}개가 남았다 ({TODO} 표시됨): "
+              + ", ".join(f"'{h}'" for h in todo_secs))
     if changed or untracked:
         print(f"   작업 트리 실측: 변경 {changed} · 신규(untracked) {len(untracked)} — "
               f"'{INV}' 절이 주장하는 수와 다르면 그 표가 낡은 것이다")

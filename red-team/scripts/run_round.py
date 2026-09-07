@@ -842,6 +842,23 @@ def heading_keys(text: str) -> dict[str, str]:
             for h in re.findall(r"^## .+$", text, re.M)}
 
 
+SEAL_MARKS = ("지적 금지", "지적해도", "다시 열지 않는다", "닫힌 것", "손대지 않는다",
+              "반영하지 않는다")
+
+
+def seal_headings(text: str) -> list[str]:
+    """`## 스코프 밖` 밖에서 봉인을 선언하는 절 제목 (#48).
+
+    같은 봉인을 별도 최상위 절로 한 번 더 쓰는 것은 작성자가 그 항목을 강하게 닫으려 한다는
+    신호이고, 실측에서는 정확히 그 항목이 회귀였다(발동 집합 2건이 5축 전원 findings 0 으로
+    GO 를 통과한 뒤 PR 리뷰가 잡았다). 제목만 본다 — `## 스코프 밖` **안**의 "지적해도
+    반영하지 않는다" 소제목은 정상이다. 봉인 자리를 하나로 몰아 두면 판정 요청과의 우선순위
+    규약(`prompts/_common.md`)이 걸릴 자리도 하나가 된다.
+    """
+    return [h.strip() for h in re.findall(r"^## .+$", text, re.M)
+            if not h.strip().startswith("## 스코프 밖") and any(m in h for m in SEAL_MARKS)]
+
+
 def prev_context(base: Path, gate: str) -> Path | None:
     """직전 라운드의 context.md — 절 집합 비교의 기준. 첫 라운드면 None."""
     rounds = [(rj.stat().st_mtime, str(rj), ctx) for d in base.glob(f"{gate}-*")
@@ -865,6 +882,12 @@ def check_context(context: str, ctx_src: Path, prev: Path | None, allow_drop: bo
                  f"  TODO 마커가 남아 있다는 건 그 절을 이번 라운드 기준으로 안 고쳤다는 뜻이다 —\n"
                  f"  그대로 돌리면 리뷰어가 직전 라운드 기준으로 판정한다.\n"
                  f"  채운 뒤 마커 줄을 지우고 다시 실행한다.")
+    if extra := seal_headings(context):
+        print(f"⚠ {ctx_src.name}: `## 스코프 밖` 밖에서 봉인을 선언한 절이 있다:\n"
+              + "".join(f"    {h}\n" for h in extra)
+              + "  봉인은 `## 스코프 밖` 한 곳에만 쓴다 — 같은 항목을 두 번 닫으면, 그 주제를\n"
+                "  '판정해 달라' 로 올렸더라도 리뷰어가 닫힌 것으로 읽는다.\n"
+                "  확정된 기획·정책이면 `### 기획·정책 확인 완료 사항` 으로 옮긴다.", flush=True)
     if prev is None:
         return
     now, before = heading_keys(context), heading_keys(prev.read_text())
@@ -952,7 +975,11 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
                 "- `<신호>` = <보장하는 사건> (근거: <패키지명>@<설치버전> — <구현 사본 파일:줄 / "
                 "래퍼면 위임 인용 + 문서 URL>). <보장하지 않는 사건>은 보장하지 않는다.")
     body += ["## 스코프 밖 (지적 금지)\n"
-            "<PLAN.md 범위의 '제외되는 것' 과 후속 티켓으로 분리한 것을 여기 옮긴다>"
+            "<PLAN.md 범위의 '제외되는 것' 과 후속 티켓으로 분리한 것을 여기 옮긴다 — "
+            "**이 티켓에서 손대지 않는 파일·기능만**. 외부에서 확정된 기획·정책은 여기가 아니라 "
+            "`### 기획·정책 확인 완료 사항` 절로 적는다(절이 없으면 만든다) — "
+            "정책 확정과 그 구현의 검증은 다른 대상이고, 여기 적으면 구현까지 봉인된다. "
+            "봉인은 이 절 하나에만 쓴다>"
             + (f"\n\n미확인으로 남은 것(리뷰어가 볼 지점):\n{unknown}" if unknown else ""),
             "## 이미 반영된 지적 (재제기 금지)\n"
             "<2라운드부터 `resume.py` 가 직전 라운드 decisions.md 에서 끌어온다>",

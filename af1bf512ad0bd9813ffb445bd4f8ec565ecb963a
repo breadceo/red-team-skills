@@ -1,0 +1,18 @@
+pr-triage/SKILL.md
+  h_d82ccb34241a0d 24,38-39,66,91-92,101-104,106,108-129,136-138,174-175,194,205-208,222-225,239-240
+pr-triage/references/edge-cases.md
+  h_d82ccb34241a0d 10,52-60,222-243
+pr-triage/references/measurement.md
+  h_d82ccb34241a0d 3-4,60-119
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "af1bf512ad0bd9813ffb445bd4f8ec565ecb963a",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

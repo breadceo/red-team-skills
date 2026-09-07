@@ -420,7 +420,67 @@ assert "처리 완료 표시 1건" in stdout, "마킹이 실행되지 않았다"
 assert "미처리 리뷰만" in stdout, "함께 준 --new-only 가 조용히 무시됐다"
 assert 889 in fc.load_state(".", 5)["triaged"], "커서에 마킹이 반영되지 않았다"
 
+# ── 11) 인계 코멘트(red-team 작업 C) 폴백 ─────────────────────────────────
+# 앵커 단위 검증: 인용(blockquote)·코드펜스 안의 앵커는 인용이라 세지 않는다.
+assert fc.handoff_anchor("red-team handoff: o/r/feature/x\n\n본문") == "o/r/feature/x"
+assert fc.handoff_anchor("> red-team handoff: o/r/x") is None, "blockquote 인용을 앵커로 오인"
+assert fc.handoff_anchor("```\nred-team handoff: o/r/x\n```") is None, "펜스 인용을 앵커로 오인"
+assert fc.handoff_anchor("앵커 없는 코멘트") is None
+
+HANDOFF_BODY = (
+    "red-team handoff: o/r/feature/x\n\n"
+    "<details><summary>인계</summary>\n\n```md\n"
+    "## 스코프 밖\n- 캐시 계층 교체는 이번 티켓 밖이다\n\n"
+    "## 후속 티켓\n- ABC-2: 캐시 계층\n```\n</details>\n"
+)
+HANDOFF = {"id": 201, "user": {"login": "ethan"}, "created_at": "2026-08-05T04:00:00Z",
+           "body": HANDOFF_BODY, "html_url": "http://c/201"}
+DUP_HANDOFF = {**HANDOFF, "id": 202, "created_at": "2026-08-05T05:00:00Z",
+               "html_url": "http://c/202"}
+
+
+# 11-3) 로컬 기록 없음 + 앵커 없음 → 기존과 동일한 '없음'
+stdout, _ = fetch("--show-scope")
+assert "의사결정 기록: 없음 — 코드로만 검증한다" in stdout, stdout
+assert "스코프 밖·후속 티켓 절을 찾지 못했다" in stdout, stdout
+
+# 11-2) 로컬 기록 없음 + 앵커 코멘트 있음 → record 가 채워지고 출력이 바뀐다
+ISSUE.append(HANDOFF)
+out_path = TMP / "out.json"
+stdout = run("--out", str(out_path), "--show-scope")
+record = json.loads(out_path.read_text())["record"]
+assert record["source"] == "handoff-comment" and record["comment_id"] == 201, record
+assert record["anchor"] == "o/r/feature/x" and record["url"] == "http://c/201", record
+assert "red-team 인계 코멘트 #201" in stdout and "폴백" in stdout, stdout
+assert "의사결정 기록: 없음" not in stdout, "폴백이 잡혔는데도 '없음' 으로 단정했다"
+assert "캐시 계층 교체는 이번 티켓 밖이다" in stdout, "--show-scope 가 인계 코멘트 절을 못 뽑았다"
+assert "ABC-2: 캐시 계층" in stdout, stdout
+
+# 11-4) 앵커 2건 → keep-first + 중복 보고
+ISSUE.append(DUP_HANDOFF)
+stdout = run("--out", str(out_path), "--show-scope")
+assert json.loads(out_path.read_text())["record"]["comment_id"] == 201, "keep-first 위반"
+assert "앵커 2건" in stdout and "#202" in stdout, stdout
+
+# --new-only 로 내 코멘트가 목록에서 빠져도 폴백은 잡힌다 (필터 전 전체를 본다)
+stdout = run("--new-only")
+assert "red-team 인계 코멘트 #201" in stdout, "--new-only 필터 뒤에서 앵커를 찾아 놓쳤다"
+
+# 11-1) 로컬 기록 있음 → 인계 코멘트가 있어도 로컬이 선택된다
+round_dir = STATE_DIR / "code-1"
+round_dir.mkdir(parents=True, exist_ok=True)
+(round_dir / "round.json").write_text("{}")
+(round_dir / "context.md").write_text("## 스코프 밖\n- 로컬 기록의 스코프 밖 절\n")
+stdout = run("--out", str(out_path), "--show-scope")
+record = json.loads(out_path.read_text())["record"]
+assert record["source"] == "local" and record["round_dir"] == str(round_dir), record
+assert "인계 코멘트" not in stdout, "로컬 기록이 있는데 폴백이 이겼다"
+assert "로컬 기록의 스코프 밖 절" in stdout, stdout
+ISSUE.remove(HANDOFF)
+ISSUE.remove(DUP_HANDOFF)
+
 print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
       "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "
       "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first, "
-      "log+mark 동시 지정, mark+출력 플래그 동시 지정 모두 정상")
+      "log+mark 동시 지정, mark+출력 플래그 동시 지정, "
+      "인계 코멘트 폴백(로컬 우선·keep-first·앵커 부재·--show-scope) 모두 정상")

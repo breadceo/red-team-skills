@@ -77,7 +77,7 @@ diff / diff 안 문서의 미결 표에 등재된 지적 / 레포 밖(BE 계약�
 
 ### 3. 기록 대조 — 소수 케이스를 걸러낸다
 
-스크립트가 `의사결정 기록:` 으로 라운드 디렉토리를 알려주면 `context.md` 를 읽는다:
+스크립트가 `의사결정 기록:` 으로 알려준 라운드 디렉토리나 인계 코멘트를 읽는다:
 
 | 코멘트 성격 | 근거 |
 |---|---|
@@ -219,9 +219,9 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
 
 ## 의사결정 기록이 없는 PR
 
-`의사결정 기록: 없음` 이면(과거 PR, 인계, `red-team` 미경유) 3·4절을 건너뛰고 **코드로만
-검증**한다 — `already-rejected`/`already-applied` 는 커밋 이력에서 근거를 찾는다. 기록
-없음을 이유로 멈추지 않는다.
+`의사결정 기록: 없음` 이면(과거 PR, 인계 코멘트도 없음, `red-team` 미경유) 3·4절을
+건너뛰고 **코드로만 검증**한다 — `already-rejected`/`already-applied` 는 커밋 이력에서
+근거를 찾는다. 기록 없음을 이유로 멈추지 않는다.
 
 ## 경계
 
@@ -235,7 +235,7 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
 | 문서 | 언제 읽나 |
 |---|---|
 | `references/monitoring.md` | PR 감시를 시작할 때 — 호스트별 exact 실행 경로 |
-| `references/edge-cases.md` | docs-only PR, 미결 표 등재 지적, 레포 밖 계약 주장, 기록 재확인, fp 봇 재게시, 9절 실행 시 |
+| `references/edge-cases.md` | docs-only PR, 미결 표 등재 지적, 레포 밖 계약 주장, 기록 재확인·인계 폴백, fp 봇 재게시, 9절 실행 시 |
 | `references/measurement.md` | 본문 수치의 근거 확인, 재측정, 분류 로그 임계값 알림 시 |
 
 ## 유지보수

@@ -372,6 +372,24 @@ def fp_markers(body: str) -> list:
     return [m.group(1) for m in FP_RE.finditer(kept)]
 
 
+# red-team 작업 C(인계 코멘트)의 앵커. 라운드 번호를 담지 않아 브랜치 생애 전체에 하나다 —
+# `<repo>/<branch>` 만 뒤에 붙는다(red-team `references/external-sync.md` 작업 C).
+HANDOFF_RE = re.compile(r"^red-team handoff:[ \t]*(\S+)[ \t]*$", re.M)
+
+
+def handoff_anchor(body: str):
+    """인계 코멘트 앵커의 `<repo>/<branch>` 를 뽑는다 — 없으면 None.
+
+    fp_markers 와 같은 엄격함을 쓴다: 코드펜스·blockquote 안의 앵커는 **인용**이므로 세지
+    않는다. 인계 코멘트 본문은 프롬프트 본체를 접은 블록의 코드펜스에 두고 앵커는 그 밖
+    첫 줄에 두므로(작업 C 절차 1), 펜스를 걷어내도 앵커는 남는다.
+    """
+    kept = "\n".join(l for l in FENCE_RE.sub("", body).splitlines()
+                     if not l.startswith(">"))
+    m = HANDOFF_RE.search(kept)
+    return m.group(1) if m else None
+
+
 def is_bot(body: str, marker: str) -> bool:
     """리뷰 봇이 올린 코멘트인가.
 
@@ -657,7 +675,8 @@ def main():
     done = set(st.get("triaged", []))
     for it in items:
         it["triaged"] = it["id"] in done
-    if a.new_only:
+    all_items = items   # 인계 코멘트 폴백은 **필터 전** 전체를 본다 — 인계는 내가 올린
+    if a.new_only:      # 코멘트라 is_incoming 필터 뒤에는 남지 않는다.
         items = [it for it in items if it["is_incoming"] and not it["triaged"]]
 
     # red-team 의사결정 기록이 있으면 위치를 알려준다 (분류 근거로 쓴다)
@@ -667,13 +686,30 @@ def main():
         base = branch_dir(cwd)
         if (found := latest_round(base)):
             rd = found[0]
-            record = {"round_dir": str(rd),
+            record = {"source": "local", "round_dir": str(rd),
                       "context_md": str(rd / "context.md") if (rd / "context.md").exists() else None,
                       "decisions_md": str(rd / "decisions.md") if (rd / "decisions.md").exists() else None}
         elif base.exists():
-            record = {"round_dir": None, "branch_dir": str(base)}
+            record = {"source": "local", "round_dir": None, "branch_dir": str(base)}
     except Exception:
         pass  # red-team 기록이 없어도 동작해야 한다
+
+    # 로컬 기록이 없으면 red-team 인계 코멘트(작업 C)를 폴백으로 읽는다 — 다른 기기·새
+    # 워크트리·다른 사람의 세션에서도 3·4절(기록 대조)을 돌리기 위한 경로다.
+    # **폴백이지 대체가 아니다**: 인계 코멘트는 로컬 기록의 렌더라 항상 같거나 더 낡다.
+    # 추가 API 호출은 없다 — 이미 받아온 코멘트 페이로드에서 찾는다.
+    handoff_dups = []
+    if not (record and record.get("round_dir")):
+        try:
+            hits = [(it, t) for it in all_items if (t := handoff_anchor(it["body"]))]
+            if hits:
+                it, target = hits[0]        # keep-first — 작업 B·C 와 같은 규약
+                handoff_dups = [h[0]["id"] for h in hits[1:]]
+                record = {"source": "handoff-comment", "comment_id": it["id"],
+                          "url": it.get("url"), "anchor": target,
+                          "created_at": it["created_at"], "body": it["body"]}
+        except Exception:
+            pass  # 파싱이 깨져도 '기록 없음' 으로 떨어질 뿐 fetch 를 죽이지 않는다
 
     result = {"repo": repo, "pr": pr, "me": me, "bot_marker": a.bot_marker,
               "record": record, "commits": commits, "comments": items}
@@ -695,6 +731,14 @@ def main():
         print(f"의사결정 기록: {record['round_dir']}")
         print(f"  context.md   : {'있음' if record['context_md'] else '없음'}")
         print(f"  decisions.md : {'있음' if record['decisions_md'] else '없음'}")
+    elif record and record.get("source") == "handoff-comment":
+        print(f"의사결정 기록: red-team 인계 코멘트 #{record['comment_id']} "
+              f"({record['anchor']}) — 로컬 기록이 없어 폴백으로 읽었다")
+        print(f"  {record['url']} · 게시 {record['created_at']}")
+        print("  ⚠ 로컬 기록의 렌더다 — 이후 라운드가 있었으면 더 낡을 수 있다.")
+        if handoff_dups:
+            print(f"  ⚠ 앵커 {len(handoff_dups) + 1}건 — 첫 것을 쓴다(keep-first). 중복: "
+                  + ", ".join(f"#{i}" for i in handoff_dups))
     else:
         print("의사결정 기록: 없음 — 코드로만 검증한다")
 
@@ -702,13 +746,18 @@ def main():
         # 목록 출력은 기계가 정확히 할 수 있다. 코멘트와의 대조는 산문 대 산문이라 못 한다 —
         # 그래서 여기까지만 하고 판단은 사람 확인 게이트로 넘긴다.
         found = False
-        for key in ("context_md", "decisions_md"):
-            path = (record or {}).get(key)
-            if not path:
-                continue
-            for h, b in _sections(Path(path).read_text()):
+        sources = []    # (표시 이름, 절 목록) — 로컬 파일이든 인계 코멘트든 같게 다룬다
+        if (record or {}).get("source") == "handoff-comment":
+            sources.append((f"인계 코멘트 #{record['comment_id']}",
+                            _sections(record["body"])))
+        else:
+            for key in ("context_md", "decisions_md"):
+                if path := (record or {}).get(key):
+                    sources.append((Path(path).name, _sections(Path(path).read_text())))
+        for name, secs in sources:
+            for h, b in secs:
                 if h.startswith(("## 스코프 밖", "## 후속 티켓")):
-                    print(f"\n{'─'*70}\n{Path(path).name} · {h}\n{b.rstrip()}")
+                    print(f"\n{'─'*70}\n{name} · {h}\n{b.rstrip()}")
                     found = True
         if not found:
             print("\n⚠ 스코프 밖·후속 티켓 절을 찾지 못했다 — 범위 판단 근거가 기록에 없다.")

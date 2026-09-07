@@ -1,0 +1,27 @@
+pr-triage/scripts/fetch_comments.py
+  d6d19d998b23ae8a 375-392,678-679,689,693,697-713,734-741,749-758,760
+pr-triage/scripts/test_fetch_comments.py
+  d6d19d998b23ae8a 423-486
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "b20a4c6173ffdb69f3bca7d887c853a650a710ac",
+  "prompts": {
+    "d6d19d998b23ae8a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67fb1602-a41e-440b-88ce-148f28354c67",
+        "model": "claude-opus-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Bash": 19,
+        "Agent": 1,
+        "Edit": 7
+      },
+      "total_additions": 319,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

@@ -88,8 +88,26 @@ def main():
     assert r.returncode == 0 and "리뷰어 없음" in r.stdout, r.stdout + r.stderr
     print("  ok  '(선택)' 같은 꼬리 괄호 차이는 소실로 보지 않는다")
 
+    # 6. 봉인이 `## 스코프 밖` 밖의 절로 한 번 더 선언되면 경고한다 (#48).
+    #    실측: 같은 봉인을 두 번 쓴 항목이 정확히 회귀였고, 그 주제는 자진신고로도 올라와 있었다.
+    base = pathlib.Path(tempfile.mkdtemp())
+    ctx = base / "context.md"
+    ctx.write_text(FULL + "\n## 09-04 정책 확정으로 닫힌 것 (다시 열지 않는다)\n- 발동 집합\n")
+    r = run(base, ctx)
+    assert r.returncode == 0 and "리뷰어 없음" in r.stdout, r.stdout + r.stderr
+    assert "## 09-04 정책 확정으로 닫힌 것" in r.stdout and "⚠" in r.stdout, r.stdout
+    print("  ok  스코프 밖 밖의 봉인 절은 경고하되 라운드를 막지 않는다")
+
+    # 7. 정상 컨텍스트는 경고하지 않는다 — `## 이미 반영된 지적 (재제기 금지)` 로 오탐이 나면 못 쓴다
+    base = pathlib.Path(tempfile.mkdtemp())
+    ctx = base / "context.md"
+    ctx.write_text(FULL)
+    r = run(base, ctx)
+    assert r.returncode == 0 and "봉인" not in r.stdout, r.stdout
+    print("  ok  스코프 밖·재제기 금지 절만 있으면 봉인 경고가 없다")
+
     print("PASS — 첫 라운드 예외, TODO 잔류 차단, 절 소실 차단·복구처 안내, "
-          "탈출구, 꼬리 괄호 정규화 모두 정상")
+          "탈출구, 꼬리 괄호 정규화, 중복 봉인 경고 모두 정상")
 
 
 if __name__ == "__main__":

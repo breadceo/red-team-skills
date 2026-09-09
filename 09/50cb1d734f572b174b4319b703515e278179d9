@@ -1,0 +1,16 @@
+red-team/prompts/a-code.md
+  h_d82ccb34241a0d 114-125
+red-team/references/evidence.md
+  h_d82ccb34241a0d 838-952
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "0950cb1d734f572b174b4319b703515e278179d9",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

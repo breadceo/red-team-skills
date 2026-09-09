@@ -562,3 +562,71 @@ ceo-client#975·#957 을 함께 놓았다:
 | account-sdk-reactnative#46 | `4c4e52553` | `packages/login-store/Model.ts` 의 `getAccountUrl` 참조 6곳 중 `:81` 만 `()` 가 없고 `:110`·`:135`·`:146`·`:158`·`:178` 은 붙어 있다 — 「N개를 나란히 놓고 한 곳만 다른 표기」가 지목하는 열거가 이 6줄이다 |
 | zigbang-client#9596 | `27a44df11` | 배열 처리·`trim`·길이 상한 가드가 `pages/stay/map.tsx:52-61` 에만 있고, 같은 `createLocationMeta` 를 부르는 나머지 7 호출부(`apt_map.tsx:8`, `HomeAptDanjisOfferScreen/V2/index.tsx:163`, `HomeOfficetelListDanjisScreen/index.tsx:33`, `HomeOfficetelListScreen/index.tsx:30`, `HomeOneroomListScreen/index.tsx:31`, `HomeStoreListScreen/index.tsx:63`, `HomeVillaListScreen/index.tsx:28`)는 `query?.search_keyword as string` 을 그대로 넘긴다 — 「같은 피호출자를 쓰는 형제 호출부 전수」의 열거가 이 8줄이다 |
 | ceo-client#941 | `18b93275c` | 형제 헬퍼 `apps/CeoWeb/apis/queries/adHouse.ts:32` 가 `if (errorResponse.response?.data)` **진리값** 판정인데, 같은 커밋의 `apis/queries/signup.tsx:21` 은 `throw errorData ?? error` **nullish** 판정이다 — `data` 가 `""`·`0` 이면 던지는 값이 갈린다. 「같은 계약을 이미 구현한 형제 함수를 경계값 판정까지 대조」가 지목하는 대조가 이 두 줄이다 |
+
+## a-code 「어떻게 찾나」에 소비처 계약 대조를 넣은 이유 — issue #54
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 다른
+리뷰어(hermes·aws-security-agent·사람)가 잡은 12건이 한 계열이었다 — **클라이언트가 만드는 값의
+경계**(길이·형식·타입·계수 단위)를 **그 값을 받는 쪽의 계약**과 대조하지 않은 것이다. 근거 PR:
+ceo-client#874·#937·#968, zigbang-client#9596.
+
+12건 중 2건은 코멘트 시점에 완료된 라운드가 없어(**pre-gate**) 게이트가 놓친 것이 아니다 —
+근거에서 뺐다: ceo-client#937 「새로 만든 저장소에 소비 경로가 없어 기존 소비처가 잘못된 의미의
+값을 받음」, ceo-client#958 「출력 직렬화 형태가 조용히 바뀜(소비처 영향 없음)」. 두 처방은 아래
+축 문장이 이미 덮으므로 지시는 유지하되 건수로 세지 않는다. **유효 근거 10건** — post-GO 탈출 9,
+post-round 탈출 1. 판정 분포는 `none` 7, `partial:a-code` 3 으로, 축 자체는 관할이었고 지시가
+값의 **출처·경유지**까지만 시키고 **도착지**를 시키지 않은 것이 원인이었다.
+
+| 갈래 | PR | 결함 | 판정 |
+|---|---|---|---|
+| 양쪽 계약의 범위 불일치 | ceo-client#968 | `buildInquiryTouch` 의 `referrer`·`landingPath`·`capturedAt` 3필드가 무캡 — 같은 함수의 `touchQuery` 는 재캡한다 | `none` |
+| 〃 | ceo-client#968 | 쿠키의 512자 값이 VARCHAR(500) 컬럼으로 나가 501~512자 구간에서 INSERT 실패 = 문의 유실 | `none` |
+| 〃 | ceo-client#968 | 500자 초과 랜딩 경로·리퍼러를 공용 문의 API 가 거절 — 같은 쿠키를 쓰는 재시도까지 반복 실패 | `none` |
+| 〃 | ceo-client#968 | `parseGaClientId` 가 세그먼트 개수만 검사해 4,000자 `_ga` 값이 payload 로 실림 | `none` |
+| 〃 (타입 제약) | ceo-client#968 | `capturedAt` 이 쿠키 값을 검증 없이 **날짜 전용 DTO 필드**로 승격 — 손상된 값이면 쿠키 만료(90일)까지 반복 실패 | `none` |
+| 〃 (UI 가 약속한 제한) | ceo-client#874 | `withSdkAvailabilityNote` 가 66자를 무조건 덧붙여, `maxLength=500` textarea 에서 사용자에게는 500/500 인데 API 에는 566자 | `none` |
+| 계수 단위 불일치 | ceo-client#937 | `value.slice(0, UTM_VALUE_MAX_LENGTH)` 가 code unit 기준이라 surrogate pair 앞쪽만 남아 `URLSearchParams` 가 U+FFFD 로 치환 | `partial:a-code` |
+| 〃 | zigbang-client#9596 | `MAX_KEYWORD_LENGTH=40` 이 `.length`(UTF-16 코드유닛)를 세는데 주석은 「자」로 선언 — 이모지 20자가 통과 | `partial:a-code` |
+| 검증 통과값이 하류에서 특수값 | ceo-client#968 | `GA_POSITIVE_INTEGER(/^[1-9]\d*$/)` 를 통과한 309자리가 `Number()` 에서 `Infinity` 가 되어 timestamp 비교를 흡수 | `partial:a-code` |
+| 대조할 계약 자체가 없음 | zigbang-client#9596 | 새 SSR 진입점이 `search_keyword` 를 상한 없이 내부 검색 API 의 `q` 로 넘김(최대 ~8KB, 취소 불가) | `none` |
+
+### 자리를 「어떻게 찾나」로 고른 이유
+
+후보는 둘이었다 — #3(사실오류)과 「어떻게 찾나」.
+
+#3 은 **서술**을 대상으로 한다(#55 가 주석·docblock·표·PR 본문을 편입했다). 계수 단위 2건은
+주석이 「자」·「가시 문자」로 선언한 단위와 코드가 세는 단위가 달라 #3 에 정확히 든다. 그러나
+나머지 8건에는 **대조할 서술이 없다** — `buildInquiryTouch` 의 3필드 무캡, `parseGaClientId` 의
+문자셋 미구속, SSR 진입점의 상한 부재는 어디에도 「500자까지」라고 적혀 있지 않다. 계약은
+**다른 시스템**(BE DTO·DB 컬럼·UI 컴포넌트 prop)에 있고, 그것을 열어보지 않은 것이 결함이다.
+#3 에 넣으면 서술이 있는 2건만 걸리고 7건(`none`)은 그대로 남는다.
+
+「어떻게 찾나」는 #53 과 같은 이유로 맞는 자리다 — 이것은 결함 종류가 아니라 **탐색 방향**이다.
+실측 10건은 논리구멍(무캡·상한 부재)·사실오류(단위 선언 불일치)·새 회귀(승격된 필드)에 흩어져
+있고, 공통점은 결함의 성질이 아니라 **값의 도착지를 열어보지 않았다**는 탐색의 한계다.
+
+#53 문단과는 방향이 다르다. 형제 전수는 **「같은 결과에 도달하는 다른 길」** 로 결과 쪽에서
+**옆**을 훑는다. 이 문단은 **「그 결과를 받는 쪽의 계약」** 으로 **앞**을 본다 — 같은 payload 를
+놓고도 형제 전수는 "이 필드만 캡이 없다"를 찾고, 소비처 계약 대조는 "캡이 있어도 그 수가
+컬럼 폭과 다르다"를 찾는다. ceo-client#968 이 두 문단 양쪽에 계상되는 이유가 이것이다(3필드
+무캡은 #53 의 형제 필드 행, 512 vs VARCHAR(500) 은 여기).
+
+### 세 갈래를 한 문단으로 묶은 이유
+
+분류기가 제안한 처방은 12개 문장이었다. 갈래를 1:1로 나열하면 리뷰어가 매 라운드 읽는
+프롬프트에 문단이 셋 늘어난다. 세 갈래는 **「값이 도달하는 소비처의 계약을 열어 대조한다」**
+한 축으로 덮인다 — 범위 불일치는 **같은 수인가**, 계수 단위는 **같은 단위로 세는가**, 하류
+특수값은 **통과한 값이 그 계약 안에 드는가**로, 셋 다 같은 대조의 다른 대입일 뿐이다. 그래서
+축 문장 + 대조 대상 열거 + 세 대입으로 묶었고, 「계약을 못 찾으면 상한 없음」(zigbang-client#9596
+SSR)은 같은 문단의 꼬리로 붙였다. 8줄로, #53 의 15줄보다 짧다.
+
+### 손 대조 3건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| PR | 커밋 | 대조 결과 |
+|---|---|---|
+| ceo-client#968 | `add394bf9` | `apps/CeoWeb/lib/utm.ts:648-660` 의 `UtmTouch` 4필드 중 `touchQuery` 만 `INQUIRY_TOUCH_QUERY_MAX_LENGTH`(2000)로 캡되고 `referrer`·`landingPath`·`capturedAt` 은 `params.get(...) \|\| undefined` 그대로다. 쓰기 경로 캡은 `UTM_VALUE_MAX_LENGTH = 512`(`:188`)인데 소비처는 VARCHAR(500) — 정정 커밋 `e72f8aaf4` 가 `INQUIRY_FIELD_MAX_LENGTH = 500` 을 새로 세우고 세 필드 + `gaClientId` 에 `capInquiryField` 를 붙였다. 「소비처 DTO 제약·DB 컬럼 폭을 열어 양쪽 상한이 같은 수인가」가 지목하는 대조가 512 ↔ 500 이고, 열거 대상이 이 4+1 필드다 |
+| zigbang-client#9596 | `27a44df11` | `packages/zigbang-www/pages/stay/map.tsx:59` 가 `keyword.length > MAX_KEYWORD_LENGTH`, 같은 파일 `:30-36` 의 선언 주석은 「최장 `창원시 마산합포구`(10자)」로 단위를 **자**로 적는다 — `.length` 는 UTF-16 코드유닛이라 이모지 20자가 통과한다. 후속 커밋 `3321a079e` 가 `Array.from(trimmed).length` 로 바꾸며 「`.length` 는 UTF-16 코드유닛이라 이모지가 2로 세어진다」 주석을 달았다. 「같은 단위로 세는가(UTF-16 코드유닛 / 코드포인트 / 바이트 / grapheme)」가 지목하는 대입이 이 한 줄이다 |
+| ceo-client#968 | `661e12632` | `apps/CeoWeb/lib/utm.ts` 의 `parseGaSessionCandidate` 가 `GA_POSITIVE_INTEGER` 형태 검사만 거친 값을 `{ sessionId: gs1[1], timestamp: Number(gs1[2]) }` 로 정렬 키에 싣는다 — 9가 309개면 `Number()` 가 `Infinity` 라 `Infinity > 유한값` 이 항상 참이다. 정정 커밋 `6da2ee163` 이 `gaOrderingKey`(`Number.isFinite` 체크)를 세웠다. 「검증을 통과한 값이 하류에서 특수값(`Infinity`·`NaN`·`-0`)이 되어 비교를 흡수하는가」가 지목하는 하류 연산이 이 정렬 비교다 |

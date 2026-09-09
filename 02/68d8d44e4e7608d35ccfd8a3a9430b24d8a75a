@@ -1,0 +1,22 @@
+pr-triage/references/edge-cases.md
+  h_d82ccb34241a0d 84-100
+pr-triage/references/measurement.md
+  h_d82ccb34241a0d 120-151
+pr-triage/scripts/fetch_comments.py
+  h_d82ccb34241a0d 683,685,687-690,753-759
+pr-triage/scripts/test_fetch_comments.py
+  h_d82ccb34241a0d 443,447-448,461-462,484,510-536,542-543
+red-team/scripts/resume.py
+  h_d82ccb34241a0d 131-138,148
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "0268d8d44e4e7608d35ccfd8a3a9430b24d8a75a",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

@@ -743,3 +743,95 @@ breadcrumb 유실은 실재해 `sentryRoute.ts` 대체 구현이 들어갔고(�
 
 **임계를 3라운드로 고른 근거**: 5건의 코드 라운드 수가 3·5·5·13·17 이라 최솟값이 3이고,
 `long-gate.md` 진입 조건(3라운드 초과)과 같은 자리라 규약이 하나로 유지된다.
+
+## a-code #5 를 「도는가」까지 넓히고 _common 에 예외를 단 이유 — issue #58
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 코드
+게이트가 **GO 를 낸 뒤** 다른 리뷰어(hermes·aws-security-agent·사람)가 잡은 **8건**이 한
+계열이었다 — 이 변경이 **선언한 보장이 실제로 돌지 않았거나**, 이 변경이 **스스로 진단한 무음
+결함을 고정하는 단언이 없었던** 것이다. 근거 PR: ceo-client#940·#952·#955·#959,
+zigbang-client#9596. 판정은 `none` 4 · `partial:a-code` 4 로, 절반은 축 자체가 관할이었고
+5번이 **게이트가 무엇을 잡는지만** 묻고 게이트가 도는지·깨지는지는 묻지 않은 것이 원인이었다.
+
+| 축 | PR | 결함 | 판정 |
+|---|---|---|---|
+| 도는가 — 실행 경로 | ceo-client#959 | 추가한 `apps/TalkWeb/__tests__/sentryPolicy.test.ts` 를 실행하는 단계가 어느 CI 파이프라인·워크플로에도 없다 | `partial:a-code` |
+| 〃 — 게이트가 깨짐 | zigbang-client#9596 | 새 테스트 파일의 타입 import 가 `typeof import("../index.tsx")` 로 확장자를 포함해 `allowImportingTsExtensions` 없이는 tsc 게이트가 막힐 수 있다 | `none` |
+| 〃 — 암묵 전제 (미선언 의존) | ceo-client#955 | 가드 테스트가 `package.json` 에 없는 `@babel/parser` 를 직접 import 한다 — `@babel/core` 의 전이 의존으로만 해석되므로 hoisting·버전 드리프트로 게이트 자체가 실행되지 않을 수 있다 | `partial:a-code` |
+| 〃 — 암묵 전제 (진입점·대소문자) | ceo-client#955 | 주석 제외 필터 `!key.endsWith("Comments")` 가 대소문자 구분이라 File 노드의 소문자 `comments` 를 거르지 못한다 — 지금 무해한 이유가 `walk(ast.program)` 진입점이라는 암묵 전제에만 의존한다 | `partial:a-code` |
+| 〃 — 선언한 매칭이 걸리는가 | ceo-client#940 | `data-track` 10개 중 7개가 실제 클릭 타깃의 **조상** 요소에 붙어 있어 GTM 의 Click Element CSS 셀렉터 트리거로는 0건이 잡힌다 | `partial:a-code` |
+| 무음 회귀 고정 — 스스로 진단 | ceo-client#940 | 이 PR 이 스스로 찾아낸 무음 결함(`AlwaysClickableButton` 이 `data-track` 을 조용히 버리던 것)을 고정하는 단언이 없어, `...props` 를 되돌리면 tsc·lint 는 통과하고 계측만 죽는다 | `none` |
+| 〃 — 다중 파일 불변식 | ceo-client#959 | span 수집 중단이 네 파일에 걸친 공동 의존 불변식인데 이를 고정하는 테스트가 0건이라, 한 조각이 빠져도 빌드·테스트가 초록으로 통과한다 | `none` |
+| 〃 — 상태 기계의 마지막 칸 | ceo-client#952 | 새로 만든 3상태 잠금(idle/pending/done)의 마지막 전이(제출 중 닫기 → 재오픈 → 원 요청 나중 성공)를 고정하는 단언이 없어, 기존 테스트는 `release()` 뒤를 보지 않는다 | `none` |
+
+**post-GO 가 아닌 2건도 같은 계열이다.** ceo-client#957 의 두 건은 `_escape_class` 가
+`pre-gate (코멘트 전 라운드 없음)` — 게이트가 돌지 않은 PR 이라 탈출로 세지 않지만, 판정은
+`partial:a-code`·`none` 이어서 **돌았어도 놓쳤을** 형태다. ① 새 테스트가 하필 CTA0(인증 횟수
+초과 — 재시도해도 통과 못 함)을 양성 대조군으로 골라 「CTA0 는 다시 시도 안내가 맞다」는
+부정합을 회귀 테스트로 고정한다. ② `handleCertFailed` 를 RegisterDialog·EditDialog 두 모달이
+공유하는데 새 테스트의 `deliver` 는 `certParams[1]`(EditDialog) 채널만 쓴다. ①이 5번의
+「대조군·기대값이 이 변경 자신의 분류 기준으로 옳은가」, ②가 「호출부 전수 중 몇 곳이 단언에
+덮이는지」의 출처다.
+
+**issue 본문 표(7행, `none` 5 · `partial` 2)와 다른 이유.** 재검증에서 ceo-client#955 의 2건
+(둘 다 `partial:a-code`, post-GO)이 들어오고 ceo-client#884 1건이 빠져 8행(`none` 4 ·
+`partial` 4)이 됐다. 빠진 #884 은 「`SDK_AUTH_STORAGE_KEY = "_zauth"` 가 외부 SDK 내부 저장
+키에 문자열로 결합돼, SDK 가 키를 바꾸면 토큰 제거가 조용한 no-op 이 된다」다 — 이 자리에는
+대조할 **선언된 보장이 없고**, 이 변경이 스스로 「깨져 있었다」고 진단한 것도 아니라 새 예외의
+①에 걸리지 않는다. 벤더 값이 정말 그런지는 5번이 아니라 3번의 **벤더 소스 대조**가 이미 시키는
+일이고, 그 값이 하류에서 어떻게 쓰이는지는 #54 가 넣은 소비처 계약 문단의 방향이다. 세지 않고
+별도 판단 대상으로 남긴다.
+
+**근거에서 뺀 1건 더.** ceo-client#955 의 「PR 스스로 '세 변경이 한 묶음'이라고 못 박았는데
+회귀 가드는 `App.tsx` 의 키 부재 한 변만 단언한다」는 다중 파일 불변식의 전형이지만 판정이
+`covered_by: a-code` — **현행 5번이 이미 잡은다**로 분류됐다. 근거로 세면 이중 계상이다.
+
+### 예외를 `_common.md` 에 단 이유 (a-code #5 가 아니라)
+
+이 계열의 절반이 「단언이 없다」 형태이고, `_common.md` 의 스코프 규칙에는 **「테스트가 없다는
+것 자체는 결함이 아니다」** 가 있다. 그 규칙은 리뷰어가 아무데나 테스트를 요구하는 소음을 막으려고
+일부러 둔 것이고 폐지 대상이 아니다. 문제는 **자리**다 — 예외를 `a-code.md` 에만 쓰면 축 프롬프트
+(「단언을 찾아 대조하라」)와 공용 스코프 규칙(「없는 것은 결함이 아니다」)이 **같은 프롬프트 안에서
+서로 모순**된다. `_common.md` 의 스코프 규칙 절은 「이걸 어기면 리뷰가 쓸모없어진다」로 시작해
+축 지시보다 강한 어조를 갖고, 실제로 분류기가 #884 에 붙인 진단도 「현재 _common 의 '테스트가
+없다는 것 자체는 결함이 아니다' 가 이 표면을 덮어 가린다」였다. 예외는 **덮는 규칙 쪽에** 달아야
+해소된다.
+
+**b1~b4 가 같이 영향받는 것은 의도다.** 위 표의 ceo-client#952(상태 기계의 마지막 전이 칸)는
+b1 의 관할에 가깝고, issue 본문의 처방 후보도 그 자리를 「b1 에 상태×전이 표를 추가」로 지목했다.
+b 축 프롬프트를 직접 늘리지 않고 같은 결함을 올릴 수 있게 만드는 경로가 `_common` 예외 하나다.
+소음 위험은 예외의 **좁음**으로 막는다 — 두 조건이 **동시에** 성립해야 하고, ①은 「그렇게 적힌
+주석·커밋 메시지·PR 본문을 인용한다」·「성립해야 하는 파일을 전수 적는다」로, ②는 「찾은 범위를
+적는다」로 각각 제출물을 요구한다. 확인하지 못하면 지적하지 않는다가 명시돼 있어, 일반적인
+「테스트를 추가하라」는 이 예외로 올라올 수 없다. 계획 축(`a-plan`·`b5`)에서는 ②의 「diff 안에
+단언이 없다」가 성립할 대상이 없어 예외가 스스로 닫힌다.
+
+### 여섯 형태를 두 문단으로 묶은 이유
+
+분류기가 낸 처방은 7개 문장이었고 그대로 넣으면 이미 긴 5번이 일곱 줄 늘어난다. 여덟 결함은
+5번이 이미 갖고 있는 대비 **「선언돼 있다는 것과 그것이 막는다는 것은 다르다」** 를 두 번 더
+반복해 덮인다 — **막는다 ≠ 돈다**(실행 경로·게이트가 깨지지 않는가·암묵 전제), **진단했다 ≠
+고정했다**(예외 두 조건에 걸리는 자리를 열거하고 단언과 대조). 그래서 문단 둘로 묶고, 항목
+제목도 「선언된 보장의 판별력」에서 **「선언된 보장 — 막는가·도는가·진단한 것을 고정했는가」**
+로 넓혔다(#56 이 4번 제목을 넓힌 것과 같은 이유 — 넓어진 대상이 제목에 남지 않으면 리뷰어가
+(a)~(c)에서 멈춘다).
+
+**표식 1건은 새 문단이 아니라 (c) 안으로 넣었다.** ceo-client#940 의 `data-track` 은 「선언한
+것이 실제로 걸리는가」이고 (c)가 이미 그 질문이다 — 다른 점은 매칭 주체가 lint 규칙이 아니라
+외부 도구(GTM)라는 것뿐이라, (c)의 제목을 「가드가 막겠다고 말한 표기」에서 「선언한 매칭」으로
+바꾸고 표식 한 문장을 그 안에 붙였다. 줄이 늘지 않는다.
+
+**`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 축 프롬프트 둘과 이 문서뿐이라 예산 검사
+대상이 아니다(검사 결과 4990 tok 로 변동 없음).
+
+### 손 대조 4건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| PR | 결함 커밋 → 정정 커밋 | 대조 결과 |
+|---|---|---|
+| ceo-client#959 | `6127b4fb9` → `4272f667d` | 결함 커밋이 `apps/TalkWeb/__tests__/sentryPolicy.test.ts`(129줄)를 추가했지만, 같은 트리의 루트 `azure-pipelines.yml` 의 `PR_CHECK` job 은 `yarn install` 과 `yarn workspaces foreach --all --exclude root run tsc` 두 스텝뿐이고 `apps/TalkWeb/ci/azure-pipelines.yml` 은 build → deploy 로 직행한다 — 테스트를 부르는 단계가 없다. 정정 커밋이 `PR_CHECK` 에 talkWeb-test 스텝을 추가하며 커밋 메시지에 「the root PR_CHECK job only does tsc, and the TalkWeb deploy pipeline is `pr: none`… **A guard that never executes is not a guard**」로 적었다. 「테스트를 실제로 부르는 단계가 CI 워크플로에 있는지 job 목록을 열어 대조한다」가 지목하는 대조가 이 두 파일이다 |
+| ceo-client#955 | `feb491450` → `527b3a2e7` | 결함 커밋의 `apps/CeoApp/__tests__/AppSentryPolicy.test.tsx:51` 이 `import { parse } from "@babel/parser"` 인데, 그 트리의 `package.json` 전수 중 `@babel/parser` 를 선언한 파일은 **0개**이고 `@babel/core` 만 `apps/CeoApp/package.json` 에 있다. 같은 파일 `:190` 은 `if (key !== "loc" && !key.endsWith("Comments"))`, `:195` 는 `walk(ast.program)` 이다. 정정 커밋이 「전자는 이 워크스페이스 package.json 에 선언돼 있지 않아 **phantom dependency** 였다」·「`endsWith("Comments")` 는 File 노드의 comments(소문자)를 못 걸러낸다」·「한 파일만 보면 등록을 헬퍼 파일로 옮기는 것만으로 우회된다」로 셋을 함께 닫았다. 「미선언 전이 의존성 import·키 대소문자·진입점 목록」이 지목하는 열거가 이 세 줄이다 |
+| ceo-client#940 (표식) | `5dcae3aa2` → `a06d1b468` | 정정 커밋 메시지가 「`LinkButton` wrapped a `Link` inside a `Button`, so **`data-track` and `onClick` landed on the outer `<button>` while the inner `<a>` did the navigating**」로 결함을 그대로 적는다 — 표식이 붙은 요소가 실제 이벤트 대상의 조상이었다. 정정은 단일 `<a>` 로 렌더해 「the tracked element and the navigating element are the same element」로 만들고 `LinkButton.test.tsx`(98줄)를 새로 세웠다. 「표식이 붙은 요소가 실제 이벤트 대상 자신인지 그 조상·자손인지까지 DOM 을 따라가 대조한다」가 지목하는 확인이 이 중첩이다 |
+| ceo-client#940 (무음 고정) | `5dcae3aa2` | 같은 커밋이 **스스로** 진단했다 — 메시지는 「`AlwaysClickableButton` now passes props through; **it was dropping `data-track`**」, 코드 주석은 「`data-track`(B2C-54026) 처럼 DOM 에 그대로 실려야 하는 속성이 **조용히 버려지고 있었다**」다. 그런데 같은 커밋이 추가한 테스트는 `apps/CeoWeb/__tests__/intro/tracking.test.tsx` 하나뿐이고 그 트리의 테스트 파일 전수에서 `AlwaysClickableButton` 을 언급하는 단언은 **0건**이며, 현재 레포에도 그 컴포넌트를 다루는 테스트 파일이 없다. `...props` 를 되돌리면 tsc·lint 는 초록이고 계측만 죽는다. 예외 두 조건(①자기 진단 인용 ②diff 안 단언 부재)이 정확히 이 커밋에서 함께 성립한다 |

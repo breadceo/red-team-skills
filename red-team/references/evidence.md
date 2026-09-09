@@ -707,3 +707,39 @@ breadcrumb 유실은 실재해 `sentryRoute.ts` 대체 구현이 들어갔고(�
 | ceo-client#907 | `456750269` | `apps/CeoApp/src/lib/api/user.ts:88-89` 의 catch 가 `console.error("[api] Error fetching data:", err)` 를 먼저 실행하고 그 **다음 줄**에서 `onFailure?.(classifyUsersMeFailure(err))` 로 사유를 가른다 — 같은 파일 `:41` 주석은 `canceled` 를 「세션 경계 교차에 따른 정상 취소」로 선언한다. 정정 커밋 `7503773f0`(pick the log level from the failure reason)이 `const kind = classifyUsersMeFailure(err)` 를 먼저 세우고 `kind === "canceled" ? console.warn : console.error` 로 바꿨다. 「심각도가 사건의 의미와 같은지, **분류보다 먼저 적재되지는 않는지**」가 지목하는 대조가 이 두 줄의 순서다 |
 | ceo-client#874 | `33503eab5` | `apps/TalkWeb/lib/axios/authInterceptor.ts:64-65` 가 `_error.status === 401` 에서 `await logoutAction()` 만 호출한다(이 파일의 `Sentry` import 는 `:81` `withScope` 용이다). 같은 시점 `setUser` 호출처를 전수 뽑으면 설정은 `hooks/useUser.ts:117`, 해제는 `hooks/useLogout.tsx:20` **한 곳뿐**이라 401 경로에 짝이 없다. 정정 커밋 `36590256b`(clear Sentry user on 401 logout)이 `logoutAction()` 앞에 `Sentry.setUser(null)` 을 넣고 인터셉터 전용 테스트를 새로 세웠다. 「설정과 해제가 모든 로그인·로그아웃 경로에서 짝이 맞는지 전수 대조」가 지목하는 열거가 이 세 자리다 |
 | zigbang-client#9596 | `7c776a493` | `packages/screens/src/lib/DynamicMetaTag/index.tsx` 의 `reportLocationMetaFailure`(`:274~`)가 `:283` 에서 메시지를 고정한 새 `Error` 를 만든 뒤 `:286` 에서 `reported.stack = error.stack` 으로 원본 stack 을 이식한다 — 주석은 「메시지는 고정하되 발생 지점은 살린다」다. 정정 커밋 `89c8c4d46`(원본 stack 이식 대신 extra 로 보존)이 그 이식을 삭제하고 `scope.setExtra("locationMeta.originStack", ...)` 로 옮기며 「첫 줄이 `Error: Network Error` 라 Sentry 가 transport 프레임(`xhr.onerror`)으로 그룹핑해 앱 레벨 원인을 못 찾는다」를 근거로 적었다. 「재포장했으면 `message`·`stack` 첫 줄·fingerprint 가 서로 일관한지」가 지목하는 대조가 이 한 줄이다 |
+
+## NO-GO 교착에서 사람이 고른 것은 '그냥 나가기' 였다 — issue #65
+
+리뷰어 탈출 결함 전수 분류(`~/.red-team/eval/escape/all-classified.json`, 2026-09-09)에서,
+**라운드를 돌고도 NO-GO 에서 멈춘 채 PR 이 리뷰로 나간 사례가 5건**이고 그 PR 들에서 탈출
+결함 **29건**(전체 186건의 16%)이 나왔다.
+
+| PR | 탈출 결함 | code 라운드 | 마지막 verdict |
+|---|---:|---:|---|
+| ceo-client#955 | 10 | 17 | NO-GO |
+| ceo-client#961 | 7 | 13 | NO-GO |
+| zuix2#961 | 6 | 5 | NO-GO |
+| ceo-client#954 | 4 | 3 | NO-GO |
+| account-sdk-reactnative#47 | 2 | 5 | NO-GO |
+
+**게이트가 결함을 알고 있는 상태에서 PR 이 나갔다.** 17라운드·13라운드를 돈 건은 수렴 실패가
+아니었다 — 확인 결과 **남은 P1 이 기획·PO·타 팀 판단을 기다려 코드로는 닫을 수 없는
+교착**이었다.
+
+정당한 종결 경로는 그 전부터 있었다(`ABORTED` 마커). 그런데 실측:
+
+- 위 5개 run 디렉토리에 `ABORTED` **0건**
+- `runs/`·`runs2/` 전체를 통틀어 `ABORTED` 마커는 **1건**뿐(다른 티켓)
+
+즉 교착에서 사람이 고르는 것은 "ABORTED 로 닫기" 가 아니라 **"그냥 나가기"** 다. 그러면
+기록에 남는 마지막 상태가 NO-GO 라서, 나중에 그 티켓을 이어받거나 집계할 때 **수렴 실패와
+정당한 중단이 구분되지 않는다** — 5건이 전부 `verdict=NO-GO` 로만 남아 있는 것이 그 결과다.
+
+교정은 셋이다: ① `resume.py` 가 교착일 수 있는 두 자리에서 중단 종결을 **제시**한다
+(판정은 사람 — 자동 판정의 오탐이 원리적이고 비용이 비대칭인 이유는
+`recovery.md` 「왜 자동 판정이 아니라 제시인가」) ② ABORTED 본문에 `## 미해결 P1` 절을
+두어 나간 채로 남은 결함을 남긴다(템플릿: `assets/aborted-template.md`) ③ `pr-triage` 가 그
+절을 읽어 같은 판단을 두 번 하지 않는다.
+
+**임계를 3라운드로 고른 근거**: 5건의 코드 라운드 수가 3·5·5·13·17 이라 최솟값이 3이고,
+`long-gate.md` 진입 조건(3라운드 초과)과 같은 자리라 규약이 하나로 유지된다.

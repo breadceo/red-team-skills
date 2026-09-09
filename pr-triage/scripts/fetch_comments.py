@@ -691,6 +691,11 @@ def main():
                       "decisions_md": str(rd / "decisions.md") if (rd / "decisions.md").exists() else None}
         elif base.exists():
             record = {"source": "local", "round_dir": None, "branch_dir": str(base)}
+        # 게이트가 중단(ABORTED)으로 닫혔으면 그 마커 본문이 범위 판단의 근거다 — 그
+        # `## 미해결 P1` 절이 "알고 나간 결함" 목록이다(red-team `assets/aborted-template.md`).
+        # round_dir 이 없어도(라운드 기록이 정리된 브랜치) 마커만으로 성립한다.
+        if record and (ab := base / "ABORTED").exists():
+            record["aborted"] = str(ab)
     except Exception:
         pass  # red-team 기록이 없어도 동작해야 한다
 
@@ -741,12 +746,26 @@ def main():
                   + ", ".join(f"#{i}" for i in handoff_dups))
     else:
         print("의사결정 기록: 없음 — 코드로만 검증한다")
+    if (record or {}).get("aborted"):
+        # 마지막 verdict 가 NO-GO 인 채로 나간 PR 과 **정당하게 접고 나간** PR 을 가르는
+        # 유일한 기계 신호다(red-team `references/recovery.md`). 이게 없으면 트리아지는
+        # "알고 나간 결함" 을 새 지적과 구분할 수 없다.
+        print(f"⛔ 이 브랜치의 게이트는 중단(ABORTED)으로 닫혔다: {record['aborted']}")
+        print("  `미해결 P1` 절이 알고 나간 결함 목록이다 — `--show-scope` 로 함께 낸다. "
+              "처리는 `references/edge-cases.md`.")
 
     if a.show_scope:
         # 목록 출력은 기계가 정확히 할 수 있다. 코멘트와의 대조는 산문 대 산문이라 못 한다 —
         # 그래서 여기까지만 하고 판단은 사람 확인 게이트로 넘긴다.
         found = False
         sources = []    # (표시 이름, 절 목록) — 로컬 파일이든 인계 코멘트든 같게 다룬다
+        if ab := (record or {}).get("aborted"):
+            # 마커 본문은 사람이 손으로 쓴 파일이다 — 비 UTF-8·권한 오류가 수집을 죽이면
+            # 안 된다(red-team 의 차단 안내가 같은 이유로 본문 읽기를 감싼다).
+            try:
+                sources.append(("ABORTED", _sections(Path(ab).read_text())))
+            except (OSError, ValueError) as e:  # ValueError ⊇ UnicodeDecodeError
+                print(f"\n⚠ ABORTED 본문을 읽을 수 없다({e}) — 미해결 P1 목록을 손으로 확인한다.")
         if (record or {}).get("source") == "handoff-comment":
             sources.append((f"인계 코멘트 #{record['comment_id']}",
                             _sections(record["body"])))
@@ -756,11 +775,16 @@ def main():
                     sources.append((Path(path).name, _sections(Path(path).read_text())))
         for name, secs in sources:
             for h, b in secs:
-                if h.startswith(("## 스코프 밖", "## 후속 티켓")):
+                if h.startswith(("## 스코프 밖", "## 후속 티켓", "## 미해결 P1")):
                     print(f"\n{'─'*70}\n{name} · {h}\n{b.rstrip()}")
                     found = True
         if not found:
             print("\n⚠ 스코프 밖·후속 티켓 절을 찾지 못했다 — 범위 판단 근거가 기록에 없다.")
+            if (record or {}).get("aborted"):
+                # 중단인데 목록이 없으면 "알고 나간 것" 을 가릴 수 없다 — 무음으로 두면
+                # 트리아지가 그 결함을 새 지적으로 두 번 판단한다.
+                print("  중단(ABORTED)인데 `미해결 P1` 절이 없다 — 그 절을 마커 본문에 채우고"
+                      " 다시 실행한다\n  (red-team `assets/aborted-template.md`).")
 
     if a.show_files:
         # 목록까지는 기계가 정확하다. top-level 봇 코멘트(경로를 본문에 쓰는 aws 류)와의

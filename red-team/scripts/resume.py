@@ -171,6 +171,29 @@ def pending(decisions: str) -> str:
     return "\n".join(lines)
 
 
+def round_no(rd: Path) -> int:
+    """`code-7` → 7. latest_round 가 `<gate>-\\d+` 만 돌려주므로 접미는 항상 숫자다."""
+    return int(rd.name.rsplit("-", 1)[1])
+
+
+def abort_offer(base: Path) -> str:
+    """교착일 수 있는 자리에서 `ABORTED` 종결을 **함께 제시하는** 문구.
+
+    제시일 뿐 판정이 아니다 — 라운드를 자동으로 끝내지 않는다. "남은 P1 이 코드 밖
+    판단(기획·PO·타 팀)을 기다린다" 는 사실 자체가 산문이라 기계가 볼 수 없고, 기계가 보는
+    것(`보류` 가 안 빔 · 라운드 수)은 수렴 실패에서도 같은 값이다. 자동 판정은 원리적으로
+    오탐하고 오탐 비용이 비대칭이다 — 조기 종료는 결함을 안 채로 종결시키고, 제시 오탐은
+    안내 한 줄이다. 근거: `references/recovery.md` 「교착이면 ABORTED 를 먼저 제시한다」.
+    """
+    return (
+        "\n▶ 남은 P1 이 코드 밖 판단(기획·PO·타 팀)을 기다리는 것이면 라운드를 더 도는 것이\n"
+        "  답이 아니다 — 그것은 수렴 실패가 아니라 교착이고, 정당한 종결은 중단(ABORTED)이다.\n"
+        f"  고르는 것은 사람이다. 접기로 했으면 이 파일에 사유를 쓴다:\n    {base / 'ABORTED'}\n"
+        f"  본문은 {HOME_DIR / 'assets' / 'aborted-template.md'} 를 복사해 채운다 —\n"
+        "  `미해결 P1` 절을 비우지 않는다(그 목록이 pr-triage 가 리뷰어 지적을 가르는 근거다)."
+    )
+
+
 PLAN_DOC_RE = re.compile(r"^plan.*\.(md|markdown)$", re.I)  # zax 는 PLAN.md, 초안은 plan.markdown 도 허용
 
 
@@ -509,6 +532,11 @@ def main():
     dec = dec_path.read_text()
     if (p := pending(dec)):
         print(f"\n⚠ decisions.md 의 `보류` 가 비어 있지 않다. 결정 전에는 다음 라운드로 가지 않는다:\n{p}")
+        # 보류가 남은 것은 그 자체로 "지금 코드로 닫을 수 없는 것이 있다" 는 신호다 —
+        # 그것이 코드 밖 판단 대기면 라운드를 더 도는 것은 교착의 반복이고, 실측에서
+        # 사람이 고른 것은 ABORTED 가 아니라 '그냥 나가기' 였다(issue #65). 라운드 수와
+        # 무관하게 여기서 제시한다 — 차단 문구만 주면 출구가 '결정' 하나로 보인다.
+        print(abort_offer(base))
         return
 
     if not a.next_gate:
@@ -526,6 +554,11 @@ def main():
             print(f"\n▶ verdict={verdict} — 같은 게이트로 라운드를 더 돈다:\n  "
                   + shell_command("python3", Path(__file__).resolve(), "--next", gate,
                                   *([keysuf.strip()] if keysuf else [])))
+            # 3라운드부터는 '라운드를 더 돈다' 만 내지 않는다 — 탈출 결함이 나온 5건의
+            # 코드 라운드 수는 3·5·5·13·17 이고 전부 마지막 verdict 가 NO-GO 였다
+            # (issue #65). 임계는 long-gate.md 진입 조건과 같은 3이다.
+            if round_no(rd) >= 3:
+                print(abort_offer(base))
         return
 
     n = 1 + max((int(m.group(1)) for d in base.glob(f"{a.next_gate}-*")

@@ -6,7 +6,7 @@ same-origin 감지는 비차단 경고라 어떤 손상 입력에도 resume 를 
 import json, os, pathlib, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # 설치 위치를 가정하지 않는다
-from resume import _origin_paths, same_origin_p1
+from resume import _origin_paths, round_no, same_origin_p1
 from run_round import rel_to_root
 
 RESUME = pathlib.Path(__file__).resolve().parent / "resume.py"
@@ -217,7 +217,52 @@ def main():
         out4 = resume_run(repo, home_p).stdout
         assert "중단됐다" not in out4 and ("TODO(resume)" in out4 or "실행되지 않았다" in out4), out4
 
+    # --- 교착 → ABORTED 제시 (issue #65) ---
+    # 제시일 뿐 차단이 아니다: 라운드 안내는 그대로 나가고 ABORTED 경로가 함께 붙는다.
+    def setup(home_p, name, verdict, decisions):
+        repo = make_repo(home_p)
+        base = home_p / "runs" / "example.com__org__repo" / "branch"
+        rd = write_round(base, name, round_json(verdict=verdict, repo_cwd=str(repo)), 100)
+        (rd / "context.md").write_text("## 리뷰 대상\n\nx\n")
+        (rd / "decisions.md").write_text(decisions)
+        return repo, base
+
+    EMPTY = "## 반영\n\n- 없음\n\n## 보류\n\n- (없으면 비운다)\n"
+    HELD = "## 반영\n\n- 없음\n\n## 보류\n\n- [a-code] 기획 확정 대기 — PO 판단\n"
+
+    with tempfile.TemporaryDirectory() as home:
+        home_p = pathlib.Path(home)
+        repo, base = setup(home_p, "code-1", "NO-GO", EMPTY)
+        out = resume_run(repo, home_p).stdout
+        assert "라운드를 더 돈다" in out, out
+        assert "ABORTED" not in out, "1라운드 NO-GO 에 중단 제시가 붙었다:\n" + out
+
+    with tempfile.TemporaryDirectory() as home:
+        home_p = pathlib.Path(home)
+        repo, base = setup(home_p, "code-3", "NO-GO", EMPTY)
+        out = resume_run(repo, home_p).stdout
+        assert "라운드를 더 돈다" in out, "제시가 라운드 안내를 대체했다 — 차단이 아니라 제시다:\n" + out
+        assert "branch/ABORTED" in out, "3라운드 NO-GO 에 중단 경로가 안 나왔다:\n" + out
+        assert "aborted-template.md" in out and "미해결 P1" in out, out
+
+    with tempfile.TemporaryDirectory() as home:
+        home_p = pathlib.Path(home)
+        # `보류` 가 남으면 라운드 수와 무관하게 제시한다 — 출구가 '결정' 하나로 보이면 안 된다
+        repo, base = setup(home_p, "code-1", "NO-GO", HELD)
+        out = resume_run(repo, home_p).stdout
+        assert "`보류` 가 비어 있지 않다" in out and "branch/ABORTED" in out, out
+        assert "라운드를 더 돈다" not in out, "보류 차단이 풀렸다:\n" + out
+
+    with tempfile.TemporaryDirectory() as home:
+        home_p = pathlib.Path(home)
+        repo, base = setup(home_p, "code-7", "GO", EMPTY)
+        out = resume_run(repo, home_p).stdout
+        assert "통과(GO)" in out and "ABORTED" not in out, "GO 에 중단 제시가 붙었다:\n" + out
+
+    assert round_no(pathlib.Path("/x/code-17")) == 17
+
     print("PASS — ABORTED 차단(경로·본문 전체, --next 거부, 준비 라운드, 재개), "
+          "교착 제시(3라운드 NO-GO·보류 잔존에서만, 라운드 안내를 대체하지 않음), "
           "same-origin 감지(정규화·repo_root·게이트별 후보·계획문서 제외·계약위반 방어·손상 격리) 모두 정상")
 
 

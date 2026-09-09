@@ -479,8 +479,31 @@ assert "로컬 기록의 스코프 밖 절" in stdout, stdout
 ISSUE.remove(HANDOFF)
 ISSUE.remove(DUP_HANDOFF)
 
+# 11-5) 게이트가 중단(ABORTED)으로 닫혔으면 마커의 미해결 P1 이 범위 판단 근거로 나온다 (issue #65)
+(STATE_DIR / "ABORTED").write_text(
+    "## 사유\n- 남은 P1 이 기획 확정 대기다\n\n"
+    "## 미해결 P1\n- [a-code] src/a.ts:12 재시도 정책이 서버 계약과 다르다 → PO 확정 대기\n")
+stdout = run("--out", str(out_path), "--show-scope")
+assert json.loads(out_path.read_text())["record"]["aborted"] == str(STATE_DIR / "ABORTED"), stdout
+assert "중단(ABORTED)으로 닫혔다" in stdout, stdout
+assert "재시도 정책이 서버 계약과 다르다" in stdout, "--show-scope 가 미해결 P1 절을 못 뽑았다"
+assert "로컬 기록의 스코프 밖 절" in stdout, "중단 마커가 기존 절 출력을 밀어냈다"
+
+# 마커는 있는데 절이 비면 무음이 아니라 경고다 — 목록이 없으면 전건을 코드로 판정해야 한다
+(STATE_DIR / "ABORTED").write_text("사유만 적힌 본문\n")
+(round_dir / "context.md").write_text("(절이 없는 컨텍스트)\n")
+stdout = run("--show-scope")
+assert "`미해결 P1` 절이 없다" in stdout, stdout
+
+# 본문을 읽을 수 없어도(비 UTF-8) 수집은 죽지 않는다 — 존재가 곧 상태다
+(STATE_DIR / "ABORTED").write_bytes(b"\xff\xfe \x80")
+stdout = run("--show-scope")
+assert "중단(ABORTED)으로 닫혔다" in stdout and "본문을 읽을 수 없다" in stdout, stdout
+(STATE_DIR / "ABORTED").unlink()
+
 print("PASS — fp 파싱(공백·쉼표·footer·다중·인용 제외·펜스), 같은 코멘트 중복 마커 dedup, "
       "사람 계정 fp 봇 판정, diff 플래그 null 규칙, files 1회 호출·API 실패 강등, "
       "필터 전 fp_seq, 재게시 기록·dedup·crossing, merge_state keep-first, "
       "log+mark 동시 지정, mark+출력 플래그 동시 지정, "
-      "인계 코멘트 폴백(로컬 우선·keep-first·앵커 부재·--show-scope) 모두 정상")
+      "인계 코멘트 폴백(로컬 우선·keep-first·앵커 부재·--show-scope), "
+      "ABORTED 마커(미해결 P1 출력·빈 절 경고·비 UTF-8 내성) 모두 정상")

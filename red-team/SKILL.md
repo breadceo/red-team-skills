@@ -136,8 +136,10 @@ fix 에 *같은 · 그대로 · 기존 · 둘 다 · 양쪽 · N곳에* 류가 �
 ### 티켓을 접을 때 — `ABORTED` 마커 파일
 
 GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번째 escape) 그 브랜치 디렉토리의
-`ABORTED` 파일에 사유를 쓴다 — **파일의 존재가 곧 중단 상태**이고 재개는 파일 삭제뿐이다.
-절차·권장 본문과 **미결 목록을 diff 밖에 두는 규칙**은 `references/recovery.md`.
+`ABORTED` 파일을 `assets/aborted-template.md` 로 쓴다 — **파일의 존재가 곧 중단 상태**이고
+재개는 파일 삭제뿐이다. **남은 P1 이 전부 코드 밖 판단 대기면 교착이다 — 라운드가 아니라
+이 종결을 제시한다.** 절차·본문 규칙과 **미결 목록을 diff 밖에 두는 규칙**은
+`references/recovery.md`.
 
 ## 루프
 
@@ -211,7 +213,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 |---|---|
 | `references/plan-coverage.md` | **계획 게이트 첫 라운드 전 필수** — clarify, code-hub 확인 |
 | `references/engines.md` | 엔진 최초 설정(0단계) — 배정표·`codex_home`·토큰 기록 해석도 여기다. **"배정 바꿔줘"·"엔진 전환"·"한도/토큰"** 언급 시에도 읽는다 |
-| `references/recovery.md` | `PARSE-FAIL`·접근오류·`partial`·`INVALID`, 티켓 중단(ABORTED) |
+| `references/recovery.md` | `PARSE-FAIL`·접근오류·`partial`·`INVALID`, 티켓 중단(ABORTED), **교착 제시** |
 | `references/external-sync.md` | GO 후 티켓 최신화 · approve 후 인계 코멘트 — 대상·승인 규약 |
 | `references/zax.md` | zax 워크플로우와 함께 쓸 때만 |
 | `references/resample.md` | **라운드가 GO 로 나왔을 때** — core 축 재샘플링·합집합 규칙 |
@@ -222,8 +224,7 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | `references/archive-runs.md` | `~/.red-team` 용량 계측·오래된 raw 산출물 정리 시 |
 | `references/evidence.md` | 규칙의 실측 근거 확인·규칙 완화 검토 시 |
 | `references/design.md` | 설계 배경·eval 이력·기각 대안, 축·정책 변경 검토 시 |
-| `assets/context-template.md` | 1단계에서 복사해 채우는 context.md 템플릿 (`## 계획 게이트 생략 근거` 절 포함) |
-| `assets/decisions-template.md` | findings 처리 후 복사해 채우는 decisions.md 템플릿 |
+| `assets/` 템플릿 3종 | 복사해 채운다 — `context-template.md`(1단계) · `decisions-template.md`(findings 처리 후) · `aborted-template.md`(티켓 중단, `## 미해결 P1` 포함) |
 
 ## 유지보수
 

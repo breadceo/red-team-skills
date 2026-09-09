@@ -680,10 +680,14 @@ def main():
         items = [it for it in items if it["is_incoming"] and not it["triaged"]]
 
     # red-team 의사결정 기록이 있으면 위치를 알려준다 (분류 근거로 쓴다)
-    record = None
+    record, no_code_round = None, False
     try:
-        from resume import latest_round  # noqa: E402
+        from resume import latest_round, round_dirs  # noqa: E402
         base = branch_dir(cwd)
+        # code 게이트가 한 번도 안 돈 브랜치는 **안내만** 한다 — 게이트는 이 워크플로의
+        # 선택이라 요구·차단하지 않는다. 판정을 못 한 경우(import·경로 실패)는 False 로
+        # 남겨 무음이다 — 확인하지 못한 사실을 안내로 단정하지 않는다.
+        no_code_round = not round_dirs(base, "code")
         if (found := latest_round(base)):
             rd = found[0]
             record = {"source": "local", "round_dir": str(rd),
@@ -746,6 +750,13 @@ def main():
                   + ", ".join(f"#{i}" for i in handoff_dups))
     else:
         print("의사결정 기록: 없음 — 코드로만 검증한다")
+    # 게이트를 아예 안 돌린 PR 이 탈출 결함의 10% 를 냈다(references/measurement.md).
+    # 세 상태는 배타적이다 — ABORTED 마커는 "게이트를 접었다" 는 사람의 선언이고,
+    # 인계 코멘트는 다른 기기에서 게이트가 돌았다는 증거다. 둘 중 하나라도 있으면
+    # 안내를 내지 않는다(같은 사실을 두 문장으로 말하거나, 없다고 오단정하는 것을 막는다).
+    if no_code_round and not (record or {}).get("aborted") \
+            and (record or {}).get("source") != "handoff-comment":
+        print("ℹ️ 이 브랜치에 red-team code 게이트 기록이 없습니다 (라운드 0).")
     if (record or {}).get("aborted"):
         # 마지막 verdict 가 NO-GO 인 채로 나간 PR 과 **정당하게 접고 나간** PR 을 가르는
         # 유일한 기계 신호다(red-team `references/recovery.md`). 이게 없으면 트리아지는

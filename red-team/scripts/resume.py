@@ -128,6 +128,14 @@ def worktree_for(base: Path, cwd: str, rounds_dir: Path | None):
     return None, None
 
 
+def round_dirs(base: Path, gate: str) -> list[Path]:
+    """`<gate>-<번호>` 라운드 디렉토리 목록. **이름 규칙은 여기서만 정의한다** —
+    pr-triage 도 이걸 불러 code 라운드 수를 센다(경로·기록 규칙을 한쪽만 고치면 갈라진다).
+    """
+    return [d for d in base.glob(f"{gate}-*")
+            if d.is_dir() and re.fullmatch(rf"{gate}-\d+", d.name)]
+
+
 def latest_round(base: Path):
     """가장 최근 라운드와 그 상태를 찾는다.
 
@@ -137,9 +145,7 @@ def latest_round(base: Path):
     """
     rounds = []
     for gate in GATES:
-        for d in base.glob(f"{gate}-*"):
-            if not (d.is_dir() and re.fullmatch(rf"{gate}-\d+", d.name)):
-                continue
+        for d in round_dirs(base, gate):
             rj = d / "round.json"
             ran = rj.exists()
             rounds.append(((rj if ran else d).stat().st_mtime, d, gate, ran))

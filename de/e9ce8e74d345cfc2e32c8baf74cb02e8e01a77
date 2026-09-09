@@ -1,0 +1,16 @@
+red-team/prompts/b4-null-propagation.md
+  h_d82ccb34241a0d 6-7,11-12,17-19
+red-team/references/evidence.md
+  h_d82ccb34241a0d 1261-1339
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "dee9ce8e74d345cfc2e32c8baf74cb02e8e01a77",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

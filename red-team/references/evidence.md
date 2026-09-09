@@ -630,3 +630,80 @@ SSR)은 같은 문단의 꼬리로 붙였다. 8줄로, #53 의 15줄보다 짧�
 | ceo-client#968 | `add394bf9` | `apps/CeoWeb/lib/utm.ts:648-660` 의 `UtmTouch` 4필드 중 `touchQuery` 만 `INQUIRY_TOUCH_QUERY_MAX_LENGTH`(2000)로 캡되고 `referrer`·`landingPath`·`capturedAt` 은 `params.get(...) \|\| undefined` 그대로다. 쓰기 경로 캡은 `UTM_VALUE_MAX_LENGTH = 512`(`:188`)인데 소비처는 VARCHAR(500) — 정정 커밋 `e72f8aaf4` 가 `INQUIRY_FIELD_MAX_LENGTH = 500` 을 새로 세우고 세 필드 + `gaClientId` 에 `capInquiryField` 를 붙였다. 「소비처 DTO 제약·DB 컬럼 폭을 열어 양쪽 상한이 같은 수인가」가 지목하는 대조가 512 ↔ 500 이고, 열거 대상이 이 4+1 필드다 |
 | zigbang-client#9596 | `27a44df11` | `packages/zigbang-www/pages/stay/map.tsx:59` 가 `keyword.length > MAX_KEYWORD_LENGTH`, 같은 파일 `:30-36` 의 선언 주석은 「최장 `창원시 마산합포구`(10자)」로 단위를 **자**로 적는다 — `.length` 는 UTF-16 코드유닛이라 이모지 20자가 통과한다. 후속 커밋 `3321a079e` 가 `Array.from(trimmed).length` 로 바꾸며 「`.length` 는 UTF-16 코드유닛이라 이모지가 2로 세어진다」 주석을 달았다. 「같은 단위로 세는가(UTF-16 코드유닛 / 코드포인트 / 바이트 / grapheme)」가 지목하는 대입이 이 한 줄이다 |
 | ceo-client#968 | `661e12632` | `apps/CeoWeb/lib/utm.ts` 의 `parseGaSessionCandidate` 가 `GA_POSITIVE_INTEGER` 형태 검사만 거친 값을 `{ sessionId: gs1[1], timestamp: Number(gs1[2]) }` 로 정렬 키에 싣는다 — 9가 309개면 `Number()` 가 `Infinity` 라 `Infinity > 유한값` 이 항상 참이다. 정정 커밋 `6da2ee163` 이 `gaOrderingKey`(`Number.isFinite` 체크)를 세웠다. 「검증을 통과한 값이 하류에서 특수값(`Infinity`·`NaN`·`-0`)이 되어 비교를 흡수하는가」가 지목하는 하류 연산이 이 정렬 비교다 |
+
+## a-code #4 를 관측의 정확도까지 넓힌 이유 — issue #56
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 게이트가
+**GO 를 낸 뒤** 다른 리뷰어(hermes·aws-security-agent·사람)가 잡은 10건이 한 계열이었다 —
+이벤트가 **올라갔는데 옳게 적재되지 않은** 것이다. 근거 PR: ceo-client#874·#907·#955,
+zigbang-client#9596. 전부 post-GO 탈출이고 판정은 전부 `partial:a-code` 로, 축 자체는 관할이었고
+4번이 열거를 **캡처 층**에만 시킨 것이 원인이었다. 이 10건이 `design.md` 의 축 분리 재검토 조건
+2(관측 계열 유실)의 발동분이다 — 그런데도 처방이 분리가 아닌 이유는 그 절 뒤에 적었다.
+
+| 갈래 | PR | 결함 | 판정 |
+|---|---|---|---|
+| 레벨 — 정상 종료를 error 로 | ceo-client#907 | `classifyUsersMeFailure` 주석이 「정상 취소」로 명시한 `canceled` 가 다른 사유와 함께 `console.error` 로 적재돼 `enableLogs:true` 하에 Sentry log 채널에 error 로 올라간다(`beforeSendLog` 필터에도 없다) | `partial:a-code` |
+| 〃 (분류보다 먼저 적재) | ceo-client#907 | `lib/api/user.ts:88-90` 이 kind 를 계산하기 **전에** 무조건 `console.error` 를 호출해, 뒤이어 canceled 로 판정되는 정상 취소도 error 볼륨에 남는다 | `partial:a-code` |
+| 〃 (층마다 다른 레벨) | ceo-client#907 | `useSendbirdSessionHandler.ts:67-70` catch 가 사유를 가르지 않아, connect producer 의 warn 분기를 타지 않는 세션 토큰 갱신 경로의 정상 취소가 error 로 기록된다 | `partial:a-code` |
+| 〃 (제외 사유가 앞선 층에 남음) | ceo-client#907 | `attemptConnect` 내부 catch(`useSendbirdAuthentication.ts:350-356`)가 `classifyConnectFailure` 보다 먼저 800102 정상 취소를 `console.error` 로 남기고, 추가된 800102 회귀 테스트는 `attemptFailedLogs(...)` 만 필터링해 이 로그를 보지 않는다 | `partial:a-code` |
+| 버킷 — 정상 종료가 실패 분자에 | ceo-client#907 | barrier 상한 만료 경로가 generation 을 올리지 않아 stale 억제를 통과하고, 같은 세대의 800102 정상 양보가 `connect-failed` 로 계상돼 이 PR 의 산출물인 실패 원인 비율이 부풀려진다 | `partial:a-code` |
+| 귀속 — 컨텍스트 설정보다 먼저 발화 | ceo-client#874 | `chat userToken missing` 이벤트가 이 모듈의 유일한 `Sentry.setUser` 호출보다 먼저 `captureMessage` 되어 익명 또는 이전 로그인 사용자로 귀속된다 | `partial:a-code` |
+| 〃 (재지적) | ceo-client#874 | 같은 순서 결함의 2차 지적 — 인용된 `extra` 부분은 이미 반영됐고 `setUser` 순서만 실재였다 | `partial:a-code` |
+| 〃 (설정·해제의 짝) | ceo-client#874 | `authInterceptor` 의 401 로그아웃 경로가 `Sentry.setUser(null)` 을 호출하지 않아(유일한 호출처가 `useLogout`) 이전 사용자의 PII 가 남고 다음 사용자의 초기 이벤트가 오귀속된다 | `partial:a-code` |
+| 문맥 필드 — 캡처는 살고 문맥이 빠짐 | ceo-client#955 | `ReactNativeTracing` 미등록으로 오류 이벤트의 `contexts.app.view_names` 가 채워지지 않아 `ScreenErrorBoundary`·Axios 오류를 화면 기준으로 분류할 수 없다 | `partial:a-code` |
+| 그룹핑 키 — 재포장 후 불일치 | zigbang-client#9596 | 고정 메시지로 재포장하면서 원본 `.stack` 을 그대로 이식해, `stack` 첫 줄이 여전히 원본 메시지(`Network Error`)라 Sentry 이슈가 transport 프레임 기준으로 잘못 그룹핑된다 | `partial:a-code` |
+
+**근거에서 뺀 1건.** ceo-client#940 「누적 병합되는 GTM `dataLayer` 에 직전 이벤트의
+`method`·`inquiry_id` 가 잔존(네 이벤트의 키 집합이 서로 다르다)」 — 분류기의 처방도 #4 가 아니라
+#3 을 지목했고, **값을 받는 쪽의 모델을 열어 대조**하는 것은 #54 가 「어떻게 찾나」에 넣은 소비처
+계약 문단의 방향이다. 이 PR 은 #4 확장이므로 세지 않고 별도 판단 대상으로 남긴다.
+
+**강도가 다른 1건.** 위 표의 ceo-client#955 는 `view_names` 대입 자체가 **저자 판정으로
+기각**됐다 — `apps/CeoApp/src/lib/sentryRoute.ts` 주석이 근거다: 그 필드는
+`reactNativeTracingIntegration` 이 `reactNavigationIntegration` 의 `afterAllSetup` 에서 받은
+route 를 실어야 채워지는데, 이 앱은 그 integration 을 `Sentry.init` 의 `integrations` 배열에
+등록한 적이 없어 **변경 전에도 비어 있었다.** 갈래는 유지한다 — 같은 PR 의 navigation
+breadcrumb 유실은 실재해 `sentryRoute.ts` 대체 구현이 들어갔고(그 2건은 `covered_by: a-code`,
+즉 현행 4번이 이미 잡았다), 새 지시가 시키는 것은 단정이 아니라 **열거하고 대조하라**여서 이
+형태는 대조 결과 「변경 전에도 비어 있었다」로 판정되면 finding 이 되지 않는다. 건수는 그대로
+세지만 다른 9건보다 약한 근거다.
+
+### 자리를 4번으로 고른 이유
+
+후보는 둘이었다 — 4번 확장과 **6번째 관측 축 신설**. `design.md` 의 축 분리 기각 판단이 재검토
+조건을 「관측되면 분리한다」로 적어 뒀으므로 신설이 형식상 후보였다. 기각한 이유는 10건의 판정이
+전부 `partial:a-code` 라는 것이다 — 축 부재로 놓친 것이 0건이면 새 리뷰어에게 줄 지시는 지금
+4번에 없는 그 문장이고, 축을 늘려도 4번은 여전히 캡처 층만 묻는 상태로 남는다. 라운드마다 엔진
+호출만 하나 늘어난다.
+
+5번(선언된 보장)에 넣는 안도 기각했다. 5번은 **가드가 무엇을 잡는가**를 묻는데 이 10건에는
+대조할 가드가 없다 — 로그 한 줄의 레벨, 버킷의 분모, `setUser` 의 짝은 선언된 보장이 아니다.
+겹치는 대입이 하나 있다(ceo-client#907 의 「800102 회귀 테스트가 `attemptFailedLogs` 만 보고 앞선
+층의 error 로그를 단언하지 않는다」 — 5번 (b)의 축 대조에도 든다). 그 문장은 「계측에서 제외한
+사유」라는 문맥에서만 성립하므로 4번에 두고 5번은 건드리지 않았다.
+
+### 다섯 갈래를 네 대입으로 묶은 이유
+
+분류기가 낸 처방은 10개 문장이었다. 갈래마다 한 줄이면 이미 긴 4번이 다섯 줄 더 길어진다.
+다섯 갈래는 「**올라간다는 것과 옳게 적재된다는 것은 다르다**」 한 축으로 덮인다 — 레벨은 어떤
+심각도로, 버킷은 어떤 분자·분모로, 귀속은 누구로, 그룹핑 키와 문맥 필드는 어떤 이슈·어떤 화면
+문맥으로 적재되는가다. 그래서 축 문장 + 네 대입(레벨 / 버킷 / 귀속 / 그룹핑 키·문맥 필드)으로
+묶었다. 그룹핑 키와 문맥 필드를 한 대입에 넣은 것은 둘 다 **이벤트 하나의 내용이 옳게 붙어
+있는가**를 재포장 전후로 대조하는 같은 동작이기 때문이다.
+
+항목 제목도 「관측 중복·유실」에서 「관측 중복·유실·**오적재**」로 넓혔다. 열거 대상이 층에서
+내용으로 확장된 것이 제목에 남지 않으면 리뷰어가 앞 두 문단(층 나열·캡처 책임 계약)만 읽고
+멈춘다. 「문맥 필드는 층 나열로 보이지 않는다」는 꼬리로 남겼다 — 다섯 갈래 중 층 나열이
+**무음인** 유일한 형태이고, 그 무음이 이 확장의 이유 자체다. 12줄로, #54 의 8줄보다 길고
+#53 의 15줄보다 짧다.
+
+### 손 대조 3건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| PR | 커밋 | 대조 결과 |
+|---|---|---|
+| ceo-client#907 | `456750269` | `apps/CeoApp/src/lib/api/user.ts:88-89` 의 catch 가 `console.error("[api] Error fetching data:", err)` 를 먼저 실행하고 그 **다음 줄**에서 `onFailure?.(classifyUsersMeFailure(err))` 로 사유를 가른다 — 같은 파일 `:41` 주석은 `canceled` 를 「세션 경계 교차에 따른 정상 취소」로 선언한다. 정정 커밋 `7503773f0`(pick the log level from the failure reason)이 `const kind = classifyUsersMeFailure(err)` 를 먼저 세우고 `kind === "canceled" ? console.warn : console.error` 로 바꿨다. 「심각도가 사건의 의미와 같은지, **분류보다 먼저 적재되지는 않는지**」가 지목하는 대조가 이 두 줄의 순서다 |
+| ceo-client#874 | `33503eab5` | `apps/TalkWeb/lib/axios/authInterceptor.ts:64-65` 가 `_error.status === 401` 에서 `await logoutAction()` 만 호출한다(이 파일의 `Sentry` import 는 `:81` `withScope` 용이다). 같은 시점 `setUser` 호출처를 전수 뽑으면 설정은 `hooks/useUser.ts:117`, 해제는 `hooks/useLogout.tsx:20` **한 곳뿐**이라 401 경로에 짝이 없다. 정정 커밋 `36590256b`(clear Sentry user on 401 logout)이 `logoutAction()` 앞에 `Sentry.setUser(null)` 을 넣고 인터셉터 전용 테스트를 새로 세웠다. 「설정과 해제가 모든 로그인·로그아웃 경로에서 짝이 맞는지 전수 대조」가 지목하는 열거가 이 세 자리다 |
+| zigbang-client#9596 | `7c776a493` | `packages/screens/src/lib/DynamicMetaTag/index.tsx` 의 `reportLocationMetaFailure`(`:274~`)가 `:283` 에서 메시지를 고정한 새 `Error` 를 만든 뒤 `:286` 에서 `reported.stack = error.stack` 으로 원본 stack 을 이식한다 — 주석은 「메시지는 고정하되 발생 지점은 살린다」다. 정정 커밋 `89c8c4d46`(원본 stack 이식 대신 extra 로 보존)이 그 이식을 삭제하고 `scope.setExtra("locationMeta.originStack", ...)` 로 옮기며 「첫 줄이 `Error: Network Error` 라 Sentry 가 transport 프레임(`xhr.onerror`)으로 그룹핑해 앱 레벨 원인을 못 찾는다」를 근거로 적었다. 「재포장했으면 `message`·`stack` 첫 줄·fingerprint 가 서로 일관한지」가 지목하는 대조가 이 한 줄이다 |

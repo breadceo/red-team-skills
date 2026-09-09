@@ -950,3 +950,122 @@ b1 매트릭스 열을 다루는 issue #59 가 따로 열려 있다. 결함이 �
 
 **`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 축 프롬프트 하나와 이 문서뿐이라 예산
 검사 대상이 아니다.
+
+## b2-interaction 의 열거 대상과 대입 질문을 넓힌 이유 — issue #61
+
+이 이슈는 **근거의 성격이 다른 유일한 건**이다. 앞선 처방들(#53·#54·#55·#56·#57·#58)은
+「축은 관할이었고 지시가 특정 탐색 방향을 시키지 않았다」를 분류 데이터로 논증했지만, 이 건은
+**같은 diff 를 6번 돌려 그 축이 한 번도 발화하지 않는 것을 직접 관측**했다.
+
+PR #884 의 `code-28` 을 3-arm × 2-run 으로 재현한 실험(#66 에 전문)에서 `b2-interaction` 은
+**6라운드 전부 GO / findings 0** 이었다. 그중에는 `## 스코프 밖` 봉인을 걷어낸 라운드와 diff 를
+183KB→80KB 로 줄여 대상 파일을 9개로 좁힌 라운드가 포함된다. 그런데 그 라운드 직후 21분 안에
+리뷰어가 올린 결함 6건 중 **3건이 b2 소관**이었다(아래 표의 상단 3행). 즉 원인이 컨텍스트 부족도
+탐색 표면의 넓이도 아니라 **프롬프트가 그 형태를 열거하게 하지 않아서**로 좁혀진다 —
+`~/.red-team/eval/escape/all-classified.json` 의 `missing_capability` 가 비어 있는 3행이 이것이고,
+분류기조차 처방 문장을 내지 못한 자리다.
+
+| PR | 결함 | 판정 | 탈출 분류 |
+|---|---|---|---|
+| ceo-client#884 | `connect` producer 첫 줄 `await loginStore.isLoggedIn()` 에 상한이 없어(내부 axios `timeout: 0`) 서버 무응답 시 resolve 도 reject 도 되지 않고, 새로 만든 '다시 시도' 가 `connectPhase "connecting"` 에 영구 고착된다 | `b2-interaction` | post-GO |
+| ceo-client#884 | `GroupChannelMessageEmpty` 의 '새로 고침' 이 `isNotLoggedInError` 를 무음 처리하는데, 그 에러는 우리 producer 가 직접 던지는 것이라 `onSessionClosed` 같은 후속 주체가 보장되지 않는다 | `b2-interaction` | post-GO |
+| ceo-client#884 | 같은 무음 return 이 계정 인증만 사라지고 Sendbird 세션은 열려 있는 구간에서 죽는다(형제 호출부 `AuthenticationScreen` 은 같은 에러를 상태 전이로 다룬다) | `b2-interaction` | post-GO |
+| ceo-client#940 | `AlwaysClickableButton` 이 설계상 `disabled` 를 내리지 않고 `onSubmit` 에도 in-flight 가드가 없어, 제출 더블탭이 `submitRealtor` 2회 + `signup_submit` 2회를 만든다 | `partial:b2-interaction` | post-GO |
+| zigbang-client#9598 | 새 가드가 native 에서 `blur` 가 루트 스택 → 탭 네비게이터 → 탭 스크린으로 전파된다는 가정 하나에만 걸려 있고 대체 경로가 없다(추가된 유닛테스트는 `addListener` 를 mock 해 전파를 검증하지 못한다) | `partial:b2-interaction` | post-GO |
+| ceo-client#872 — **#53 인계** | 네 핸들러에 붙인 `blockedByUserFetch()` 가드를 프리미엄 설정 모드의 완료 버튼이 누락해, `users/me` 실패로 `recommendLimit` 이 0 인 상태에서도 저장이 제출된다 | `partial:b2-interaction` | post-GO |
+| ceo-client#927 | 자동 재전송 실패의 `.catch(onResendFailure)` 토스트가, `ToastProvider` 가 `<Navigations />` 위에 있어 사용자가 아무것도 누르지 않은 채 채팅과 무관한 화면(홈·목록)에 뜬다 | `none` | post-round (GO 전) |
+| ceo-client#984 | 지역 검증 응답 대기 중 브라우저 뒤로가기를 눌러도 `cancelled` 가 effect cleanup 에서만 세워지므로, `popstate` 전환 커밋 전에 도착한 실패 응답이 `router.replace` 와 전역 다이얼로그로 사용자가 가려던 화면을 덮는다 | `none` | **pre-gate** |
+
+ceo-client#984 는 코멘트 시점에 완료된 라운드가 없어(**pre-gate**) 게이트가 놓친 것이 아니다 —
+#57 이 같은 이유로 근거에서 뺐던 것과 같은 상태다. 여기서는 뺄 수 없다: 이 건이 유일하게
+**컨트롤 목록 자체의 누락**(뒤로가기·popstate 가 열거 대상에 없다)을 지목하고, 그 열거가 없으면
+같은 계열의 post-GO 탈출인 ceo-client#961(취소 의도가 진행 중인 응답에 덮임, `partial:b2-interaction`
+2건)도 표면에 오르지 않는다. **게이트가 놓쳤다고 계상하지 않고 열거 대상 근거로만 쓴다.**
+
+### 두 방향으로 묶은 이유
+
+분류기·이슈 본문·실험 코멘트가 낸 처방은 7개 문장이었고, `b2-interaction.md` 는 28줄짜리
+파일이다. 7줄을 나열하면 그 자체가 목록이 되어 원래 있던 「클릭 → 핸들러 → 실제 호출 → 상태
+해소」 추적 구조와 경쟁한다. 8건은 두 방향으로 덮인다.
+
+**(1) 열거 대상 확장.** #984 는 컨트롤 목록에 뒤로가기·popstate·라우트 전환이 없어서, #927 은
+사용자가 누르지 않는 자동 경로가 아예 목록 밖이라서 놓쳤다. 둘 다 「해소하는가」를 더 잘 묻는
+문제가 아니라 **표의 행이 없는** 문제다. 그래서 기존 열거 문장 바로 뒤에 붙였고, 자동 경로에는
+대입 하나를 함께 실었다 — 그 경로가 원래 사용자 탭을 전제로 만든 피드백(토스트·모달·스낵바)을
+발화시키는지, 그 피드백을 띄우는 provider 가 어느 트리에 붙어 있는지. 후자 없이는 리뷰어가
+`showSnackBar` 호출만 보고 "이 화면에서 뜬다"로 끝낸다.
+
+**(2) 대입 질문 확장.** 나머지 6건은 행은 있는데 대입할 질문이 「상태를 해소하는가」 하나뿐이라
+놓쳤다. 새 절 「해소 외에 각 컨트롤에 대입할 네 가지」의 네 대입이 그것이다.
+
+| 대입 | 덮는 실측 | 원래 문장으로 안 걸리는 이유 |
+|---|---|---|
+| 해소 시점이 오기는 하는가 | #884 ×3 | 「해소하는가」는 해소 **시점이 온다**를 전제한다. 무상한 대기·무음 return·안 풀리는 잠금은 그 전제가 깨진 경우라 판정 자체가 성립하지 않는다 |
+| 두 번 발화하는가 | #940 | 「해소하는가」의 반대편이다 — 해소는 되는데 두 번 된다 |
+| 막아야 할 때 막는가 | #872 | 가드 없는 컨트롤은 죽은 컨트롤의 **반대**다. 방향이 반대라 같은 질문으로 안 걸린다 |
+| 이탈한 뒤 도착하는 응답 | #984, #961 | 판정 주체가 컨트롤이 아니라 **그 뒤에 도착하는 응답**이다 |
+
+「해소 시점이 오기는 하는가」에 세 갈래(상한·무음 처리의 후속 주체·잠금 플래그)를 한 항목으로
+넣은 이유는 도착점이 같기 때문이다 — 셋 다 **핸들러는 돌았고 화면은 그대로**다. 갈래마다 항목을
+세우면 네 가지가 여섯 가지가 되고, 리뷰어가 대입하는 질문의 수가 아니라 목록의 길이가 늘어난다.
+
+**「라이브러리·클라이언트의 타임아웃 설정까지 열어 확인한다」를 넣은 이유.** #884 의 상한 없음은
+`isLoggedIn()` 을 읽어서는 나오지 않는다 — 그 안의 `refreshAuthToken`·`getUserData` 가 `timeout` 을
+주지 않아 axios 기본값 `0` 을 상속하는 것을 계정 SDK 까지 내려가야 안다. 이 한정이 없으면
+리뷰어가 `await` 한 줄을 보고 "await 하니까 결국 끝난다"로 끝낸다.
+
+### 플랫폼별 판정을 마지막 문단에 붙인 이유
+
+zigbang-client#9598 은 새 절에 넣지 않고 기존 「**여러 곳에서 쓰이면 호출부별로 따로 판정한다**」
+문단에 이어 붙였다. 그 문장과 **같은 모양**이기 때문이다 — 하나의 구현을 여러 축으로 쪼개
+따로 판정하라는 것이고, 축이 호출부에서 플랫폼으로 바뀔 뿐이다. 새 절에 다섯 번째 항목으로
+넣으면 「각 컨트롤에 대입할 것」이라는 절의 정의가 흐려진다(플랫폼은 컨트롤에 대입하는 질문이
+아니라 판정을 쪼개는 축이다). **이 문단의 기존 문장은 지우지 않았다** — 위 표의 #884 세 번째
+행(형제 호출부 `AuthenticationScreen` 과 판정이 갈린다)이 정확히 그 자리다.
+
+### #53 에서 인계받은 1건 — a-code 형제 전수와 무엇이 다른가
+
+ceo-client#872 는 issue #53(a-code 형제 전수)이 `partial:b2-interaction` 으로 판정해 이 이슈로
+넘긴 건이다. a-code 의 형제 전수와 문장이 겹치지 않게 쓴 근거는 **열거의 출발점**이다.
+
+- a-code 는 **결과**에서 출발한다 — 가드가 도달하는 결과(삭제·차단·payload)를 적고 그 결과 쪽에서
+  역방향으로 형제 필드·형제 호출부·형제 함수·다른 배포 라인을 훑는다.
+- b2 는 **이미 만든 컨트롤 목록**에서 출발한다. b2 는 라운드마다 그 화면의 컨트롤을 전수 나열하고
+  있으므로, 새 대입은 「그 표의 모든 행에 이 가드를 대입한다」 한 문장이면 닫힌다. 새 전수 검색을
+  시키는 것이 아니라 **이미 있는 표를 재사용**하는 것이라 a-code 문단의 사본이 되지 않는다.
+
+`saveChanges` 는 `blockedByUserFetch()` 를 부르는 네 핸들러의 형제 호출부도 아니고 같은 피호출자를
+쓰지도 않는다 — 같은 **화면의 다른 컨트롤**일 뿐이다. a-code 의 네 층 어디에도 들지 않는다는 것이
+#53 이 넘긴 이유다.
+
+### 인접 3건은 새 문장 없이 덮인다
+
+같은 분류 파일에서 b2 로 지목된 다른 행들은 위 네 대입이 그대로 덮으므로 본문에 이름으로 적지
+않았다(AGENTS.md 중복 금지).
+
+- ceo-client#968 — `submissionRef='pending'` 으로 잠근 뒤 `try` 밖에서 `document.cookie` 를 읽어
+  getter 가 던지는 환경에서 잠금이 남는다 → 「잠금 플래그를 세운 뒤 예외가 나는 경로에서도 풀리는지」
+- ceo-client#961 ×2 — 취소를 눌러도 `cancelled` 가 cleanup 에서만 세워져 늦게 온 응답이
+  `router.push` 를 실행한다 → 「취소 의도가 클릭 시점에 기록되는지」
+- ceo-client#962 — stale cert 로 제출 버튼이 활성인 채 `submit()` 의 필드 가드가 조용히 return
+  → 기존 「죽은 컨트롤」 + 「무음 return」
+
+### 손 대조 3건 (원본 커밋)
+
+실험이 「b2 가 못 잡았다」를 증명한 건이라, 수정한 프롬프트가 그 표면을 **열거하게 하는지**를
+결함이 존재했던 커밋에서 확인했다(머지본에는 정정이 들어가 있다).
+
+| 결함 | 결함 커밋 → 정정 커밋 | 대조 결과 |
+|---|---|---|
+| #884 상한 없는 대기 | `1cba85802` → `94edd8dbf` | 결함 커밋 `apps/CeoApp/src/hooks/useSendbirdAuthentication.ts:187` 이 `const isLoggedIn = await loginStore.isLoggedIn()` 로 맨몸이고, **같은 async 함수 `:221`** 은 `await withTimeout(getSendbirdUserInfo(forceRefresh), CHAT_TOKEN_TIMEOUT_MS, ...)` 다 — 한 함수 안에서 한쪽만 상한이 있다. 정정 커밋이 그 자리를 `withTimeout(loginStore.isLoggedIn(), CHAT_TOKEN_TIMEOUT_MS, LOGIN_VERDICT_TIMEOUT_MESSAGE)` 로 바꾸고 「`isLoggedIn()` 은 `refreshAuthToken` 과 `users/me` 를 await 하는데 둘 다 `timeout` 을 주지 않아 axios@0.24.0 기본값 0을 상속한다 — 서버가 연결만 받고 응답하지 않으면 **resolve 도 reject 도 하지 않는다**」와 「`AuthenticationScreen` 의 폴백 '다시 시도' → `connectPhase` 가 "connecting" 에 영구 고착 / `GroupChannelMessageEmpty` 의 '새로 고침' → reject 에 도달하지 못해 스낵바조차 못 띄운다」를 남겼다. 「핸들러가 `await` 하는 것에 상한이 있는지 — 라이브러리·클라이언트의 타임아웃 설정까지 열어 확인한다」가 지목하는 대조가 `:187` ↔ `:221` 이고, 상한 없는 쪽의 근거는 SDK 안의 axios 기본값이다 |
+| #884 무음 처리의 전제 | `94edd8dbf` → `d6a6109d6` | 결함 커밋 `apps/CeoApp/src/components/chat/info/GroupChannelMessageEmpty.tsx:50` 이 `if (isConnectInvalidatedError(error) \|\| isNotLoggedInError(error)) { return }` 이고, 바로 위 주석이 「계정 인증이 없는 경우도 제외한다 — **세션 종료 흐름이 처리할 일**」로 후속 주체를 전제한다. 정정 커밋이 술어에서 `isNotLoggedInError` 를 빼고 「그 후속 주체가 보장되지 않는다 — 이 에러는 우리 producer 가 `isLoggedIn() === false` 를 보고 **직접** 던지는 것이라 Sendbird 의 `onSessionClosed` 와 무관하고, 계정 SDK 는 **통신 실패도 `false` 로 흡수한다**(`Store.ts` 의 `catch { 에러상황보고(e); return false }`)」로 적었다. 「삼킨 에러의 후속 주체가 실제로 보장되는지 — 그 에러를 우리 코드가 직접 던지면 외부 SDK 의 세션 콜백은 오지 않는다」가 지목하는 자리가 이 한 줄과 그 위 주석의 전제다 |
+| 자동·지연 발화가 무관한 화면에 뜬다 | `d6a6109d6` → `f038e8830` | 결함 커밋 `apps/CeoApp/src/App.tsx:144` 의 `<Zuix2.Provider>` 가 `:146` 의 `<Navigations />` 를 **감싸고** 있고, `GroupChannelMessageEmpty:76` 의 `showSnackBar({ title: "채팅 서버에 연결하지 못했습니다..." })` 는 그 provider 의 모듈 전역 스토어에 쓴다 — 늦게 온 콜백의 스낵바가 네비게이터 밖에서 그려진다. 정정 커밋이 mounted ref 로 connect 와 스낵바를 함께 막으며 「`showSnackBar` writes a module-global store and `Zuix2.Provider` sits outside `Navigations`, so a late callback paints … over the login screen after logout tore the sheet down. My earlier claim that the navigation reset makes the snackbar invisible was simply wrong」로 적었다 — 직전 커밋(`d6a6109d6`)이 주석에 적었던 「로그아웃이 진짜 원인이면 `CommonActions.reset` 이 이 화면을 먼저 걷어가므로 스낵바가 보이지 않는다」가 그 반증 대상이다. 「그 피드백을 띄우는 provider 가 어느 트리에 붙어 있어 어느 화면에서 보이는지 코드에서 확인한다」가 지목하는 확인이 `App.tsx:144` ↔ `:146` 의 중첩 순서이고, ceo-client#927 의 `ToastProvider` 가 `<Navigations />` 위에 있는 것과 같은 형태다 |
+
+`f038e8830` 이 첫 행의 정정(producer 상한)을 되돌린 것은 상한 자체가 틀렸기 때문이 아니다 —
+`withTimeout` 이 `Promise.race` 라 원본 `isLoggedIn()` 이 계속 돌고, 그 안의 `refreshAuthToken` 이
+늦게 성공하면 계정 SDK 가 다른 계정의 자격증명을 덮어쓰는 창이 열려서다. 결함(상한 없는 대기가
+컨트롤을 죽인다)의 표면은 그대로 남아 있고, 프롬프트가 시키는 것은 처방이 아니라 **그 자리를
+열거하는 것**이다.
+
+**`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 `b2-interaction.md` 와 이 문서뿐이라 예산
+검사 대상이 아니다.

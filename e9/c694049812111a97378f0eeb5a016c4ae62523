@@ -1,0 +1,25 @@
+red-team/prompts/b1-state-matrix.md
+  bb07e7c3479cbdb0 11-36,44-50
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "e9c694049812111a97378f0eeb5a016c4ae62523",
+  "prompts": {
+    "bb07e7c3479cbdb0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "26d3e0cb-2d94-4152-81bd-c614f5861d36",
+        "model": "claude-opus-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Bash": 37,
+        "Read": 1,
+        "Edit": 3
+      },
+      "total_additions": 84,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

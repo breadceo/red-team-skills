@@ -1069,3 +1069,109 @@ ceo-client#872 는 issue #53(a-code 형제 전수)이 `partial:b2-interaction` �
 
 **`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 `b2-interaction.md` 와 이 문서뿐이라 예산
 검사 대상이 아니다.
+
+## b1 매트릭스의 열을 조건부 규칙으로 늘린 이유 — issue #59
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 `covered_by`
+가 b1 을 지목한 행은 10건이고, 그중 `b1-state-matrix`(전부 덮임) 4건은 기존 문장이 이미 지목하는
+자리라 처방 대상이 아니다 — ceo-client#872 의 `allDataLoaded` 가 optional 쿼리를 기다리는 건,
+ceo-client#874 의 `setIsLoading(false)` 조기 해제, ceo-client#884 의 타임아웃을 미인증으로 합친
+건이 「로딩이 끝났다고 판단하는 조건과 실제로 데이터가 도착하는 조건이 다르다」와 「구간의 길이」
+문단에 그대로 걸린다. 남은 `partial:b1-state-matrix` 6건이 이 처방의 근거다. 근거 PR:
+ceo-client#872·#957, zigbang-client#9596.
+
+**유효 근거 4건** — 전부 post-GO 탈출. 6건 중 둘을 뺀 사정이 다르다.
+
+- ceo-client#957(9994 안내가 우회로를 알려준다)은 코멘트 시점에 완료된 라운드가 없어
+  (**pre-gate**) 게이트가 놓친 것이 아니다. 그런데 **error 열을 사유별로 쪼개라**는 방향의 유일한
+  근거이기도 하다 — 나머지 5건 중 응답 코드·실패 사유를 축으로 삼는 건이 없다. #61 이
+  ceo-client#984 를 처리한 것과 같게 한다: **게이트가 놓쳤다고 계상하지 않고 열거 대상 근거로만
+  쓴다.**
+- ceo-client#884(동시 producer 경쟁에서 패자만 화면을 갱신)은 post-GO 탈출이지만 분류
+  confidence 가 `low` 이고, 도착점이 **핸들러는 돌았고 화면은 그대로**라 #61 이 b2 에 넣은
+  「해소 시점이 오기는 하는가」와 같다. 새 문장을 쓰지 않는다.
+
+| 방향 | PR | 결함 | 판정 |
+|---|---|---|---|
+| 열 확장 — 보존된 stale | ceo-client#872 | 한 번 성공한 뒤 백그라운드 재조회가 실패하면 TanStack 이 이전 `data` 를 보존하고 `isFetched` 도 true 라, 사이드바가 낡은 사용자·사무소·위반 건수를 정상 데이터로 계속 표시한다 | `partial:b1-state-matrix` |
+| 〃 — 사유별 error | ceo-client#957 | 이 PR 이 처음 도달 가능하게 만든 `9994`(대리인증) 갈래에 기존 `certOwnerMismatch` 카피를 재사용해, 차단된 사용자에게 「기존 연락처를 삭제하고 새로 등록해 주세요」라는 검증 우회로를 안내한다 | `partial:b1-state-matrix` (pre-gate) |
+| 〃 — 예상 밖·부분값 | zigbang-client#9596 | `keywords` 는 `items[0]` 만 있으면 무조건 붙는데 `title`·`description` 은 `locationType === "address"` 분기에서만 채워져, 응답이 address 가 아니면 「기본 title + 기본 description + 단기임대 keywords」 혼합 메타가 나간다 | `partial:b1-state-matrix` |
+| 축 추가 — 분기 키 조합 | zigbang-client#9596 | `getMetaDescription` 의 subway·univercity 분기에 새로 추가한 `case "stay"` 가 없어, 응답 type 이 address 가 아니면 `description` 이 빈 문자열이 되고 기본 메타로 조용히 폴백한다 | `partial:b1-state-matrix` |
+| 표를 채우는 방법 | ceo-client#872 | `UserPopupController` 가 `judgment.state === "ready"` 로 게이트하면서 실제 분기는 store 의 `user?.ci`·약관 상태를 읽어, 최신 응답이 도착한 직후 한 렌더 동안 이미 인증·동의한 사용자에게 본인인증·약관동의 모달이 마운트된다 | `partial:b1-state-matrix` |
+| (인접 — 새 문장 없음) | ceo-client#884 | 세션 복구 connect 와 화면 cold connect 가 경쟁해 진 쪽만 `setConnectPhase("failed")` 를 찍고, 채팅은 연결됐는데 「채팅에 연결할 수 없습니다」가 남는다 | `partial:b1-state-matrix` |
+
+### 열을 무조건 늘리지 않고 조건부 규칙으로 쓴 이유
+
+분류기의 처방 문장 4개는 모두 「열을 추가하라」였다. 그대로 받으면 고정 열이 6개에서 9개가
+되고, 그 표는 **인증 2줄 × surface N** 에 곱해진다.
+
+기각한 이유는 세 열 중 어느 것도 모든 surface 에 해당하지 않는다는 것이다. 실측 근거의 surface
+가 서로 다른 조건에 걸려 있다 — 보존 캐시를 읽는 것은 ceo-client#872 의 사이드바뿐이고, 한
+분기가 응답 코드를 둘 이상 받는 것은 ceo-client#957 의 인증 콜백뿐이고, 외부 응답 값이 분기를
+고르는 것은 zigbang-client#9596 의 메타 생성뿐이다. 고정 열로 세우면 나머지 surface 에서 세 칸이
+구조적으로 「해당 없음」이 되고, 늘어난 열의 대부분이 그 값으로 채워지는 표가 된다.
+
+조건부로 쓸 수 있는 근거는 **조건이 코드에서 관측되는 것**이라는 점이다. `keepPreviousData`·
+`placeholderData` 같은 옵션의 존재, 한 분기가 받는 코드의 개수, 분기 키가 외부 응답에서 오는지는
+diff 와 호출부에서 확인된다. 조건이 사람의 판단을 요구하는 것이면(「중요한 화면이면」) 조건부
+규칙은 무음으로 생략되므로 그때는 고정 열이 맞다.
+
+**축 추가는 반대로 조건부가 아니다.** 새 분기 키는 열이 아니라 행을 곱한다 — 인증이 이미 그
+모양이고(로그인 / 미로그인 두 줄), 열로 세우면 조합이 열 이름에 들어가 열 수가 그 키의
+카디널리티만큼 늘어난다. 그래서 이것만 별도 절로 세웠다.
+
+### 판정 소스 대조 문장을 열이 아니라 「찾는 것은 …」 절에 둔 이유
+
+`UserPopupController` 건은 열이 아니다 — 어느 칸에도 대입되는 **대조**이고 새 칸을 만들지
+않는다. 자리 후보는 대표 패턴 목록의 다섯 번째 불릿과 그 목록 뒤 문단이었고, 불릿을 기각했다:
+그 목록은 **증상 열거**(「…를 본다」·「…로 보인다」)이고 이 문장은 「두 소스를 대조하라」는
+지시라, 불릿으로 넣으면 지시가 증상으로 읽힌다. 목록 뒤 문단에 두어 이어지는 「구간의 길이를
+반드시 확인한다」와 붙였다 — 어긋나는 구간을 **렌더 수**로 세는 것이 그 절의 초 단위 계산과 같은
+질문이다.
+
+### a-code·b2 와 무엇이 다른가
+
+축 추가 방향이 a-code 의 두 문단과 겹쳐 보이는 자리다. 경계는 **산출물**이다.
+
+| 문단 | 산출물 |
+|---|---|
+| 형제 전수 — issue #53 | 새 규칙이 **미적용된 자리 목록** — 결과 쪽에서 역방향으로 훑는다 |
+| 입력집합 — issue #57 | 그 술어가 **통과시키는 입력의 집합** — 입구를 센다 |
+| b2 컨트롤 목록 — issue #61 | 각 컨트롤에 네 대입을 한 **판정** — 해소·중복·차단·늦은 응답 |
+| **b1 축 추가 — issue #59** | 조합마다 **사용자가 그 칸에서 읽는 것** — 표의 칸을 채운다 |
+
+zigbang-client#9596 의 `case "stay"` 누락을 a-code 는 「`getMetaDescription` 의 세 `locationType`
+분기 중 둘에 새 case 가 없다」로 낸다. b1 이 내는 것은 「subway × stay 조합에서 사용자가 읽는
+것은 stay 표기의 title + **빈 description** + 단기임대 keywords 다」다. 열거는 a-code 소관이고
+b1 은 그 조합의 칸만 본다 — 그래서 새 절의 문장이 「전수 나열해 미적용 자리를 찾는다」가 아니라
+「전수 행으로 펼치고 그 칸에 사용자가 무엇을 읽는지 채운다」다.
+
+b2 와는 대상이 갈린다. b2 는 **컨트롤**(누르는 것·스스로 도는 것)을 나열하고 그것이 상태를
+해소하는지 묻는다. b1 의 세 열은 컨트롤이 없는 자리에서도 성립한다 — SEO 메타 생성에는 누를
+것이 없고, 보존된 stale 은 아무것도 누르지 않아도 보인다.
+
+### #57 에서 인계받은 1건
+
+zigbang-client#9596 의 `LocationType` `as` 단언 건은 issue #57 이 **두 층으로 나눠** 집합 대조를
+a-code 로 처리하고 「유니온 밖 값이 `default` 로 떨어졌을 때 사용자가 보는 것」을 이 이슈로
+넘긴 것이다(#57 의 해당 절에 그 판단이 있고, 그 PR 은 `b1-state-matrix.md` 를 건드리지 않았다).
+여기서 채우는 것은 **표의 칸**이고, 자리는 세 번째 조건부 열(예상 밖·부분값)이다 — 그 열의
+문장이 「유니온·enum·`switch` 밖의 값 … 이 어느 분기로 떨어지는지 적고」이고, 손 대조에서 확인한
+`"school"` 응답의 결과(`getMetaTitle` 의 `default` → 빈 문자열)가 정확히 그 칸이다. 근거 4건에는
+따로 계상하지 않았다 — 같은 열을 만드는 근거가 이미 `keywords` ↔ `description` 조건 불일치 건이고,
+`as` 단언 건은 그 열이 채워야 하는 칸을 하나 더 주는 것이라 방향을 늘리지 않는다.
+
+### 손 대조 4건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| 결함 | 결함 커밋 → 정정 커밋 | 대조 결과 |
+|---|---|---|
+| #872 보존된 stale | `cedb284cf` → `8df87ad3c` | 결함 커밋 `apps/CeoWeb/apis/hooks/useUser.tsx:200` 이 `const allDataLoaded = isUserFetched && isOfficeFetched && isViolationsFetched` 이고 `:179` 가 `displayData: userInfo` 로 표시용 `data` 를 받는다 — **같은 파일 `:52` 의 `toUsersMeJudgment` 가 이미 `if (isError) return { state: "error" }` 로 재조회 실패를 판정하고 `:92` 가 `judgment` 를 내보내는데**, 이 소비처는 `:86` 의 판정을 쓰지 않고 `isFetched` 만 본다. 훅 자신의 JSDoc(`:88`)이 「표시 전용. 사용자에게 보이는 **판정**에는 쓰지 말 것」이라 적혀 있는 값이다. 정정 커밋이 `criticalFailed = userJudgment.state === "error" \|\| isOfficeError \|\| (isOfficeFetched && !officeInfo)` 를 세우고 「TanStack 은 refetch 실패 시 직전 data 를 보존한다 — data 만 보면 stale 값을 정상으로 읽어 … 장애 안내가 나오지 않는다」를 남겼다. 「성공을 판정하는 데 쓰는 플래그를 이름으로 적고 … 재조회가 실패한 동안 그 플래그가 무엇이 되는지」가 지목하는 대조가 `:200` 의 세 `isFetched` ↔ `:52` 의 `isError` 다 |
+| #872 판정 소스 ≠ 렌더 소스 | `92e7c6ca3` → `0ace7c0d5` | 결함 커밋 `apps/CeoWeb/components/sidebars/UserPopupController.tsx:76` 이 `if (judgment.state === "ready")` 로 게이트하는데 `:77` 은 `if (!user?.ci)`, `:82-83` 은 `marketingAgreeStatus`·`privacyAgreeStatus` 를 분기한다 — `user` 는 `:35` 의 `useStore`, 두 status 는 `:39-40` 의 store 기반 훅이고, 그 store 를 채우는 것은 `:45-55` 의 `useEffect(() => { if (userData && isUserFetched) update("user", …) })` 다. 게이트는 최신 응답이고 분기는 그 응답의 store 사본이며, effect 는 렌더 이후에 돈다. 정정 커밋이 `ci` 를 `judgment.user` 에서 직접 읽고 두 훅에 `freshAgreements` 를 넘기며 「store 를 채우는 effect 는 렌더 이후에 돌기 때문에, 최신 응답이 도착한 첫 렌더에는 stale 한 ci·agreements 가 남아 있다 … 표시용 stale 값 문제가 아니다」를 남겼다. 「그 칸을 고르는 판정의 소스와 그 칸을 그리는 분기의 소스가 같은 값인지 대조한다」가 지목하는 자리가 `:76` ↔ `:77`·`:82` 이고, 어긋나는 구간의 길이가 **한 렌더**다 |
+| #9596 분기 키 조합 · 필드 조건 불일치 | `c0979f7af` → `27a44df11` | 결함 커밋 `packages/screens/src/lib/DynamicMetaTag/index.tsx:10` 이 `MapType` 에 `"stay"` 를 새로 넣었고, 기존 분기 키는 `:181` 의 `locationType`(`"univercity" \| "subway" \| "address"`)이다. 조합 3개를 펼치면 `case "stay"` 는 `getMetaDescription` 의 `case "address"` 안(`:353`)에만 있고 `case "univercity"`(`:287`)·`case "subway"`(`:310`) 에는 없어 `:284` 의 `let description = ""` 가 그대로 반환된다. 반면 `getServiceName:231` 과 `getMetaTitle:271-277` 은 세 조합 전부를 채우고, `keywords` 는 `:198` 의 `mapType === "stay" ? STAY_KEYWORDS : undefined` 로 `locationType` 과 무관하게 붙는다 — 한 칸의 세 표시 요소가 서로 다른 조건이다. 정정 커밋이 `if (mapType === "stay" && locationType !== "address") return {}` 로 조합 자체를 막으며 「`searchType` 은 서버측 필터라 클라이언트가 보장할 수 없다 … `title`·`description` 은 address 분기에서만 채워지는데 keywords 는 붙어 「기본 title + 기본 description + 단기임대 keywords」 라는 혼합 메타가 나간다」를 남겼다. 「기존 분기 키 × 새 키의 조합을 전수 행으로 펼치고」가 지목하는 3행이 이것이고, 「그 조합이 생기지 않는다는 근거가 서버측 필터…면 이 화면 코드에서 보장되는 것인지 따로 적는다」가 지목하는 근거가 결함 커밋 `:167-169` 의 주석(「stay 는 지역(address) 결과만 사용」)과 `searchType` 요청 파라미터다. `:181` 의 `type as` 로 좁힌 유니온 밖 값(`"school"`)은 세 switch 의 `default` 로 떨어져 `getMetaTitle:279` 이 `""` 를 반환하므로 title·description 이 함께 비고 keywords 만 남는다 — #57 에서 인계받은 칸이 이 자리다 |
+| #957 사유별 error | `a006e2146` → `0455e1f08` | 결함 커밋에서 이 변경이 요청 `type` 을 `manager` 로 바꿔 `9994` 를 처음 도달 가능하게 만들었고(`apps/CeoWeb/constants/agentCert.ts:44` `CI_NOT_MATCH: "9994"`), `components/my/contact-management/ContactList.tsx:447-451` 이 그 코드에 `certOwnerMismatchTitle`·`certOwnerMismatchDesc` 를 재사용한다. 그 카피는 `constants/contactManagement.ts:243` 의 「명의가 바뀌었다면 **기존 연락처를 삭제하고 새로 등록해 주세요**」이고, **같은 커밋의 `agentCert.ts:40`** 이 「등록 경로는 `user_id` 를 넘기지 않아 검증 자체를 타지 않는다」라고 적어 둔다 — 문구가 지시하는 다음 행동이 이 변경이 켠 차단을 통과하는 경로다. 정정 커밋이 `certImpersonation*` 를 신설해 「제목은 같고 처방 문장이 없다」로 두고 「이 변경이 켠 차단에 걸린 사람에게 검증 없는 경로를 안내하는 모양이 된다」를 남겼다. 「그 칸의 안내 문구가 그 사유의 사실과 맞는지, 문구가 지시하는 다음 행동이 그 사유에서 실제로 허용된 경로인지 코드에서 확인해 채운다」가 지목하는 대조가 `contactManagement.ts:243` ↔ `agentCert.ts:40` 이다. 같은 정정 커밋이 함께 고친 `certNameMismatch` JSDoc 고아(`:229` 의 블록이 어느 심볼에도 붙지 않았다)는 #55 가 a-code #3 에 넣은 「JSDoc 과 그것이 설명하는 심볼 사이에 다른 코드가 끼어 있으면」이 덮는다 |
+
+**`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 `b1-state-matrix.md` 와 이 문서뿐이라 예산
+검사 대상이 아니다.

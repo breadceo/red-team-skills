@@ -17,6 +17,8 @@
    `coverage: partial` 로 기록되고 **게이트 통과가 아니다** — 러너와 `resume.py` 가
    빠진 축을 같은 라운드에 병합하는 `--merge-into` 명령을 알려주고, 병합 후의 verdict 만
    판정이다. 유예된 축이 거기서 결함을 내면 NO-GO 로 돌아가는 것이 정상이다.
+   **같은 자리에서 core 축 재샘플링도 한다** — 빠진 축 채우기와 별개이고 MoE 를 안 켠
+   라운드에도 걸린다. 규칙은 `references/resample.md`.
 
 켜는 법: 라운드마다 `--lean` 을 붙이거나, `config.json` 에 `"moe": true` 를 저장하면
 기본이 lean 이 된다(그때 `--full` 이 1회성 해제, `--reviewers` 명시가 최우선).

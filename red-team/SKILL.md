@@ -45,8 +45,7 @@ description: 계획 문서나 구현 diff 에 적대적 리뷰 라운드를 돌�
 
 `~/.red-team/config.json` 에 `engines` 키가 없으면 **`references/engines.md` 의 최초 설정
 플로우를 따라 사용자에게 묻고 `--set-engine` 으로 저장한다** — 묻지 않고 기본값을 정하지
-않는다. 배정표·배정 조정·한도 플레이북·`codex_home`·토큰 기록 해석도 같은 문서다 —
-사용자가 "배정 바꿔줘"·"엔진 전환"·"한도/토큰"을 언급하면 그 플로우를 탄다.
+않는다.
 
 ### 1. 컨텍스트 파일을 쓴다
 
@@ -137,11 +136,8 @@ fix 에 *같은 · 그대로 · 기존 · 둘 다 · 양쪽 · N곳에* 류가 �
 ### 티켓을 접을 때 — `ABORTED` 마커 파일
 
 GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번째 escape) 그 브랜치 디렉토리의
-`ABORTED` 파일에 사유를 쓴다 — 절차·권장 본문은 `references/recovery.md`. **파일의 존재가
-곧 중단 상태**이고 재개는 파일 삭제뿐이다.
-
-**미결을 diff 안 문서로 옮겨 적으면 외부 봇의 지적 표면적이 된다**(#1003 실측:
-`references/evidence.md`). 외부 봇이 리뷰하는 PR 은 미결 목록을 diff 밖(티켓·PR 본문)에 둔다.
+`ABORTED` 파일에 사유를 쓴다 — **파일의 존재가 곧 중단 상태**이고 재개는 파일 삭제뿐이다.
+절차·권장 본문과 **미결 목록을 diff 밖에 두는 규칙**은 `references/recovery.md`.
 
 ## 루프
 
@@ -149,9 +145,10 @@ GO 전에 루프를 끝내기로 했으면(전제 붕괴 — 루프 절 세 번�
 컨텍스트 작성 → 라운드 → P2 반영 + P1 결정 → '이미 반영/스코프 밖' 누적 → 다음 라운드
 ```
 
-**GO** = 전 리뷰어의 `regression` findings 0 + `verdict_dissent` 빔 (`round.json`). 종결은 **GO,
-또는 사람이 선언한 중단(`ABORTED`)** 뿐 — "GO 날 때까지"는 트리거 문구지 중단을 무시하는
-규약이 아니다. **GO 가 났고 `## 티켓` 이 채워져 있으면 `references/external-sync.md` 를
+**GO** = 전 리뷰어의 `regression` findings 0 + `verdict_dissent` 빔 (`round.json`). GO 후보는
+확정 전에 **`references/resample.md` 를 읽고 core 축을 재샘플링한다** — 1라운드 GO 는 약한
+증거다. 종결은 **GO, 또는 사람이 선언한 중단(`ABORTED`)** 뿐 — "GO 날 때까지"는 트리거
+문구지 중단을 무시하는 규약이 아니다. **GO 가 났고 `## 티켓` 이 채워져 있으면 `references/external-sync.md` 를
 읽고 따른다**(비어 있으면 조용히 건너뛴다).
 
 **다음 컨텍스트는 새로 쓰지 않는다** — 직전 `context.md` 복사 후 `decisions.md` 의
@@ -213,10 +210,11 @@ zax(`/task`·`/workflow`) 흐름 안에서 게이트로 쓸 때는 **`references
 | 문서 | 언제 읽나 |
 |---|---|
 | `references/plan-coverage.md` | **계획 게이트 첫 라운드 전 필수** — clarify, code-hub 확인 |
-| `references/engines.md` | 엔진 최초 설정(0단계), 배정 조정·전환·한도, 토큰 기록 해석 |
+| `references/engines.md` | 엔진 최초 설정(0단계) — 배정표·`codex_home`·토큰 기록 해석도 여기다. **"배정 바꿔줘"·"엔진 전환"·"한도/토큰"** 언급 시에도 읽는다 |
 | `references/recovery.md` | `PARSE-FAIL`·접근오류·`partial`·`INVALID`, 티켓 중단(ABORTED) |
 | `references/external-sync.md` | GO 후 티켓 최신화 · approve 후 인계 코멘트 — 대상·승인 규약 |
 | `references/zax.md` | zax 워크플로우와 함께 쓸 때만 |
+| `references/resample.md` | **라운드가 GO 로 나왔을 때** — core 축 재샘플링·합집합 규칙 |
 | `references/moe.md` | `--lean`/MoE 를 켜거나 켜진 상태를 이어받았을 때 |
 | `references/long-gate.md` | **라운드가 3회를 넘었을 때** — 성격 전이·탈출 조건 규약, 상한 5 초과의 네 패턴 |
 | `references/plan-drift.md` | 구현 중 계획 수정 시, 계획서 신선도 경고 시 |

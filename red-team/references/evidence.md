@@ -503,3 +503,62 @@ issue #48 은 "`## 스코프 밖` 과 자진신고 절이 같은 심볼을 언�
 기존 벤더 소스 근거 기준(최근접 `node_modules` 사본이 최종 권위)은 손대지 않았다 — 그것은
 라이브러리 동작 오가정을 잡는 규칙이고 실측에서 정상 작동 중이다. 배포물 라인 인용 지적은
 그 근거 기준이 아니라 앵커 문단에 넣었다.
+
+## a-code 「어떻게 찾나」에 형제 전수를 넣은 이유 — issue #53
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 **게이트가
+GO 를 낸 뒤** 다른 리뷰어(hermes·aws-security-agent·사람)가 잡은 12건이 한 계열이었다 — 처방
+후보를 뽑은 15개 이슈 중 최다. 근거 PR: account-sdk-reactnative#46, ceo-client#872·#874·#940·
+#941·#968, zigbang-client#9596. 판정 분포는 `none` 4, `partial:a-code` 7,
+`partial:b2-interaction` 1 로 축 자체는 관할이었고, 지시가 「변경된 심볼의 호출부 전수」 =
+**「이 심볼을 누가 쓰나」** 에서 멈춘 것이 원인이었다. 빠진 질문은 **「같은 결과에 도달하는
+다른 길이 무엇인가」** 다.
+
+형제가 나타난 네 형태 — 표의 12건에, 같은 분류 파일에서 같은 계열이면서 다른 이슈에 계상된
+ceo-client#975·#957 을 함께 놓았다:
+
+| 형태 | 실측 |
+|---|---|
+| 같은 싱크로 함께 나가는 형제 필드 | ceo-client#975 `partial:a-code`(새 `HTML_UNSAFE_PATTERN` 가드가 `n_query` 키에만 걸려 같은 쿠키에서 복원돼 같은 payload 로 나가는 `referrer`·`landingPath` 는 길이 캡만 거침), #968 `none`(`buildInquiryTouch` 의 3필드만 무캡 — 같은 함수의 `touchQuery` 는 재캡) |
+| 같은 피호출자를 쓰는 형제 호출부 | zigbang-client#9596 `partial:a-code`(`createLocationMeta` 입력 가드가 `stay/map.tsx` 한 곳만), ceo-client#968 `partial:a-code`(`fitToBudget` 에 `strict` 미전달로 옵션 계약이 갈림), account-sdk-reactnative#46 `partial:a-code`(삭제대상 화이트리스트가 형제 함수에만) |
+| 같은 계약을 이미 구현한 형제 함수 | ceo-client#941 `none`(`adHouse.ts` 의 `rethrowApiResponseError` 와 손으로 다시 쓴 `signup.tsx` 가 `""`·`0` 에서 판정이 갈림), #874 `partial:a-code` 2건(형제 콜백·세션 갱신 경로 미적용 — 같은 모노레포 CeoApp 선례와도 불일치) |
+| 다른 배포 라인 | ceo-client#957 `none`(수정이 `prod/ceo-web` 에만 들어가 `master` 계보의 dev·preview 는 그대로 취약) |
+
+부수 두 형태는 별 규칙으로 두지 않고 같은 문단에 얹었다 — **일괄 치환의 사본 대조**
+(account-sdk-reactnative#46: `Model.ts:81` 만 `${this.getAccountUrl}` 로 메서드를 호출 없이
+보간, 같은 파일 5곳은 `()` 를 붙였다)와 **목적을 잃은 잔존 가드**(ceo-client#874:
+`excludedPathList` 조기 return 이 보호하던 `unregister()`+`logout()` 이 diff 로 사라진 뒤에도
+남아 `connectionLost` 설정을 억제). ceo-client#940 의 noopener/noreferrer 3건(`none`)도 별
+항목이 아니라 「레포가 형제 자리에서 이미 붙이는 관용구를 대조 대상으로 삼는다」에 넣었다 —
+그 지적의 근거가 형제 `FloatingBtns.tsx:33` 이 이미 지키고 있었다는 것이었다.
+
+`partial:b2-interaction` 1건(ceo-client#872: 네 핸들러에 붙인 `blockedByUserFetch()` 가드를
+프리미엄 설정 모드의 완료 버튼이 누락)은 이 축의 관할이 아니라 issue #61(b2 프롬프트)로
+넘겼다.
+
+### 자리를 「어떻게 찾나」로 고른 이유
+
+형제 전수는 **특정 결함 종류가 아니라 탐색 방법**이다. 번호 항목(1 새 회귀 / 2 논리구멍 /
+3 사실오류 / 4 관측 / 5 선언된 보장)에 넣으면 12건이 그 항목 하나로 쏠리지 않는다 — 실측
+12건은 논리구멍(가드 미적용)·새 회귀(잔존 가드)·사실오류(형제 필드 무캡)에 흩어져 있었고,
+공통점은 결함의 성질이 아니라 **호출부 전수에서 멈췄다는 탐색의 한계**였다. 「어떻게 찾나」의
+첫 문단이 이미 「이 심볼을 누가 쓰나」를 시키고 있어, 그 바로 뒤가 대비되는 방향을 붙일
+자리다. 기존 호출부 전수 문장은 그대로 뒀다 — 형제 전수는 그것의 대체가 아니라 추가다.
+
+### 네 형태를 한 문단으로 묶은 이유
+
+분류기가 제안한 처방은 11개 문장이었다. 형태를 1:1로 나열하면 리뷰어가 매 라운드 읽는
+프롬프트에 목록이 하나 더 생긴다. 네 형태는 **결과 쪽에서 역방향으로 나열한다**는 한 축으로
+덮인다 — 필드·호출부·함수·배포 라인은 그 역방향 검색이 도달하는 층위가 다를 뿐이다. 그래서
+축 문장 하나 + 네 층의 열거로 묶고, 일괄 치환·잔존 가드는 같은 문단의 꼬리 두 문장으로 붙였다.
+
+### 손 대조 3건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| PR | 커밋 | 대조 결과 |
+|---|---|---|
+| account-sdk-reactnative#46 | `4c4e52553` | `packages/login-store/Model.ts` 의 `getAccountUrl` 참조 6곳 중 `:81` 만 `()` 가 없고 `:110`·`:135`·`:146`·`:158`·`:178` 은 붙어 있다 — 「N개를 나란히 놓고 한 곳만 다른 표기」가 지목하는 열거가 이 6줄이다 |
+| zigbang-client#9596 | `27a44df11` | 배열 처리·`trim`·길이 상한 가드가 `pages/stay/map.tsx:52-61` 에만 있고, 같은 `createLocationMeta` 를 부르는 나머지 7 호출부(`apt_map.tsx:8`, `HomeAptDanjisOfferScreen/V2/index.tsx:163`, `HomeOfficetelListDanjisScreen/index.tsx:33`, `HomeOfficetelListScreen/index.tsx:30`, `HomeOneroomListScreen/index.tsx:31`, `HomeStoreListScreen/index.tsx:63`, `HomeVillaListScreen/index.tsx:28`)는 `query?.search_keyword as string` 을 그대로 넘긴다 — 「같은 피호출자를 쓰는 형제 호출부 전수」의 열거가 이 8줄이다 |
+| ceo-client#941 | `18b93275c` | 형제 헬퍼 `apps/CeoWeb/apis/queries/adHouse.ts:32` 가 `if (errorResponse.response?.data)` **진리값** 판정인데, 같은 커밋의 `apis/queries/signup.tsx:21` 은 `throw errorData ?? error` **nullish** 판정이다 — `data` 가 `""`·`0` 이면 던지는 값이 갈린다. 「같은 계약을 이미 구현한 형제 함수를 경계값 판정까지 대조」가 지목하는 대조가 이 두 줄이다 |

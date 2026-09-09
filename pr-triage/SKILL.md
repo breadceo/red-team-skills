@@ -72,7 +72,7 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --new-only
 
 두 답은 독립이다 — `["out-of-scope","real-defect"]` 겹침이 정상 판정으로 흔하다.
 **조건부 분기 — 해당하면 `references/edge-cases.md` 의 그 절을 읽는다:** docs-only
-diff / diff 안 문서의 미결 표에 등재된 지적 / 레포 밖(BE 계약·SDK) 주장.
+diff / 미결 목록(문서·ABORTED)에 등재된 지적 / 레포 밖(BE 계약·SDK) 주장.
 
 ### 3. 기록 대조 — 소수 케이스를 걸러낸다
 
@@ -99,7 +99,7 @@ diff / diff 안 문서의 미결 표에 등재된 지적 / 레포 밖(BE 계약�
 ### 5. 분류
 
 빈도는 **40 PR·2레포 누적 436 코멘트 전량** 실측 건수다 — 분모 436(`no-response-needed`
-포함), 회신 대상 264. 합이 분모를 넘는 것은 판정이 겹칠 수 있어서다. **2절의 "사실 판단의
+포함), 회신 대상 264. **2절의 "사실 판단의
 기본값은 리뷰어가 맞다"(88%) 를 `real-defect` 빈도(45%)로 읽지 않는다** — 두 축을 한 칸에
 적었던 것이 편향의 출처였다(`references/measurement.md` 3차 측정).
 
@@ -236,7 +236,7 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
 | 문서 | 언제 읽나 |
 |---|---|
 | `references/monitoring.md` | PR 감시를 시작할 때 — 호스트별 exact 실행 경로 |
-| `references/edge-cases.md` | docs-only PR, 미결 표 등재 지적, 레포 밖 계약 주장, **기록 없는 PR**, 기록 재확인·인계 폴백, fp 봇 재게시, **게이트 GO 후 외부 산출물·미결 목록 위치**, **8절 `fps`·`reaction` 필드**, 9절 실행 시 |
+| `references/edge-cases.md` | docs-only PR, 미결 등재 지적(문서·ABORTED), 레포 밖 계약 주장, **기록 없는 PR**, 기록 재확인·인계 폴백, fp 봇 재게시, **게이트 GO 후 외부 산출물·미결 목록 위치**, **8절 `fps`·`reaction` 필드**, 9절 실행 시 |
 | `references/measurement.md` | 본문 수치의 근거 확인, 재측정(**분모 정의·오분류 방향**), 분류 로그 임계값 알림 시 |
 
 ## 유지보수

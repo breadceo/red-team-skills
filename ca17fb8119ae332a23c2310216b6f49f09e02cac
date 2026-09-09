@@ -1,0 +1,27 @@
+red-team/references/resample.md
+  f823fdcc3d33104c 1-76
+red-team/references/moe.md
+  f823fdcc3d33104c 20-21
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "ca17fb8119ae332a23c2310216b6f49f09e02cac",
+  "prompts": {
+    "f823fdcc3d33104c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff405c4c-0496-44a8-996f-64cda96eff3c",
+        "model": "claude-opus-5"
+      },
+      "skills": [],
+      "tool_counts": {
+        "Bash": 15,
+        "Write": 1,
+        "Edit": 1
+      },
+      "total_additions": 78,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}

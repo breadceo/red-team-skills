@@ -1,0 +1,16 @@
+red-team/prompts/b2-interaction.md
+  h_d82ccb34241a0d 6-11,21-35,50-52
+red-team/references/evidence.md
+  h_d82ccb34241a0d 953-1071
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "3f08a9f52fefb88752661ae37424db00e00a1ae6",
+  "prompts": {},
+  "humans": {
+    "h_d82ccb34241a0d": {
+      "author": "ethan@zigbang.com"
+    }
+  },
+  "attribution_source": "human_fallback"
+}

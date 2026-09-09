@@ -835,3 +835,118 @@ b 축 프롬프트를 직접 늘리지 않고 같은 결함을 올릴 수 있게
 | ceo-client#955 | `feb491450` → `527b3a2e7` | 결함 커밋의 `apps/CeoApp/__tests__/AppSentryPolicy.test.tsx:51` 이 `import { parse } from "@babel/parser"` 인데, 그 트리의 `package.json` 전수 중 `@babel/parser` 를 선언한 파일은 **0개**이고 `@babel/core` 만 `apps/CeoApp/package.json` 에 있다. 같은 파일 `:190` 은 `if (key !== "loc" && !key.endsWith("Comments"))`, `:195` 는 `walk(ast.program)` 이다. 정정 커밋이 「전자는 이 워크스페이스 package.json 에 선언돼 있지 않아 **phantom dependency** 였다」·「`endsWith("Comments")` 는 File 노드의 comments(소문자)를 못 걸러낸다」·「한 파일만 보면 등록을 헬퍼 파일로 옮기는 것만으로 우회된다」로 셋을 함께 닫았다. 「미선언 전이 의존성 import·키 대소문자·진입점 목록」이 지목하는 열거가 이 세 줄이다 |
 | ceo-client#940 (표식) | `5dcae3aa2` → `a06d1b468` | 정정 커밋 메시지가 「`LinkButton` wrapped a `Link` inside a `Button`, so **`data-track` and `onClick` landed on the outer `<button>` while the inner `<a>` did the navigating**」로 결함을 그대로 적는다 — 표식이 붙은 요소가 실제 이벤트 대상의 조상이었다. 정정은 단일 `<a>` 로 렌더해 「the tracked element and the navigating element are the same element」로 만들고 `LinkButton.test.tsx`(98줄)를 새로 세웠다. 「표식이 붙은 요소가 실제 이벤트 대상 자신인지 그 조상·자손인지까지 DOM 을 따라가 대조한다」가 지목하는 확인이 이 중첩이다 |
 | ceo-client#940 (무음 고정) | `5dcae3aa2` | 같은 커밋이 **스스로** 진단했다 — 메시지는 「`AlwaysClickableButton` now passes props through; **it was dropping `data-track`**」, 코드 주석은 「`data-track`(B2C-54026) 처럼 DOM 에 그대로 실려야 하는 속성이 **조용히 버려지고 있었다**」다. 그런데 같은 커밋이 추가한 테스트는 `apps/CeoWeb/__tests__/intro/tracking.test.tsx` 하나뿐이고 그 트리의 테스트 파일 전수에서 `AlwaysClickableButton` 을 언급하는 단언은 **0건**이며, 현재 레포에도 그 컴포넌트를 다루는 테스트 파일이 없다. `...props` 를 되돌리면 tsc·lint 는 초록이고 계측만 죽는다. 예외 두 조건(①자기 진단 인용 ②diff 안 단언 부재)이 정확히 이 커밋에서 함께 성립한다 |
+
+## a-code 「어떻게 찾나」에 술어·매처의 입력집합 열거를 넣은 이유 — issue #57
+
+같은 분류(`~/.red-team/eval/escape/all-classified.json`, 186 finding, 2026-09-09)에서 다른
+리뷰어(hermes·사람)가 잡은 8건이 한 계열이었다 — **술어·매처가 실제로 가르는 입력의 집합**을
+열거하지 않아, 그 집합이 술어가 선언한 의미보다 넓거나 좁은 채로 통과한 것이다. 근거 PR:
+ceo-client#916·#927·#958, zigbang-client#9596.
+
+8건 중 2건은 코멘트 시점에 완료된 라운드가 없어(**pre-gate**) 게이트가 놓친 것이 아니다 —
+근거에서 뺐다. 둘 다 ceo-client#958 의 「접두사 매처가 실제 입력집합보다 넓어 비광고 파라미터를
+신호로 오인」이고, 실측 문장은 `?n_page=3` 단독 재진입과 `n_` 접두사 단독 유입이다. 같은
+defect_kind 의 세 번째 행(`utm_nooverride`·`utm_expid`)은 post-GO 탈출이라 남는다 — 즉 이 계열의
+표면 자체는 게이트가 GO 를 낸 뒤에도 그대로 남아 있었다. **유효 근거 6건** — post-GO 탈출 5,
+post-round 탈출 1(ceo-client#927). 이 이슈는 8→6 으로 다른 어떤 이슈보다 근거가 크게 줄었지만,
+남은 6건이 서로 다른 PR·서로 다른 술어라 계열은 유지된다. 판정 분포는 `partial:a-code` 5 ·
+`partial:b1-state-matrix` 1 로, 축 자체는 관할이었고 「어떻게 찾나」가 **호출부·형제·소비처**만
+시키고 **그 술어에 들어오는 입력**을 시키지 않은 것이 원인이었다.
+
+| 방향 | PR | 결함 | 판정 |
+|---|---|---|---|
+| 넓어진 쪽 — 매처 확대 | ceo-client#958 | `isUtmSignalKey` 를 `utm_`/`gad_` 접두사 매칭으로 바꾸면서 `utm_nooverride`·`utm_expid` 같은 광고 무관 표준 파라미터가 last-touch 발동 신호가 되어 `zb_utm` 을 통째로 교체한다 | `partial:a-code` |
+| 〃 — 상수 배열 원소 | ceo-client#958 | `srsltid` 는 Merchant Center 무료 목록(오가닉) 파라미터인데 `UTM_CLICK_ID_KEYS` 를 통해 발동 집합에 남아 유료 광고 귀속을 덮어쓴다 | `partial:a-code` |
+| 좁은 쪽 — 무효화 키 입력 누락 | ceo-client#927 | `inputGenerationRef` 가 타이핑·채널·비활성화·언마운트·멘션만 세고 답장 대상 변경은 세지 않아, 늦게 도착한 금칙어 실패가 과거 원문을 바뀐 답장 컨텍스트에 복원한다 | `partial:a-code` |
+| 〃 — 타입 단언으로 좁힘 | zigbang-client#9596 | `LocationType` 유니온이 백엔드가 실제로 돌려주는 `"school"` 을 포함하지 않는데 `item.type` 을 `as` 로 단언해 런타임 검증이 없다 | `partial:b1-state-matrix` |
+| 〃 — 수동 열거 목록 | ceo-client#916 | `"break-keep [overflow-wrap:anywhere]"` 리터럴이 6곳에 중복돼 있고 테스트의 `WRAPPERS` 배열도 수동 관리라, 7번째 Content 래퍼가 추가되면 아무 테스트도 실패하지 않는다 | `partial:a-code` |
+| 두 역할 겸함 | ceo-client#958 | 발동 판정은 예산 적용 **전에** 신호 키를 보고 참이 되는데 strict 예산에서 그 신호 키가 탈락하면, 신호가 하나도 없는 값으로 기존 광고 last-touch 를 덮어쓴다 | `partial:a-code` |
+
+### 6건 중 1건은 새로 쓰지 않고 기존 문장에 얹었다
+
+ceo-client#916(수동 열거 목록)은 **#58 이 이미 5번에 넣은 「암묵 전제」** 가 덮는다 — 그 문장은
+「그 장치가 코드에 적히지 않은 전제(진입점 목록·키 대소문자·미선언 전이 의존성 import·**수동
+관리되는 검사 대상 목록**)에 기대는지 열거해, 그 전제를 깨는 한 줄 변경이 장치를 무음으로
+통과시키는 자리를 적는다」이고, `WRAPPERS` 배열에 7번째 래퍼가 추가되는 것이 정확히 그
+「한 줄 변경」이다. 새 문단에 다시 적으면 AGENTS.md 의 중복 금지에 걸린다. 새 문단의 축
+문장(「술어가 실제로 가르는 입력을 원소 단위로 열거」)이 이 형태도 자연히 덮으므로, **본문에
+「수동 열거 목록」을 이름으로 적지 않았다.**
+
+### 자리를 「어떻게 찾나」로 고른 이유
+
+후보는 5번(선언된 보장)과 「어떻게 찾나」였다.
+
+5번은 **장치**가 대상이다 — 테스트·lint 규칙·CI 게이트·타입 가드가 무엇을 잡는지 나열하고,
+그것이 막는지·도는지를 묻는다. 남은 5건 중 5번에 드는 것은 위에서 얹은 #916 하나뿐이다.
+`isUtmSignalKey`·`UTM_CLICK_ID_KEYS`·`inputGenerationRef`·`LocationType` 은 전부 **장치가 아니라
+제품 로직의 술어**다. 이들이 무엇을 잡는지가 아니라 **무엇을 통과시키는지**가 결함이었고,
+5번의 (a)~(c)·세 대입은 어느 것도 그 질문을 하지 않는다. 5번에 넣으면 「선언된 보장」이라는
+항목의 대상 정의 자체가 흐려진다.
+
+「어떻게 찾나」는 #53·#54 와 같은 이유로 맞는 자리다 — 이것은 결함 종류가 아니라 **탐색
+방향**이다. 실측 6건은 새 회귀(#916 의 무음 미적용)·논리구멍(#958 의 발동 오판)·사실오류
+(#958 의 배열 주석)에 흩어져 있고, 공통점은 결함의 성질이 아니라 **그 술어에 실제로 들어오는
+입력을 세어보지 않았다**는 탐색의 한계다.
+
+### 앞선 네 문단과 무엇이 다른가
+
+| 문단 | 무엇을 보나 |
+|---|---|
+| 5번 (c) — issue #58 | 그 장치가 **막겠다고 선언한 것을 막는가** — 대상의 우회 표기를 열거해 *빠져나가는* 것을 찾는다 |
+| 형제 전수 — issue #53 | 같은 결과에 도달하는 **다른 길** — 결과 쪽에서 **옆**을 훑어 새 규칙이 미적용인 자리를 찾는다 |
+| 소비처 계약 — issue #54 | 이 변경이 만든 값이 **도달하는 쪽의 계약** — 값이 흘러가는 **앞**을 본다 |
+| **입력집합 — issue #57** | 그 술어가 **통과시키는 집합이 의도한 집합인가** — 값이 **들어오는** 입구를 본다 |
+
+(c)와는 방향이 반대다. (c)는 `window.X`·`globalThis.X` 처럼 **막힐 대상의 변형**을 열거해
+빠져나가는 것을 찾고, 이 문단은 **통과한 입력의 전수**를 열거해 들어오면 안 되는 것을 찾는다.
+같은 `isUtmSignalKey` 를 놓고도 (c)는 "`utm_` 를 우회하는 표기가 있는가"를 묻고, 이 문단은
+"`utm_` 로 걸리는 실제 파라미터가 전부 광고 파라미터인가"를 묻는다. #54 와는 값의 방향이
+반대다 — #54 는 우리가 만든 값이 남의 계약에 드는지, 이 문단은 남이 준 입력이 우리 술어의
+의미에 드는지다. ceo-client#958 이 #54(512 ↔ VARCHAR(500))와 여기(`srsltid`) 양쪽에 계상되고,
+zigbang-client#9596 이 #54(계수 단위)와 여기(`as` 단언) 양쪽에 계상되는 이유가 이것이다.
+
+### 여섯 갈래를 두 방향으로 묶은 이유
+
+분류기가 낸 처방은 8개 문장이었고 그대로 나열하면 이미 긴 「어떻게 찾나」에 여섯 줄이 붙는다.
+남은 5건은 **「술어가 가르는 입력집합을 열거해 선언한 의미의 집합과 대조한다」** 한 축으로
+덮이고, 갈래는 **넓어진 쪽 / 좁은 쪽** 둘뿐이다 — 매처 확대와 상수 배열 원소는 의도 밖 입력이
+*들어오는* 것이고, 무효화 키 누락과 `as` 단언은 의도한 입력이 집합 *밖으로 떨어지는* 것이다.
+「두 역할을 겸하면 역할마다 따로 열거」는 같은 열거를 두 번 하라는 것이라 꼬리로 붙였다.
+11줄로, #53 의 15줄보다 짧고 #54 의 8줄보다 길다.
+
+**「패턴이 아니라 입력 쪽에서 센다」를 넣은 이유.** 세 결함(`utm_nooverride`·`srsltid`·`school`)
+모두 코드만 읽어서는 나오지 않는다 — `utm_` 로 시작하는 파라미터를 누가 붙이는지(구글 리다이렉트),
+`srsltid` 가 어디서 오는지(Merchant Center 무료 리스팅), `LocationType` 밖의 값이 실재하는지
+(BE 응답)를 **바깥에서** 확인해야 열거가 닫힌다. 이 한 문장이 없으면 리뷰어가 정규식을 노려보다
+"넓어 보인다"로 끝낸다.
+
+### `as` 단언 1건의 소관 — a-code 와 #59 로 나눴다
+
+zigbang-client#9596 의 `LocationType` 건은 이슈 표에 `partial:b1-state-matrix` 로 적혀 있고,
+b1 매트릭스 열을 다루는 issue #59 가 따로 열려 있다. 결함이 두 층이라 나눴다.
+
+- **집합 대조는 a-code 다.** 「`as` 로 좁힌 유니온이 실제 도메인 값 집합보다 좁다」는 이 문단의
+  좁은 쪽 그대로다. 유니온 밖 값이 존재하는지는 BE 응답을 열어야 알고, 그것은 상태 표의 칸이
+  아니라 입력 열거다.
+- **유니온 밖 값이 default 로 떨어졌을 때 사용자가 보는 것은 #59 다.** 이 결함의 피해
+  (`title`·`description`·`serviceName` 이 모두 빈 값이고 로그도 없음)를 표의 칸으로 채우는 것은
+  b1 의 고정 열에 「응답이 예상 밖 타입·부분값으로 온 경우」를 추가하는 일이고, 분류기의
+  처방 문장도 그 자리를 지목했다. **이 PR 에서 `b1-state-matrix.md` 는 건드리지 않았다.**
+
+#53 이 b2 소관 1건을 #61 로 넘긴 것과 같은 처리이되, 그때와 달리 결함 하나가 두 축에 걸쳐
+있어 **넘긴 것이 아니라 나눈 것**이다. 근거 6건에는 그대로 계상한다 — a-code 가 열거를 시켰다면
+`"school"` 이 유니온 밖이라는 사실 자체는 이 축에서 나왔을 것이다.
+
+### 손 대조 3건 (원본 커밋)
+
+새 지시가 실제 결함의 표면을 열거하는지 결함이 존재했던 커밋에서 확인했다(머지본에는 이미
+정정이 들어가 있다).
+
+| PR | 결함 커밋 → 정정 커밋 | 대조 결과 |
+|---|---|---|
+| ceo-client#958 (매처 확대 · 상수 배열 · 두 역할) | `a57286d67` → `8722c2cee` | 결함 커밋 `apps/CeoWeb/lib/utm.ts:102` 가 `const UTM_SIGNAL_PREFIXES = ["utm_", "gad_"]`, `:20` 이 `const UTM_CLICK_ID_KEYS = [..., "gclsrc", "srsltid"]`, `:138-143` 의 `isUtmSignalKey` 가 그 둘을 OR 로 묶는다. 같은 파일 `:267` 의 `buildUtmCookieValue` 는 `pickUtmQueryKeys(...).some(isUtmSignalKey)` 로 **예산 적용 전** 키 집합만 보고, 값은 `:258` 의 `fitToBudget(picked, exceeds, true)`(strict)가 따로 만든다. 정정 커밋이 `UTM_NON_SIGNAL_KEYS = ["srsltid", "gclsrc", "utm_nooverride", "utm_expid", "utm_referrer"]` 를 새로 세우고, 주석에 **「`utm_` 는 광고 전용 네임스페이스라 오가닉 링크에 실릴 일이 없다」 는 틀렸다**(PR #958 리뷰가 반증)를 남겼으며, `buildUtmCookieValue` 에 「발동을 결과로 다시 검증한다 — 위 가드는 예산 적용 **전** 키 집합을 보는데…」를 붙여 산출값에 신호 키가 남았는지 재확인하게 했다. 「새로 통과하게 된 입력을 이름까지 적어 각각이 의도된 것인지 묻는다」가 지목하는 열거가 그 5종이고, 「상수 배열은 원소마다 그 배열이 선언한 의미에 부합하는지」가 `srsltid`·`gclsrc` 두 원소이며, 「판정과 산출이 서로 다른 단계에서 계산되면 두 결과가 어긋나는 입력을 찾는다」가 지목하는 입력이 정정 주석의 실측 `?utm_future=F1&n_media=<160자>&n_query=<160자>&n_rank=<160자>` 다 |
+| ceo-client#927 (무효화 키) | `4c072bb0e` → `c73e4e0a0` | 결함 커밋 `apps/CeoApp/src/components/chat/message/input/SendInput.tsx:71` 의 주석이 「**보장 주체**: `inputGenerationRef` — … 아래 **(a)~(f)** 가 올린다」로 축 집합을 전칭으로 선언하는데, 같은 파일 `:279-290` 의 `messageReplyParams` 가 `messageToReply`·`messageForThread` 로 `parentMessageId` 를 정한다 — 즉 그 둘도 입력의 의미를 구성하는데 (a)~(f) 어디에도 없다. 정정 커밋이 (g)를 추가하고 `useEffect(() => { inputGenerationRef.current += 1 }, [messageToReply?.messageId, messageForThread?.messageId])` 를 넣으며 「텍스트를 건드리지 않고 답장만 취소하거나 다른 메시지로 바꾸면 (a) 가 돌지 않아 세대가 그대로였고, 늦게 도착한 금칙어 실패가 **바뀐 답장 맥락에** 옛 원문을 복원했다」로 적었다. 「보호 대상 상태를 구성하는 입력 중 무효화 키가 세지 않는 축」이 지목하는 열거가 (a)~(f) ↔ `messageReplyParams` 의 입력 대조다 |
+| ceo-client#916 (수동 열거 — 얹은 1건) | `7c0d52e76` → `d51c4a86f` | 결함 커밋에서 `"break-keep [overflow-wrap:anywhere]"` 가 `components/ui/dialog.tsx:40,63,91`·`alert-dialog.tsx:38,57`·`sheet.tsx:61` 6곳에 흩어져 있고, `__tests__/components/ui/dialog-word-break.test.tsx:61` 의 `const WRAPPERS: {...}[] = [...]` 는 수동 배열이며 `:125` 가 `describe.each(WRAPPERS)` 로 그 배열만 돈다 — 배열에 없는 래퍼는 어떤 단언도 만나지 않는다. 정정 커밋이 「`%s.tsx` 의 Content 래퍼가 전부 `WRAPPERS` 에 등록돼 있다」 테스트를 모듈 export 열거로 새로 세웠다. 5번 「암묵 전제」의 「수동 관리되는 검사 대상 목록 … 그 전제를 깨는 한 줄 변경이 장치를 무음으로 통과시키는 자리」가 지목하는 자리가 이 배열이고, 새 문단을 쓰지 않아도 덮인다는 근거가 이것이다 |
+
+**`red-team/SKILL.md` 는 건드리지 않았다.** 바뀐 것은 축 프롬프트 하나와 이 문서뿐이라 예산
+검사 대상이 아니다.

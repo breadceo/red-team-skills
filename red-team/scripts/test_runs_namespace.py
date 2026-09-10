@@ -452,5 +452,18 @@ h_new, _ = rs.resolve_base("runs2/dup__x/br", str(repo_a))
 h_old, _ = rs.resolve_base("runs/dup__x/br", str(repo_a))
 assert h_new == runs2 / "dup__x" / "br" and h_old == runs / "dup__x" / "br", (h_new, h_old)
 
+# ── 5) 재샘플 사이드카는 라운드가 아니다 (references/resample.md · design.md 「NO-GO 재샘플」) ──
+# `<gate>-<n>.resample-<k>` 는 원 round.json 을 건드리지 않는 대신 이름 계약 하나로 세 소비자
+# (resume 의 round_dirs · resolve_out 의 번호 · archive 의 ROUND_RE)에서 숨는다. 정규식이 느슨해져
+# 사이드카가 라운드로 승격되면 resume 이 그 GO 를 게이트 통과로 읽는다 — 그 한 가지가 실패하는 검사.
+import archive_runs as ar
+repo_s = make_repo("sidecar", "git@github.com:team-s/app.git", "feature/side")
+base_s = rr.branch_dir(str(repo_s), migrate=True)
+(base_s / "code-3").mkdir(parents=True)
+(base_s / "code-3.resample-1").mkdir()
+assert [d.name for d in rs.round_dirs(base_s, "code")] == ["code-3"], "사이드카가 라운드로 세졌다"
+assert rr.resolve_out(str(repo_s), "code").name == "code-4", "사이드카가 라운드 번호를 밀었다"
+assert ar.ROUND_RE.fullmatch("code-3.resample-1") is None, "archive 가 사이드카를 라운드로 본다"
+
 print("test_runs_namespace: ok")
 shutil.rmtree(TMP)

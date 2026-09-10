@@ -449,3 +449,38 @@ description 은 원본 유지. 같은 경로를 다시 시도하지 말 것.
 `UserPopupController` 오판(전역 본인인증 모달), "4xx 도달 불가능" 전제 오류(서버 경로에서
 `redirect()` 의 `NEXT_REDIRECT` 가 base 의 `catch → null` 에 삼켜진다).
 계획 게이트가 구현 전에 값을 낸다는 것이 실측으로 확인됐다.
+
+## NO-GO 재샘플 — 판정 기준 선기입 (2026-09-10)
+
+`resample.md` 는 GO 후보에서만 core 축을 재샘플한다. covered 66 조사(위 Q1·Q2 절)가 NO-GO 를 뺀
+근거 (a) 「다음 라운드가 같은 축을 다시 돌리니 공짜」를 흔들었다 — 다음 라운드는 **수정 뒤 diff +
+봉인이 늘어난 컨텍스트** 위에서 돌고 라운드 1회(100%)를 소모한다. 재샘플은 결함이 그대로 있는
+같은 입력에서 라운드의 20~30% 로 뽑고, 찾은 것이 같은 fix 배치에 들어간다.
+근거 (b) 「`--merge-into` 는 덮어써서 합집합이 안 된다」는 그대로이고 더 나쁘다 — `run_round.py`
+가 재실행 축의 이전 findings 를 걷어내므로(`merged["findings"] = [... if reviewer != r]`) NO-GO
+라운드에 깨끗한 재샘플을 병합하면 `recompute()` 가 verdict 를 **GO 로 뒤집는다.** 그래서 NO-GO
+재샘플은 병합하지 않고 **사이드카 디렉토리** `<gate>-<n>.resample-<k>` 에 `--out` 으로 돈다 —
+`resume.py round_dirs`·`run_round.py resolve_out`·`archive_runs.py ROUND_RE` 가 모두 `fullmatch`
+라 사이드카는 라운드로 세지지 않고 원 `round.json` 은 불변이다. 플래그 신설은 하지 않는다
+(`test_runs_namespace.py` 가 이 이름 계약을 지킨다).
+
+**규칙으로 올리기 전에 잰다.** 기준은 실험 전에 여기 적는다(`evidence.md` 「replay 배선」).
+
+- **표본 K=8 라운드 × a-code 3샘플.** Q1 misjudged 26(`~/.red-team/eval/escape/q1/classified/all.json`)
+  중 ① 같은 리뷰어가 다음 라운드에 스스로 잡은 4건(938·941·950·955) 필수 — 같은 엔진으로 회수
+  가능함이 증명된 GT ② raw 가 남은 misjudged 중 a-code regression ≤1 인 NO-GO 라운드 4건.
+  각 라운드는 detach 워크트리 + lockfile 설치 + `diff.md` 바이트 일치 + 봉인 해제 컨텍스트로 재현.
+- **지표** (샘플 1 / 1∪2 / 1∪2∪3, 중복은 `resample.md` 「합집합의 중복 처리」로 접은 뒤):
+  M1 그 라운드의 covered 결함 회수(파일+술어 일치) · M2 고유 `regression` findings 수 ·
+  M3 합집합이 **늘린** findings 의 실재율(코드로 확인) 대 샘플 1 의 실재율 ·
+  C 재샘플 1회 토큰 / 그 라운드 5축 토큰(`report_usage`).
+- **채택 조건(둘 다):** M2 의 1∪2 가 샘플 1 대비 중앙값 **+1 이상**, 그리고 M3 의 추가분 실재율이
+  샘플 1 보다 **낮지 않다.** M1 은 보고만 한다(Q2 처럼 GT 8건은 0 이 나올 수 있는 크기) — 단 ①의
+  4건에서 1∪2 회수가 0/4 면 「분산이 회수한다」 가설을 의심해 채택하지 않는다. C 가 30% 를 넘으면
+  트리거를 좁힌다(채택 조건은 아님).
+- **채택 시 트리거:** a-code regression ≤1 인 NO-GO 라운드(542 라운드의 69%, 라운드당 +17%).
+  매 라운드(T0)·diff 파일 수(T2, Q1 unexplored 0 이라 근거 없음)·라운드 번호(T3)는 기각.
+  기존 skip(한 파일·한 함수 diff, 컨텍스트만 바뀐 재라운드)은 승계. 문서 변경은 `resample.md` ·
+  SKILL.md 「루프」 한 문장 · `decisions-template.md` 에 재샘플 기록 절 신설 — 채택 뒤에 한다(그때 검사기가 절 실존을 확인한다).
+- **부채택 시:** 이 절 아래에 결과 표와 기각 사유를 남기고 `resample.md` 는 그대로 둔다.
+- **채택 후 2차 지표:** 이후 티켓 10건의 GO 까지 라운드 수 중앙값·티켓당 총 토큰을 전후 비교.

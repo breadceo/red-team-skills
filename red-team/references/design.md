@@ -380,6 +380,46 @@ finding 집합을 냈고 겹친 결함은 1개뿐이다(고유 4개, 한 샘플 
 **한계.** 보강 전 baseline 이 1샘플이라 (2)(3)의 전후 비교는 3 대 1 이다. 방향은 선명하지만
 효과 크기는 재지 못했다. 재측정 배선은 `references/evidence.md` 의 「replay 배선」 절에 있다.
 
+### covered 66건의 원인 — 탐색 부족 0, 판단 오류 72% (2026-09-10)
+
+`covered` 66건(축이 이미 열거하라고 지시했는데 안 낸 것) 중 raw 가 남은 36건을 raw ACP 스트림의
+`tool_call`·`agent_thought_chunk` 로 판정했다(기준은 라운드 전에 고정, `~/.red-team/eval/escape/q1/RUBRIC.md`).
+
+| 분류 | 건수 | 뜻 |
+|---|---|---|
+| misjudged | 26 (72%) | 파일을 열고 그 지점을 thought 에서 다룬 뒤 「안전」으로 결론 |
+| seen-silent | 4 | 파일은 열었으나 결함 지점 언급 없음 |
+| sealed | 4 | context.md 봉인 — 3건은 이전 라운드에 냈던 것을 컨텍스트가 닫음 |
+| suppressed | 2 | pre-existing 판정 |
+| unexplored | 0 | — |
+
+- 「안 봤다」는 0건 — 프롬프트에 탐색 지시를 더하는 처방은 근거를 잃었다.
+- misjudged 의 여러 건(938·941·950·955)은 **다음 라운드에 같은 리뷰어가 스스로 잡았다.** 능력이 아니라
+  그 라운드의 결론이 틀린 것으로, 「같은 입력에 verdict 가 갈린다」와 같은 뿌리다. 처방은 문장 추가가 아니라
+  **엔진 A/B(Q2) 와 같은 엔진 다중 샘플 합집합** 이다.
+- 주의 분산·예산 고갈 가설은 반증 — 라운드 종료 시 컨텍스트 사용 중앙값 53%, P1 이 index 0 에 나온다.
+  대신 a-code 라운드의 69% 가 0~1건만 내고 끝난다(542 라운드). 라운드당 산출 건수는 루프 설계 질문.
+- 전문·도시에·분류 JSON: `~/.red-team/eval/escape/q1/RESULT.md`.
+
+### 엔진 A/B — claude 는 codex 와 다른 것을 잡지 않았다 (2026-09-10)
+
+Q1 의 misjudged 72% 가 「모델 문제」인지 보려고 PR #884 `code-28` 재현 입력(봉인 해제 ctxB, 같은 워크트리·
+lockfile·프롬프트)에 `--engine claude` 3샘플을 돌려 codex 3샘플(arm D)과 비교했다. 기준은 라운드 전 고정
+(`~/.red-team/eval/escape/q2/PLAN.md`).
+
+| arm | verdict | findings | GT 적중 | 라운드 비용(API 환산) |
+|---|---|---|---|---|
+| codex ×3 | NO-GO ×3 | regression P2/P2/P1+P2 | 0/6 | ~$0.6 |
+| claude ×3 | **GO ×3** | 0 / 1 / 2, 전부 non_regression | 0/6 | $16~23 |
+
+- GT 회수는 두 엔진 합집합에서도 0. claude 가 낸 3건은 codex D2·D3 와 같은 결함(앵커 누락·캐럿 인용)이고
+  분류만 `regression` ↔ `non_regression` 으로 갈려 verdict 가 반대로 나왔다. 코드로 확인된 P1(Navigation.tsx
+  거짓 전제)은 claude 0/3, codex 2/3.
+- 따라서 **엔진 교체는 misjudged 의 처방이 아니다.** 남는 후보는 같은 엔진 다중 샘플 합집합(`resample.md`).
+  `engines.md` 의 「deep 을 codex/claude 로 갈라 맹점 분산」은 이 PR 에서 지지되지 않았다(1 PR 한계).
+- 부수: claude 엔진 raw 는 최종 result 1줄뿐이라 탐색·판단 과정이 남지 않는다. `--output-format stream-json`
+  으로 남기는 것이 후속 과제. 전문: `~/.red-team/eval/escape/q2/RESULT.md`.
+
 ## fix-flow 연결 — 완료 (2026-07-29)
 
 `fix-flow/SKILL.md` 에 두 단계를 넣었다. 루프 로직·P1/P2 처리·수렴 규칙은 red-team 에만 있고

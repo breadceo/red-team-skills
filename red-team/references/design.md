@@ -343,9 +343,19 @@ arm B 와 같은 조건). 판정 기준은 **라운드를 돌리기 전에** 적
 | 보강 후 D3 | NO-GO | **P1 ×1** + P2 ×1 | — | 0/6 |
 
 **(1) GT 회수 0/6 — 3샘플 합집합에서도 0.** 봉인을 걷고 보강된 프롬프트로 세 번 돌려도 원래
-탈출한 6건은 나오지 않았다. 세 샘플의 finding 이 전부 `Navigation.tsx` 와 앵커 인용에 몰렸고
-GT 가 있는 `useSendbirdAuthentication.ts`·`GroupChannelMessageEmpty.tsx` 는 건드리지 않았다 —
-원인이 프롬프트가 아니라 **모델이 그 코드 영역을 탐색하지 않는 것**일 가능성이 크다.
+탈출한 6건은 나오지 않았다.
+
+**원인은 「탐색하지 않음」이 아니다.** 처음에는 세 샘플의 finding 이 `Navigation.tsx` 에 몰린
+것을 보고 모델이 GT 영역을 안 본다고 적었으나, **raw 리뷰어 출력(ACP JSON-RPC 스트림)을 열어
+확인하니 틀렸다.** 리뷰어는 GT 파일을 전부 읽었다 — arm D3 의 `b2` 기준
+`AuthenticationScreen.tsx` 38회 · `useSendbirdAuthentication.ts` 26회 ·
+`GroupChannelMessageEmpty.tsx` 16회 언급이고, 그러고도 findings 는 0 이었다. 원본 `code-28` 의
+`b2` 도 같다(56 · 43 · 22회, findings 0). **「보지 않았다」가 아니라 「보고도 내지 않았다」** 다.
+
+무엇이 억제하는지는 아직 모른다. raw 의 `agent_thought_chunk`·`agent_message_chunk` 에 그
+판단이 남아 있으므로 거기서 갈라야 한다 — 후보는 `_common.md` 의 억제 규칙(「확인하지 못하면
+지적하지 않는다」·「취향은 배제」), confidence 임계, P2 물량에 예산을 쓰는 주의 분산이다.
+보존한 raw: `~/.red-team/eval/escape/armD-raw/`.
 
 **(2) `b2` 발화는 재현되지 않았다 (1/3).** D1 에서 `b2-interaction` 이 (그 이전 6라운드 침묵을
 깨고) 발화해 issue #61 의 효과로 읽힐 뻔했으나, D2·D3 에서 다시 침묵했다. 사전 기준대로

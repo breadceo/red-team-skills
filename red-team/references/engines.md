@@ -130,5 +130,9 @@ claude(또는 codex) 사용량이 다 떨어졌으면 축별 설정을 건드리
 ## 리뷰어를 읽기 전용으로 묶는 플래그
 
 러너가 엔진별로 붙인다(진실은 `scripts/run_round.py`) — codex 는
-`--non-interactive-permissions deny`, claude 는 `--allowedTools Read,Grep,Glob,Bash`.
-리뷰어가 코드를 고치지 못하는 것이 이 스킬의 전제이므로 이 플래그를 빼고 돌리지 않는다.
+`--approve-reads --non-interactive-permissions deny`와 프로세스별
+`CODEX_CONFIG={"sandbox_mode":"read-only","approval_policy":"never",...}`,
+claude 는 `--allowedTools Read,Grep,Glob,Bash`를 쓴다. Codex 설정은 호출 셸의
+`CODEX_CONFIG`를 상속하지 않고 effort만 추가하므로, 사용자 설정이 리뷰어의 쓰기·승인
+경계를 완화할 수 없다. 리뷰어가 코드를 고치지 못하는 것이 이 스킬의 전제이므로 이 경계를
+빼고 돌리지 않는다.

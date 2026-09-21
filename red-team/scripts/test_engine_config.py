@@ -128,7 +128,7 @@ def main():
         assert "대비비 계산" in s and "[code 게이트]" in s and "[plan 게이트]" in s, s
         rr.set_assignment("b3-visibility=")
 
-        # argv: codex 는 acpx 를 앞세우고 effort 를 CODEX_CONFIG env 로 준다
+        # argv: codex 는 acpx 를 앞세우고 read-only 설정과 effort 를 CODEX_CONFIG env 로 준다
         # codex_home 설정은 Codex 리뷰어에만 전달한다. 없으면 호출 환경의 CODEX_HOME도
         # 넘기지 않아 기본 ~/.codex를 쓴다.
         os.environ["CODEX_HOME"] = "/caller-should-not-leak"
@@ -140,6 +140,13 @@ def main():
         assert "CODEX_HOME" not in default_env, default_env
         del os.environ["CODEX_HOME"]
 
+        # Codex 리뷰어는 읽기 승인만 자동화하고, inherited CODEX_CONFIG가 쓰기/승인을
+        # 되살리지 못하도록 프로세스별 read-only 설정으로 덮어쓴다.
+        os.environ["CODEX_CONFIG"] = json.dumps({
+            "sandbox_mode": "workspace-write",
+            "approval_policy": "on-request",
+            "model_reasoning_effort": "low",
+        })
         codex, env, codex_stdin = rr.engine_cmd("codex", "PROMPT", "/repo", "gpt-5.6-sol", "high")
         # 프롬프트는 argv 가 아니라 stdin 으로 간다 — argv 로 주면 acpx/codex 가 SIGKILL 로 죽는다
         assert codex[-4:] == ["codex", "exec", "--file", "-"], codex
@@ -148,9 +155,20 @@ def main():
         assert "--cwd" in codex and "/repo" in codex
         assert "--model" in codex and "gpt-5.6-sol" in codex, codex
         assert codex[codex.index("--format") + 1] == "json", codex  # 토큰 집계용 스트림
-        assert json.loads(env["CODEX_CONFIG"]) == {"model_reasoning_effort": "high"}, env
+        assert "--approve-all" not in codex, codex
+        assert "--approve-reads" in codex, codex
+        assert codex[codex.index("--non-interactive-permissions") + 1] == "deny", codex
+        assert json.loads(env["CODEX_CONFIG"]) == {
+            "sandbox_mode": "read-only",
+            "approval_policy": "never",
+            "model_reasoning_effort": "high",
+        }, env
         _, env0, _ = rr.engine_cmd("codex", "P", "/repo", None, None)
-        assert "CODEX_CONFIG" not in env0 or env0["CODEX_CONFIG"] == os.environ.get("CODEX_CONFIG")
+        assert json.loads(env0["CODEX_CONFIG"]) == {
+            "sandbox_mode": "read-only",
+            "approval_policy": "never",
+        }, env0
+        del os.environ["CODEX_CONFIG"]
 
         # claude 는 프롬프트를 -p 로, effort 를 --effort 로 준다 (stdin 은 쓰지 않는다)
         claude, _, claude_stdin = rr.engine_cmd("claude", "PROMPT", "/repo", "opus", "high")
@@ -680,6 +698,32 @@ def main():
                 raise AssertionError(f"거절해야 한다: {argv}")
             except SystemExit as e:
                 assert e.code != 0, argv
+
+        # timeout 도중 subprocess 가 bytes stdout/stderr 를 남겨도 raw 로그를 보존하고,
+        # 부분 출력으로 성공/GO 를 위조하지 않는다.
+        timeout_out = Path(td) / "e2e-timeout"
+        timeout_out.mkdir()
+        original_engine_cmd = rr.engine_cmd
+        original_subprocess_run = rr.subprocess.run
+        rr.engine_cmd = lambda e, p, c, m, ef: (["fake-codex"], dict(os.environ), p)
+
+        def raise_timeout(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired("fake-codex", 1,
+                                            output=b"partial stdout\n", stderr=b"partial stderr\n")
+
+        rr.subprocess.run = raise_timeout
+        try:
+            _reviewer, timeout_parsed, _lost, _tokens = rr.run(
+                "a-code", td, timeout_out, "## 리뷰 대상\n", 1,
+                ("codex", "gpt-5.6-luna", "medium", "cheap"))
+        finally:
+            rr.engine_cmd = original_engine_cmd
+            rr.subprocess.run = original_subprocess_run
+        timeout_raw = (timeout_out / "a-code.txt").read_text()
+        assert "[TIMEOUT after 1s]" in timeout_raw
+        assert "partial stdout" in timeout_raw and "partial stderr" in timeout_raw, timeout_raw
+        assert timeout_parsed is None, timeout_parsed
+        assert (timeout_out / "a-code.json").read_text() == "null"
 
     print("ok")
 

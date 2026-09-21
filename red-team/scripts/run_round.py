@@ -139,7 +139,7 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
 
     stdin 이 None 이 아니면 그 문자열을 자식 stdin 으로 흘려보낸다(프롬프트가 argv 에 없다)."""
     if engine == "codex":
-        # effort 는 CODEX_CONFIG env 로 준다 — acpx 는 codex 의 `-c` 를 노출하지 않지만
+        # Codex 설정은 CODEX_CONFIG env 로 준다 — acpx 는 codex 의 `-c` 를 노출하지 않지만
         # codex-acp 어댑터가 이 env 의 JSON 을 세션 config 에 병합한다(어댑터 README).
         # model 은 검증된 경로인 acpx --model 로 준다.
         # `--format json`(ACP JSON-RPC 스트림)은 토큰 사용량을 받기 위한 것이다 — parse_output 참고.
@@ -150,13 +150,17 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
         codex_home = load_cfg().get("codex_home")
         if isinstance(codex_home, str) and codex_home:
             env["CODEX_HOME"] = codex_home
+        # User config must not weaken a reviewer's boundary. Codex's own policy
+        # is read-only and never escalates; effort is the only requested override.
+        codex_config = {"sandbox_mode": "read-only", "approval_policy": "never"}
         if effort:
-            env["CODEX_CONFIG"] = json.dumps({"model_reasoning_effort": effort})
+            codex_config["model_reasoning_effort"] = effort
+        env["CODEX_CONFIG"] = json.dumps(codex_config)
         # 프롬프트는 argv 가 아니라 stdin 으로 준다. argv 로 주면 acpx/codex 가 SIGKILL 로
         # 죽는다 — 실측: ASCII 660B 통과, 한글 1.8KB·ASCII 5KB 사망(결정적). 리뷰 프롬프트는
         # 컨텍스트+diff 스냅샷까지 붙어 100KB 를 넘으므로 argv 경로는 항상 죽는 경로였다
         # (산출물 0바이트, 4회 재현). `codex exec --file -` 가 stdin 을 읽는다(acpx 0.11.2 확인).
-        return [ACPX, "--approve-all", "--non-interactive-permissions", "deny", "--cwd", cwd,
+        return [ACPX, "--approve-reads", "--non-interactive-permissions", "deny", "--cwd", cwd,
                 *(["--model", model] if model else []), "--format", "json",
                 "codex", "exec", "--file", "-"], env, prompt
     if engine == "claude":
@@ -1375,7 +1379,9 @@ def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
                            text=True, timeout=timeout, env=env, **stdio)
         stdout, raw = p.stdout, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
-        raw = f"[TIMEOUT after {timeout}s]\n" + (e.stdout or "") + (e.stderr or "")
+        partial_stdout = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        partial_stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        raw = f"[TIMEOUT after {timeout}s]\n" + partial_stdout + partial_stderr
     (out / f"{reviewer}.txt").write_text(raw)
     # 리뷰어가 대상 코드를 못 읽으면 findings 가 조용히 비어 GO 로 보인다.
     # 그 라운드를 정상 결과로 채점하면 틀린 결론이 나오므로 반드시 표면화한다.

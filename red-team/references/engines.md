@@ -50,16 +50,21 @@ claude -p "reply with exactly: ok"    # 'ok' 가 나오면 준비됨
 
 | 축 | tier | codex | claude | 성격 |
 |---|---|---|---|---|
-| `a-code` | deep | gpt-5.6-sol / high | opus / high | 회귀·논리구멍 — 복합 추론 |
-| `b2-interaction` | deep | gpt-5.6-sol / high | opus / high | 핸들러→데이터소스 다단계 추적 |
-| `b4-null-propagation` | mid | gpt-5.6-terra / high | sonnet / medium | 미묘하지만 범위가 좁다 |
-| `b1-state-matrix` | cheap | gpt-5.6-luna / medium | sonnet / medium | 표 채우기 전수, 체크리스트형 |
-| `b3-visibility` | cheap | gpt-5.6-luna / medium | sonnet / medium | 색·대비 계산, 기계적 |
-| `a-plan` | deep | gpt-5.6-sol / high | opus / high | 계획 결함은 여기서 잡는 게 가장 싸다 |
-| `b5-plan-ordering` | mid | gpt-5.6-terra / high | sonnet / medium | 계획의 순서·경합·외부 신호 보장 범위 |
+| `a-code` | deep | gpt-6.1-sol / high | opus / high | 회귀·논리구멍 — 복합 추론 |
+| `b2-interaction` | deep | gpt-6.1-sol / high | opus / high | 핸들러→데이터소스 다단계 추적 |
+| `b4-null-propagation` | mid | gpt-6-sol / high | sonnet / medium | 미묘하지만 범위가 좁다 |
+| `b1-state-matrix` | cheap | gpt-6-luna / medium | sonnet / medium | 표 채우기 전수, 체크리스트형 |
+| `b3-visibility` | cheap | gpt-6-luna / medium | sonnet / medium | 색·대비 계산, 기계적 |
+| `a-plan` | deep | gpt-6.1-sol / high | opus / high | 계획 결함은 여기서 잡는 게 가장 싸다 |
+| `b5-plan-ordering` | mid | gpt-6-sol / high | sonnet / medium | 계획의 순서·경합·외부 신호 보장 범위 |
 
 deep 축에 recall 우선 모델을 두는 근거와 두 엔진 분산의 의도는 `evidence.md`(축별 모델
 배정의 근거)에 있다. `--model`/`--effort` 는 전 리뷰어 강제 override 다(엔진별 비교 실측용).
+
+codex 리뷰어는 acpx 의 codex-acp 어댑터가 광고하는 모델만 쓸 수 있다. gpt-6 계열은
+`@agentclientprotocol/codex-acp@2.0.1` 이상이 필요하다 — 1.1.2 는 `Cannot apply --model
+"gpt-6.1-sol": the ACP agent did not advertise that model` 로 라운드가 죽는다(2026-09-30 실측).
+버전은 `~/.acpx/config.json` 의 `agents.codex.args` 에서 올린다.
 
 ## 엔진 설정 명령
 

@@ -112,12 +112,13 @@ DEFAULT_SPEC = {"tier": "deep", "prefer": None, "why": "커스텀 축 — 성격
 
 # tier → (model, effort). 결함 탐지(deep)는 recall 우선 — CodeRabbit 리뷰 벤치마크에서
 # Sol recall 69.7% vs Terra 52.5%, Sol 의 높은 FP 는 P1/P2 분류·사용자 게이트가 거른다.
-# mid 는 Terra 의 recall 약점을 effort=high 로 보완. claude 하위 티어는 sonnet/medium 통일(haiku 금지).
+# mid 는 한 세대 전 workhorse(gpt-6-sol)를 effort=high 로 — gpt-6 에는 Terra 가 없고 Astra 는
+# Sol 보다 위(frontier)라 mid 에 안 맞는다. claude 하위 티어는 sonnet/medium 통일(haiku 금지).
 TIERS = {
     "codex": {
-        "deep":  ("gpt-5.6-sol",   "high"),
-        "mid":   ("gpt-5.6-terra", "high"),
-        "cheap": ("gpt-5.6-luna",  "medium"),
+        "deep":  ("gpt-6.1-sol",   "high"),
+        "mid":   ("gpt-6-sol",     "high"),
+        "cheap": ("gpt-6-luna",    "medium"),
     },
     "claude": {
         "deep":  ("opus",   "high"),

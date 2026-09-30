@@ -72,15 +72,15 @@ def main():
 
         # 축별 배정: prefer 는 가용 목록에 있을 때만 존중되고, 없으면 첫 엔진으로 폴백
         both = ["codex", "claude"]
-        assert rr.assign("a-code", "code", both, None, None) == ("codex", "gpt-5.6-sol", "high", "deep")
+        assert rr.assign("a-code", "code", both, None, None) == ("codex", "gpt-6.1-sol", "high", "deep")
         assert rr.assign("b2-interaction", "code", both, None, None) == ("claude", "opus", "high", "deep")
         assert rr.assign("b4-null-propagation", "code", both, None, None) == ("claude", "sonnet", "medium", "mid")
-        assert rr.assign("b1-state-matrix", "code", both, None, None) == ("codex", "gpt-5.6-luna", "medium", "cheap")
+        assert rr.assign("b1-state-matrix", "code", both, None, None) == ("codex", "gpt-6-luna", "medium", "cheap")
         assert rr.assign("b3-visibility", "code", both, None, None) == ("claude", "sonnet", "medium", "cheap")
-        assert rr.assign("a-plan", "plan", both, None, None) == ("codex", "gpt-5.6-sol", "high", "deep")
+        assert rr.assign("a-plan", "plan", both, None, None) == ("codex", "gpt-6.1-sol", "high", "deep")
         # codex 단독 사용자 — claude prefer 축이 codex tier 로 폴백한다
-        assert rr.assign("b2-interaction", "code", ["codex"], None, None) == ("codex", "gpt-5.6-sol", "high", "deep")
-        assert rr.assign("b3-visibility", "code", ["codex"], None, None) == ("codex", "gpt-5.6-luna", "medium", "cheap")
+        assert rr.assign("b2-interaction", "code", ["codex"], None, None) == ("codex", "gpt-6.1-sol", "high", "deep")
+        assert rr.assign("b3-visibility", "code", ["codex"], None, None) == ("codex", "gpt-6-luna", "medium", "cheap")
         # GATES 밖 커스텀 축은 안전한 쪽(deep)으로
         assert rr.assign("custom-axis", "code", both, None, None)[3] == "deep"
         # CLI override 는 전 리뷰어 강제
@@ -96,10 +96,10 @@ def main():
         # 부분 오버라이드: engine 만 바꾸면 그 엔진의 tier 기본 model/effort 로 재계산
         ov2 = {"b2-interaction": {"engine": "codex"}}
         assert rr.assign("b2-interaction", "code", both, None, None, ov2) == \
-            ("codex", "gpt-5.6-sol", "high", "deep")
+            ("codex", "gpt-6.1-sol", "high", "deep")
         # 가용 밖 엔진 오버라이드는 통째로 무시 — --set-engine 한 방 전환이 이겨야 한다
         assert rr.assign("b2-interaction", "code", ["codex"], None, None, ov) == \
-            ("codex", "gpt-5.6-sol", "high", "deep")
+            ("codex", "gpt-6.1-sol", "high", "deep")
         # CLI --model/--effort 는 config 오버라이드보다도 세다
         assert rr.assign("b2-interaction", "code", both, "opus", "max", ov)[1:3] == ("opus", "max")
 
@@ -457,7 +457,7 @@ def main():
         assert set(rj["assignments"]) == set(rj["reviewers"]) and len(rj["reviewers"]) == 5
         a = rj["assignments"]["a-code"]
         assert (a["engine"], a["model"], a["effort"], a["tier"]) == \
-            ("codex", "gpt-5.6-sol", "high", "deep"), rj["assignments"]
+            ("codex", "gpt-6.1-sol", "high", "deep"), rj["assignments"]
         assert a["tokens"] is None  # 가짜 엔진은 래핑이 없으니 토큰 집계가 빠진다 (폴백 경로)
         assert rj["assignments"]["b3-visibility"]["engine"] == "claude"
         assert all(v == "GO" for v in rj["reviewers"].values()), rj["reviewers"]
@@ -715,7 +715,7 @@ def main():
         try:
             _reviewer, timeout_parsed, _lost, _tokens = rr.run(
                 "a-code", td, timeout_out, "## 리뷰 대상\n", 1,
-                ("codex", "gpt-5.6-luna", "medium", "cheap"))
+                ("codex", "gpt-6-luna", "medium", "cheap"))
         finally:
             rr.engine_cmd = original_engine_cmd
             rr.subprocess.run = original_subprocess_run

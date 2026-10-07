@@ -195,7 +195,8 @@ python3 "<pr-triage-skill>/scripts/post_replies.py" \
   --repo owner/name --pr N --replies "<replies.json>" [--confirm]
 ```
 
-`source: inline` 은 그 스레드 답글로, top-level·review 는 새 코멘트로. 봇 판정에 걸리는
+`source: inline` 은 그 스레드 답글로, top-level·review 는 새 코멘트로(fetch 의
+`mention`·`url` 복사 필수 — 지적자 @멘션). 봇 판정에 걸리는
 본문은 게시 전 검증이 거부한다. 봇 코멘트에 회신할 때의 선택 필드(`fps`·`reaction`)는
 `references/edge-cases.md`(8절 선택 필드). 게시 후 **커서를 갱신한다** — 안 하면 다음
 라운드가 같은 코멘트를 또 처리한다:

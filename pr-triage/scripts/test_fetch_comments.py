@@ -224,6 +224,9 @@ assert {x["fp"]: x["fp_seq"] for x in c107["fps"]} == {"dup-fp": 1}, \
 assert len(c107["fps"]) == 1, "중복 마커가 dedup 되지 않아 fps 에 2번 들어갔다"
 # 내 회신은 파싱하지 않는다 (인용 마커 제외)
 assert c103["is_my_reply"] and c103["fps"] == [], "내 회신 인용이 fps 로 파싱됐다"
+# mention — 사람만 부른다. 봇(fp 마커)·나는 None
+assert by_id[104]["mention"] == "reviewer2", "사람 지적자가 mention 대상이 아니다"
+assert c101["mention"] is None and c103["mention"] is None, "봇·나를 mention 하려 한다"
 # diff 플래그 — inline 한정, null 규칙 (line null / side LEFT / patch 부재)
 assert c101["in_diff"] is True and c101["line_in_hunk"] is True
 assert c102["in_diff"] is False and c102["line_in_hunk"] is None, "line=null 이 null 이 아니다"

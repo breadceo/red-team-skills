@@ -564,6 +564,11 @@ def main():
         # 내 응답 = 내 계정이고 봇 마커가 없는 것. 봇이 내 계정으로 올리는 경우를 가른다.
         it["is_my_reply"] = (it["author"] == me and not bot)
         it["is_incoming"] = not it["is_my_reply"]
+        # top-level·review 회신은 스레드 답글이 아니라 새 코멘트라 지적자에게 알림이 안 간다 —
+        # post_replies 가 이 값을 @mention 으로 붙인다. 봇·나(hermes 는 내 계정으로 올린다)·
+        # GitHub App(`[bot]`)은 부를 사람이 없으므로 None.
+        it["mention"] = None if (bot or it["author"] == me or it["author"].endswith("[bot]")) \
+            else it["author"]
 
     # 내 마지막 응답 이후의 incoming 은 확실히 미응답이다.
     # 그 앞쪽은 부분적으로만 답했을 수 있어 모델이 본문을 읽고 판정한다.

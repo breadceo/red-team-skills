@@ -382,7 +382,7 @@ def handoff_anchor(body: str):
 
     fp_markers 와 같은 엄격함을 쓴다: 코드펜스·blockquote 안의 앵커는 **인용**이므로 세지
     않는다. 인계 코멘트 본문은 프롬프트 본체를 접은 블록의 코드펜스에 두고 앵커는 그 밖
-    첫 줄에 두므로(작업 C 절차 1), 펜스를 걷어내도 앵커는 남는다.
+    여러 줄 HTML 주석 안의 제 줄에 두므로(작업 C 절차 1), 펜스를 걷어내도 앵커는 남는다.
     """
     kept = "\n".join(l for l in FENCE_RE.sub("", body).splitlines()
                      if not l.startswith(">"))

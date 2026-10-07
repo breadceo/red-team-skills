@@ -429,6 +429,11 @@ assert fc.handoff_anchor("red-team handoff: o/r/feature/x\n\n본문") == "o/r/fe
 assert fc.handoff_anchor("> red-team handoff: o/r/x") is None, "blockquote 인용을 앵커로 오인"
 assert fc.handoff_anchor("```\nred-team handoff: o/r/x\n```") is None, "펜스 인용을 앵커로 오인"
 assert fc.handoff_anchor("앵커 없는 코멘트") is None
+# 사람에게 숨긴 앵커(작업 C 절차 1): 여러 줄 주석 안의 제 줄은 매치, 봇 아님 / 한 줄 주석은 불일치
+HIDDEN = "<!--\nred-team handoff: o/r/feature/x\n-->\n## 이어받는 분께 — T-1 판단 기록\n"
+assert fc.handoff_anchor(HIDDEN) == "o/r/feature/x", "여러 줄 주석 안 앵커 미매치"
+assert not fc.is_bot(HIDDEN, "🤖"), "숨긴 앵커 주석을 봇 서명으로 오판"
+assert fc.handoff_anchor("<!-- red-team handoff: o/r/x -->") is None, "한 줄 주석 앵커가 매치됐다"
 
 HANDOFF_BODY = (
     "red-team handoff: o/r/feature/x\n\n"

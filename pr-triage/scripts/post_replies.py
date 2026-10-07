@@ -12,11 +12,17 @@ replies.json 형식:
                                 #   (객체 배열을 통째로 붙이면 검증에서 거부된다).
                                 #   단수 fp 필드는 없다 — 마커 2개짜리 코멘트에 답하는
                                 #   회신은 두 fp 를 모두 다룬다.
-    "reaction": "-1"},          # 선택 — 원 코멘트에 붙일 리액션("-1"|"+1").
-   ...]                         #   fps 가 비어 있지 않은 항목에만 허용된다.
+    "reaction": "-1",           # 선택 — 원 코멘트에 붙일 리액션("-1"|"+1").
+                                #   fps 가 비어 있지 않은 항목에만 허용된다.
+    "mention": "login",         # top-level·review 필수(null 허용) — fetch 출력의 mention 복사.
+    "url": "<원 코멘트 url>"},  # 선택 — fetch 출력의 url. mention 줄에 링크로 붙는다.
+   ...]
 
 `source` 가 `inline` 이면 그 코멘트 스레드에 답글로 붙고, 그 외(top-level·review)는
 PR 에 새 코멘트로 올린다 — top-level 코멘트와 리뷰 본문에는 스레드 답글 API 가 없다.
+새 코멘트는 지적자에게 알림이 안 가고 어느 지적의 답인지도 안 보이므로, `mention` 이 있으면
+본문 첫 줄에 `@mention` 과 원 코멘트 링크를 붙인다. 필드 누락은 게시 전에 거부한다 —
+빠뜨린 채 올라가면 조용히 mention 없는 회신이 된다.
 
 스크립트로 만든 이유는 스레드를 잘못 짚는 것을 막기 위해서다. 잘못된 반박이나 엉뚱한 위치의
 답글은 리뷰어의 신뢰를 깎으므로, 되돌릴 수 없는 쓰기는 한 곳에서만 한다.
@@ -61,6 +67,13 @@ def validate(items, marker):
             sys.exit(f"[{i}] inline 회신은 target_id 가 필수다")
         if it.get("reaction") and not it.get("target_id"):
             sys.exit(f"[{i}] reaction 은 target_id 가 필수다")
+        if it.get("source") != "inline":
+            if "mention" not in it:
+                sys.exit(f"[{i}] top-level·review 회신은 mention 필드가 필수다 — fetch 출력의 "
+                         "mention 을 그대로 복사한다(봇·나면 null)")
+            m = it["mention"]
+            if m is not None and (not isinstance(m, str) or not m.strip() or " " in m or "@" in m):
+                sys.exit(f"[{i}] mention 은 GitHub login 문자열(@ 없이) 또는 null 이다: {m!r}")
         if is_bot(body, marker):
             sys.exit(f"[{i}] 회신 본문이 봇 판정(is_bot)에 걸린다 — fp 마커·선두 {marker}·"
                      "봇 서명 주석을 본문에 넣지 않는다(fps 는 replies.json 필드로만 나른다). "
@@ -85,6 +98,15 @@ def validate(items, marker):
                      "존재하므로 이 필수 필드 게이트가 사람 리뷰어 코멘트 리액션을 막는다.")
         if it.get("source") == "review":
             sys.exit(f"[{i}] review 본문에는 리액션 API 가 없다(404) — reaction 을 뺀다.")
+
+
+def with_mention(item):
+    """top-level·review 회신 본문 앞에 `@지적자 원 코멘트 링크` 줄을 붙인다."""
+    m = item.get("mention")
+    if item.get("source") == "inline" or not m or f"@{m}" in item["body"]:
+        return item["body"]
+    link = f" ([원 코멘트]({item['url']}))" if item.get("url") else ""
+    return f"@{m}{link}\n\n{item['body']}"
 
 
 def post(repo, pr, item, confirm):
@@ -137,6 +159,8 @@ def main():
     cwd = a.cwd or os.getcwd()
     items = json.loads(Path(a.replies).read_text())
     validate(items, a.bot_marker)
+    for it in items:
+        it["body"] = with_mention(it)
     verified_repo_id = None
     claim_before = claim_after = None
     posted, react_fails, id_missing = [], [], []

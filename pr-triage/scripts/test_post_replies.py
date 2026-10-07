@@ -48,7 +48,7 @@ assert "target_id" in msg, "reaction target_id 게이트 메시지가 아니다"
 # ── 2) reaction 게이트 ─────────────────────────────────────────────────────
 msg = rejected([{**OK_ITEM, "reaction": "-1"}], "fps 없는 reaction")
 assert "fps" in msg, "필수 필드 게이트 메시지가 아니다"
-msg = rejected([{**OK_ITEM, "source": "review", "fps": [FP], "reaction": "-1"}],
+msg = rejected([{**OK_ITEM, "source": "review", "mention": None, "fps": [FP], "reaction": "-1"}],
                "review + reaction")
 assert "404" in msg
 rejected([{**OK_ITEM, "fps": [FP], "reaction": "0"}], "허용 밖 reaction 값")
@@ -152,7 +152,7 @@ FAIL_REACTION[0] = False
 
 # 5d) top-level 리액션 엔드포인트는 issues/comments 다
 CALLS.clear()
-run_main([{"target_id": 2, "source": "top-level",
+run_main([{"target_id": 2, "source": "top-level", "mention": None,
            "body": "지적이 맞습니다", "fps": ["x"], "reaction": "+1"}], "--confirm")
 assert [c for c in CALLS if c[4].endswith("/reactions")][0][4] == \
     "repos/o/r/issues/comments/2/reactions", "issue 리액션 엔드포인트가 틀렸다"
@@ -259,7 +259,23 @@ assert "survivor-fp" in st.get("fp_replies", {}), \
     "예외 이전 게시분이 finally 에서 기록되지 않았다"
 assert "never-fp" not in st.get("fp_replies", {}), "예외가 난 항목까지 기록됐다"
 
+# 5i) top-level·review mention — 필드 누락 거부, 사람이면 첫 줄에 @+링크, null·inline 은 그대로
+TOP = {"target_id": 3, "source": "top-level", "body": "지적이 맞습니다"}
+assert "mention 필드가 필수" in rejected([TOP], "🤖"), "mention 누락이 거부되지 않았다"
+assert "GitHub login" in rejected([{**TOP, "mention": "@rev"}], "🤖"), "@ 붙은 mention 통과"
+ppr.validate([OK_ITEM], "🤖")                       # inline 은 mention 없어도 된다
+CALLS.clear()
+run_main([{**TOP, "mention": "rev", "url": "http://c/3"},
+          {**TOP, "mention": None},
+          {**TOP, "mention": "rev", "body": "@rev 이미 불렀습니다"},
+          {**OK_ITEM, "mention": "rev"}], "--confirm")
+bodies = [c[6][len("body="):] for c in CALLS]
+assert bodies[0] == "@rev ([원 코멘트](http://c/3))\n\n지적이 맞습니다", f"mention 줄이 틀렸다: {bodies[0]!r}"
+assert bodies[1] == "지적이 맞습니다", "mention=null 인데 본문이 바뀌었다"
+assert bodies[2] == "@rev 이미 불렀습니다", "이미 부른 지적자를 또 불렀다"
+assert not bodies[3].startswith("@"), "inline 스레드 답글에 mention 을 붙였다"
+
 print("PASS — is_bot 3분기 거부·인용 통과, target_id 게이트, reaction 필수 필드 게이트·"
       "review 404·값 검증, fps 타입 게이트(null 허용)·fetch↔post parity, dry-run 표시, "
       "branch_dir 가드, 일괄 기록 keep-first·리액션 보류·id 없는 성공 경고·repo 불일치 거부·"
-      "예외 시 finally 기록, 엔드포인트 분기 모두 정상")
+      "예외 시 finally 기록, 엔드포인트 분기, top-level·review mention 모두 정상")

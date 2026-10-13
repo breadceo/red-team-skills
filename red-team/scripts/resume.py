@@ -204,7 +204,10 @@ PLAN_DOC_RE = re.compile(r"^plan.*\.(md|markdown)$", re.I)  # zax 는 PLAN.md, �
 
 
 def _origin_paths(rdir: Path) -> set[str]:
-    """한 라운드의 regression P1 원인 경로 집합(저장소 루트 기준 상대 경로로 정규화).
+    """한 라운드의 regression(P1·P2) 원인 경로 집합(저장소 루트 기준 상대 경로로 정규화).
+
+    P2 도 센다 — P1 만 보면 P2 라운드 하나가 연속을 끊어 같은 파일 5라운드(PH-2801
+    code-1~5, 전부 같은 훅의 경합)에서도 경고가 안 떴다. 심각도는 반영 난이도지 출처가 아니다.
 
     경로 후보는 게이트별로 다르다 — 계획 게이트 finding 의 `file` 은 구조적으로
     계획·컨텍스트 문서(plan-*.md, redteam-context.md 등)를 가리키므로 `origin_file` 만
@@ -220,7 +223,7 @@ def _origin_paths(rdir: Path) -> set[str]:
     plan_gate = rdir.name.startswith("plan-")
     paths = set()
     for f in rj.get("findings", []):
-        if f.get("classification") != "regression" or f.get("severity") != "P1":
+        if f.get("classification") != "regression":
             continue
         cands = (f.get("origin_file"),) if plan_gate else (f.get("origin_file"), f.get("file"))
         for v in cands:
@@ -241,7 +244,7 @@ def _origin_paths(rdir: Path) -> set[str]:
 
 
 def same_origin_p1(base: Path, gate: str) -> list[str]:
-    """같은 게이트 최근 3라운드에서 P1 이 전부 같은 파일이면 그 경로들 — 구조적 결합 신호.
+    """같은 게이트 최근 3라운드에서 regression 이 전부 같은 파일이면 그 경로들 — 구조적 결합 신호.
 
     비차단 경고 전용이라 어떤 실패도 resume 를 죽이면 안 된다: round.json 은 원자적
     쓰기가 아니라 잘린 파일이 남을 수 있고(UnicodeDecodeError 포함 — ValueError 서브클래스),
@@ -266,7 +269,7 @@ def same_origin_p1(base: Path, gate: str) -> list[str]:
         except (OSError, ValueError, TypeError, AttributeError):
             return []  # 그 라운드를 판정에 쓸 수 없다 — 경고만 생략, resume 는 계속
         if not s:
-            return []  # P1 없는 라운드가 끼면 '연속' 이 아니다
+            return []  # regression 없는 라운드가 끼면 '연속' 이 아니다
         sets.append(s)
     return sorted(set.intersection(*sets))
 
@@ -483,7 +486,7 @@ def main():
     if counts:
         print(f"counts   : {counts}")
     if (so := same_origin_p1(base, gate)):
-        print(f"⚠ P1 이 3라운드 연속 같은 파일에서 나온다: {', '.join(so)} — 구조적 결합 신호다.\n"
+        print(f"⚠ regression 이 3라운드 연속 같은 파일에서 나온다: {', '.join(so)} — 구조적 결합 신호다.\n"
               f"  표면을 더 고치지 말고 SKILL.md 루프 절의 same-origin P1 항목을 본다"
               f"(어댑터 격리, 또는 생존성 7·8행 재심 → 중단/피벗).")
     if not ctx_path.exists():

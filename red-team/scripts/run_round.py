@@ -796,6 +796,32 @@ def lean_reviewers(gate: str, cwd: str) -> tuple[list[str], str]:
     return sel, f"core + 직전({prev[2].parent.name})에서 regression 을 낸 축"
 
 
+def library_facts_section(cwd: str, gate: str) -> str:
+    """이 게이트의 이전 라운드들이 round.json 에 남긴 `library_facts` 합집합.
+
+    리뷰어가 매 라운드 같은 라이브러리 내부(sendbird 등)를 다시 뒤진다 — GO 라운드에서도
+    node_modules 13회(PH-2801 code-6 실측). findings 의 evidence 는 결함이 없으면 비므로
+    확인한 사실을 별도 필드로 받아 다음 라운드에 넘긴다. 순서는 라운드 번호, 중복 제거."""
+    facts: list[str] = []
+    for d in sorted(branch_dir(cwd).glob(f"{gate}-*"),
+                    key=lambda d: int(d.name.rsplit("-", 1)[1]) if d.name.rsplit("-", 1)[1].isdigit() else -1):
+        rj = d / "round.json"
+        if not rj.exists():
+            continue
+        try:
+            for x in json.loads(rj.read_text()).get("library_facts", []):
+                if isinstance(x, str) and x.strip() and x.strip() not in facts:
+                    facts.append(x.strip())
+        except (ValueError, OSError):
+            continue
+    if not facts:
+        return ""
+    return ("\n\n## 확인된 라이브러리 동작 (자동 이월 — 이전 라운드 리뷰어가 node_modules 에서 확인)\n\n"
+            "아래는 이미 파일을 열어 확인한 사실이다. 같은 것을 다시 읽지 않는다 — 패키지 버전이 "
+            "diff 에서 바뀌었거나 사실이 이번 코드와 모순될 때만 재확인한다.\n\n"
+            + "\n".join(f"- {x}" for x in facts) + "\n")
+
+
 DIFF_CAP = 200_000  # chars — 넘으면 프롬프트에 첨부하지 않는다 (프롬프트가 터진다)
 
 
@@ -811,11 +837,42 @@ def diff_snapshot(cwd: str, base_ref: str | None) -> str:
         return ""
     status = git(cwd, "status", "--short")
     label = f"`git diff {base_ref}...HEAD`" if base_ref else "`git diff HEAD` (작업 트리)"
-    return (f"\n\n## Diff 스냅샷 (자동 생성 — 라운드 시작 시점, {label})\n\n"
+    snap = (f"\n\n## Diff 스냅샷 (자동 생성 — 라운드 시작 시점, {label})\n\n"
             "리뷰어마다 같은 diff 를 다시 뜨는 탐색을 없애기 위해 러너가 첨부했다. "
             "탐색은 이걸로 시작하되, findings 의 근거는 파일을 직접 열어 재확인한다.\n\n"
             f"```diff\n{body}\n```\n"
             + (f"\n### git status --short\n\n```\n{status}\n```\n" if status else ""))
+    return snap + changed_files_section(cwd, base_ref, DIFF_CAP - len(snap))
+
+
+FILE_CAP = 40_000  # chars/file — 더 크면 전문 대신 "직접 연다" 로 둔다
+
+
+def changed_files_section(cwd: str, base_ref: str | None, budget: int) -> str:
+    """변경된 파일의 작업 트리 전문. deep 리뷰어가 라운드마다 같은 파일을 sed/cat 으로
+    다시 여는 탐색 턴(PH-2801 실측: 호출 30~53회 중 절반)을 러너가 한 번 읽는 것으로 대체한다.
+    예산(budget)을 넘기면 그 파일부터 생략한다 — 프롬프트가 터지는 것보다 탐색 한 턴이 싸다."""
+    names = git(cwd, "diff", "--name-only", f"{base_ref}...HEAD") if base_ref \
+        else git(cwd, "diff", "--name-only", "HEAD")
+    parts, used = [], 0
+    for name in names.splitlines():
+        f = Path(cwd) / name
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        if len(text) > FILE_CAP or used + len(text) > budget:
+            parts.append(f"### {name}\n\n(전문 생략 — {len(text)//1000}K자, 직접 연다)\n")
+            continue
+        used += len(text)
+        parts.append(f"### {name}\n\n```\n{text}\n```\n")
+    if not parts:
+        return ""
+    return ("\n## 변경 파일 전문 (자동 생성 — 작업 트리, 라운드 시작 시점)\n\n"
+            "diff 에 걸린 파일의 현재 전문이다. 이 파일들은 다시 열지 않아도 된다 — "
+            "탐색은 여기 없는 호출부·소비처로 한정한다.\n\n" + "\n".join(parts))
 
 
 ZB_TASK_HOME = Path(os.environ.get("ZB_TASK_HOME", Path.home() / ".zb-task"))
@@ -1365,6 +1422,20 @@ def count_access_errors(raw: str, cwd: str) -> int:
                and re.search(root, line))
 
 
+def warm_codex_acp() -> None:
+    """acpx 가 리뷰어마다 `npx -y @agentclientprotocol/codex-acp@<ver>` 를 띄운다 — 캐시가 비어
+    있으면 N 개가 동시에 설치하다 `~/.npm/_npx` ENOTEMPTY 로 4/5 가 30초 안에 죽고, 생존자 완주
+    (8분) 뒤에야 재실행된다(PH-2801 code-1 실측, 라운드 9분 손실). fan-out 전에 같은 명령을
+    한 번 직렬로 띄워 캐시를 채운다. `--version` 은 설치만 하고 1초에 끝난다(stdin EOF·--help 는
+    교착, 실측). 실패는 무시한다 — 진짜 실패는 리뷰어 실행이 다시 드러낸다."""
+    try:
+        agent = json.loads((Path.home() / ".acpx" / "config.json").read_text())["agents"]["codex"]
+        subprocess.run([agent["command"], *agent.get("args", []), "--version"],
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    except Exception:
+        pass
+
+
 def run(reviewer: str, cwd: str, out: Path, context: str, timeout: int,
         assignment: tuple[str, str | None, str | None, str]):
     engine, model, effort, _tier = assignment
@@ -1657,6 +1728,7 @@ def main():
         ap.error("--diff-base 는 코드 게이트에서만 쓴다 — 계획 게이트의 리뷰 대상은 계획 문서다")
     prompt_context = context
     if a.gate == "code":
+        prompt_context += library_facts_section(a.cwd, a.gate)
         if a.merge_into:
             # top-up·재실행 리뷰어도 원 라운드와 같은 스냅샷을 봐야 한다 — 다시 뜨지 않는다
             if (dmd := out / "diff.md").exists():
@@ -1677,6 +1749,9 @@ def main():
     # superseded 로 밀어내고 새 결과 파일이 사라진다(테스트로 잡힌 실패다).
     prepared = merge_prepare(out, reviewers) if a.merge_into else None
 
+    if any(assignments[r][0] == "codex" for r in reviewers):
+        warm_codex_acp()
+
     with ThreadPoolExecutor(max_workers=len(reviewers)) as ex:
         results = list(ex.map(
             lambda r: run(r, a.cwd, out, prompt_context, a.timeout, assignments[r]), reviewers))
@@ -1692,8 +1767,12 @@ def main():
         # 같은 파일이 라운드마다 다른 경로로 남는다(resume.py same-origin 감지의 미탐 원인).
         "repo_root": git(a.cwd, "rev-parse", "--show-toplevel") or str(Path(a.cwd).resolve()),
         "engine": "+".join(engines),
-        "assignments": {}, "reviewers": {}, "findings": [], "access_errors": {}}
+        "assignments": {}, "reviewers": {}, "findings": [], "access_errors": {},
+        "library_facts": []}
     for r, parsed, lost, tokens in results:
+        for x in (parsed or {}).get("library_facts", []) or []:
+            if isinstance(x, str) and x.strip() and x.strip() not in merged.setdefault("library_facts", []):
+                merged["library_facts"].append(x.strip())
         e, m, ef, t = assignments[r]
         merged["reviewers"][r] = parsed.get("verdict") if parsed else "PARSE-FAIL"
         merged["assignments"][r] = {"engine": e, "model": m, "effort": ef, "tier": t,

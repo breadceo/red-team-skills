@@ -274,6 +274,26 @@ def same_origin_p1(base: Path, gate: str) -> list[str]:
     return sorted(set.intersection(*sets))
 
 
+TEST_PATH = re.compile(r"(^|/)(__tests__|tests?)/|\.(test|spec)\.[cm]?[jt]sx?(:|$)")
+SWEEP = ("- **테스트 고정 전수 열거(자동 추가 — 직전 라운드 regression 이 전부 테스트 파일).** "
+         "production↔테스트 배선 중 단언으로 고정되지 않은 다중 파일 불변식을 이번 라운드에 "
+         "**전부** 열거한다 — 한 건씩 내지 않는다. 이 라운드로 테스트 고정 계열을 닫는다.")
+
+
+def all_test_regressions(rdir: Path) -> bool:
+    """직전 라운드의 regression 이 1건 이상이고 **전부 테스트 파일**인가.
+
+    production 결함이 0 이 된 뒤 '불변식이 테스트에 고정 안 됨' 류 P2 가 라운드마다
+    한 건씩 나와 라운드를 두 개 더 태웠다(PH-2801 code-9·10). 그 지점에서 다음 라운드의
+    `특히 볼 것` 에 전수 열거를 지시하면 한 라운드로 닫힌다. 비차단이라 읽기 실패는 False."""
+    try:
+        fs = [f for f in json.loads((rdir / "round.json").read_text()).get("findings", [])
+              if isinstance(f, dict) and f.get("classification") == "regression"]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    return bool(fs) and all(TEST_PATH.search(str(f.get("file") or "")) for f in fs)
+
+
 def worktree_inventory(cwd: str | None) -> tuple[int, list[str]]:
     """작업 트리에서 **셀 수 있는 것만** 센다 — 변경 파일 수와 untracked 목록.
 
@@ -371,7 +391,8 @@ def collapse_per_round(secs):
     return keep, dropped
 
 
-def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = "") -> str:
+def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = "",
+                  sweep: str = "") -> str:
     """직전 컨텍스트에 직전 라운드의 결정을 **누적**한다.
 
     decisions.md 는 그 라운드 몫만 담는 규격이므로 두 절 모두 append 다.
@@ -401,6 +422,10 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = 
         elif h.startswith(PER_ROUND) and TODO not in b:
             # 라운드마다 다시 붙으면 마커가 쌓인다 — 이미 있으면 그대로 둔다
             secs[i] = (h, f"\n{TODO}\n" + b.lstrip("\n"))
+        if h.startswith("## 이번 라운드에서 특히 볼 것") and sweep and sweep not in secs[i][1]:
+            secs[i] = (h, secs[i][1].rstrip() + f"\n{sweep}\n")
+    if sweep and not any(h.startswith("## 이번 라운드에서 특히 볼 것") for h, _ in secs):
+        secs.append(("\n## 이번 라운드에서 특히 볼 것 (선택)", f"\n{TODO}\n{sweep}\n"))
     return render(secs)
 
 
@@ -574,8 +599,12 @@ def main():
                  if (m := re.fullmatch(rf"{a.next_gate}-(\d+)", d.name))), default=0)
     out = base / f"{a.next_gate}-{n}"
     changed, untracked = worktree_inventory(repo_cwd)
+    sweep = SWEEP if all_test_regressions(rd) else ""
+    if sweep:
+        print("ℹ 직전 라운드 regression 이 전부 테스트 파일이다 — 다음 컨텍스트 `특히 볼 것` 에 "
+              "테스트 고정 전수 열거를 자동으로 넣었다(한 건씩 받아 라운드를 더 태우지 않는다).")
     new_ctx = carry_forward(ctx_path.read_text(), dec, rd.name,
-                            inventory_banner(changed, untracked, n))
+                            inventory_banner(changed, untracked, n), sweep)
     if a.dry_run:
         # 읽기는 legacy(무변경 해석)여도 실제 실행은 이전 후 새 키 아래에 만든다 —
         # 표시 경로가 legacy 면 dry-run 확인과 실제 산출물 경로가 갈린다(code-4 P1).

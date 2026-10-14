@@ -249,6 +249,22 @@ dw = carry_forward(dupw, DEC1, "code-1")
 assert dw.count("## 이번 라운드에서 특히 볼 것") == 1, "중복 절이 남았다"
 assert "철 지난 지목" not in dw, "철 지난 기재가 남았다"
 
+# 테스트 고정 전수 열거 — 직전 regression 이 전부 테스트 파일일 때만 '특히 볼 것' 에 1회 주입
+from resume import all_test_regressions, SWEEP
+import json, tempfile
+sw = carry_forward(CTX, DEC1, "code-1", sweep=SWEEP)
+assert SWEEP in sw and sw.count("테스트 고정 전수 열거") == 1, "sweep 미주입"
+assert SWEEP in carry_forward(sw, DEC2, "code-2", sweep=SWEEP) and \
+    carry_forward(sw, DEC2, "code-2", sweep=SWEEP).count("테스트 고정 전수 열거") == 1, "sweep 중복"
+assert SWEEP not in carry_forward(CTX, DEC1, "code-1"), "sweep 없는데 주입"
+td = pathlib.Path(tempfile.mkdtemp())
+def _rj(fs): (td / "round.json").write_text(json.dumps({"findings": fs})); return td
+R = lambda f: {"classification": "regression", "severity": "P2", "file": f}
+assert all_test_regressions(_rj([R("apps/__tests__/a.test.tsx:5"), R("src/b.spec.ts")]))
+assert not all_test_regressions(_rj([R("apps/__tests__/a.test.tsx"), R("src/hook.tsx:3")])), "production 섞임"
+assert not all_test_regressions(_rj([])), "regression 없음"
+assert not all_test_regressions(_rj([{"classification": "pre-existing", "file": "x.test.ts"}]))
+
 print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
       "오래된 반영 블록 접기(diet)·멱등, 인벤토리 실측 배너, PARSE-FAIL partial 차단, "
       "'특히 볼 것' TODO 표시 모두 정상")

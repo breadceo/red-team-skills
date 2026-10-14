@@ -140,7 +140,12 @@ check("미닫힌 배열 안 조각 거부", extract_json(raw) is None)
 raw = '인라인 예시 {"a": 1} 와 배열 [1, 2] 뒤.\n' + json.dumps(VERDICT) + "\n"
 check("유효 인라인 JSON 뒤 판정 회수", extract_json(raw) == VERDICT)
 raw = '설명: "깨진 인용 {"verdict":"NO-GO","findings":[]}'
-check("미종결 인용 안 인라인 조각 거부 (code-12 실측)", extract_json(raw) is None)
+check("문서를 끝내는 인라인 판정은 회수 (PH-2801 code-7 b3 실측 — code-12 정책 완화)",
+      extract_json(raw) == {"verdict": "NO-GO", "findings": []})
+raw = '설명: "깨진 인용 {"verdict":"NO-GO","findings":[]} 뒤 서술'
+check("문서를 끝내지 않는 인라인 조각은 거부 (code-12)", extract_json(raw) is None)
+raw = '가시성 축만 보겠습니다. 대비를 계산하겠습니다.{\n  "verdict": "GO",\n  "findings": [],\n  "library_facts": []\n}'
+check("산문 끝 같은 줄에 붙은 판정 회수 (b3 원본 형태)", extract_json(raw)["verdict"] == "GO")
 raw = '설명: {\n{"verdict":"NO-GO","findings":[{"claim":"inner"}]}\n'
 check("인라인 미종결 컨테이너 안 줄 시작 조각 거부 (code-13)", extract_json(raw) is None)
 raw = "함수 {foo} 를 보라.\n" + json.dumps(VERDICT) + "\n"
@@ -181,8 +186,8 @@ t0 = time.monotonic()
 raw = "{}\n" * 50000 + json.dumps(VERDICT)
 check("연속 소객체(줄 단위) 뒤 판정 회수", extract_json(raw) == VERDICT)
 check("연속 소객체 — 비선형 폭증 없음 (<5s)", time.monotonic() - t0 < 5)
-check("연속 소객체(한 줄) — 인라인이라 미회수",
-      extract_json("{}" * 50000 + json.dumps(VERDICT)) is None)
+check("연속 소객체(한 줄) — 문서를 끝내는 판정은 회수",
+      extract_json("{}" * 50000 + json.dumps(VERDICT)) == VERDICT)
 # (d) `{` 없는 연속 배열 — opener 재검색이 선형이어야 한다 (code-7 P2)
 t0 = time.monotonic()
 check("연속 배열 — 죽지 않는다", extract_json("[]" * 160000) is None)

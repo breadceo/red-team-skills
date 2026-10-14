@@ -82,6 +82,16 @@ Codex 리뷰어만 별도 홈(인증·MCP 설정)을 쓰려면 `~/.red-team/conf
 `"codex_home": "/절대/경로"`를 둔다. 이 키가 없으면 red-team은 `CODEX_HOME`을 넘기지 않아
 Codex 기본 `~/.codex`를 쓴다. 대상 디렉터리는 미리 만들고 그 홈으로 `codex login`을 한 번 실행한다.
 
+별도 홈을 써도 Codex 는 `~/.agents/skills` 와 홈의 `skills/.system` 을 자동 탐색해 리뷰어가
+라운드마다 엉뚱한 SKILL.md 를 한 턴 읽는다(PH-2801 실측: `review-buddy/SKILL.md`).
+`features.skip_host_skill_discovery` 는 효과가 없었다(0.159.2 실측). 그 홈의 `config.toml` 에
+스킬별로 끈다 — 전부 끄면 모델이 "NONE" 을 답한다:
+
+```bash
+H=<codex_home>; for d in ~/.agents/skills/*/ $H/skills/.system/*/; do
+  printf '\n[[skills.config]]\npath = "%sSKILL.md"\nenabled = false\n' "$d"; done >> $H/config.toml
+```
+
 ## 배정·토큰 기록의 해석
 
 어떤 배정으로 돌았는지는 `round.json` 의 `engine`(요약)과 `assignments`(리뷰어별

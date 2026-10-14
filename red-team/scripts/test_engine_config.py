@@ -440,6 +440,7 @@ def main():
         fake = ("grep -q STDIN-MARKER && "
                 "{ echo '```json'; echo '{\"verdict\":\"GO\",\"findings\":[]}'; echo '```'; }")
         rr.engine_cmd = lambda e, p, c, m, ef: (["/bin/sh", "-c", fake], dict(os.environ), p)
+        rr.warm_codex_acp = lambda: None  # 진짜 npx 를 띄우지 않는다
         rr.set_engine("codex,claude")
         out = Path(td) / "runs2" / "owner__repo" / "branch" / "code-1"
         ctx = Path(td) / "ctx.md"

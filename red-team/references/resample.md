@@ -28,6 +28,14 @@ python3 "<red-team-skill>/scripts/run_round.py" \
 - `regression` 0 이면 GO 확정. N>2 를 쓰려면 GO 가 유지되는 동안 같은 명령을 반복한다.
 - core 축은 `run_round.py` GATES 의 `core` 플래그로 정의된다 — 코드 게이트는 `a-code`,
   계획 게이트는 `a-plan`. 게이트에 맞는 축 이름을 넘긴다(`--gate plan` 이면 `a-plan`).
+- **partial GO(축이 유예·PARSE-FAIL 로 빠진 GO)에서는 러너·`resume.py` 가 안내하는 top-up
+  명령을 그대로 쓴다.** core 축이 그 명령에 들어 있으면 재샘플이 빠진 축과 한 배치로 병렬
+  실행된 것이니 뒤에 또 돌리지 않는다(돌리면 N=3). 들어 있지 않으면 종전대로 top-up 뒤에
+  위 명령으로 재샘플한다. 갈림 기준은 core 축의 엔진이다 — top-up 이 NO-GO 로 끝나면 같이
+  띄운 재샘플이 헛돈인데, codex 는 같은 prefix 를 다시 보내면 97~99% 가 캐시 읽기라 거의
+  0 이고(PH-1263 code-1~3 실측), claude 는 프로세스가 바뀌면 prompt 부분이 캐시되지 않아
+  입력 전액이다(동일 prompt 3회 `claude -p`: 매번 cache_creation 38,997 / 읽기는 시스템
+  프리픽스 50,256 만). 그래서 codex 만 같은 배치에 넣는다(`run_round.topup_reviewers`).
 - 재샘플은 그 라운드의 `context.md` 로 돈다(`--merge-into` 는 `--context` 를 받지 않는다).
   즉 **컨텍스트를 고정한 채 축만 다시 뽑는 것**이고, 그게 이 규칙이 재는 것이다.
 

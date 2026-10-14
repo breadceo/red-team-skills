@@ -31,6 +31,11 @@ RUNS_ROOTS = (_HOME / "runs2", _HOME / "runs")
 INV = "## 변경 대상 인벤토리"
 INV_MARK, INV_END = "<!-- resume:inventory -->", "<!-- /resume:inventory -->"
 INV_RE = re.compile(re.escape(INV_MARK) + r".*?" + re.escape(INV_END) + r"\n*", re.S)
+# `--next` 가 만든 컨텍스트의 도장 — 라운드 디렉토리 이름을 담는다. run_round 가 자기 라운드
+# 이름과 대조해, 직전 컨텍스트를 복사·편집해 만든 라운드(자동 장치 전부 누락)를 경고한다.
+NEXT_MARK_RE = re.compile(r"<!-- resume:next \S+ -->\n*")
+def next_mark(round_name: str) -> str:
+    return f"<!-- resume:next {round_name} -->\n"
 STALE_AFTER = 5   # 이 라운드부터 "표는 계획 시점 판" 배너를 함께 붙인다
 UNTRACKED_CAP = 20
 
@@ -623,7 +628,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     if repo_cwd:
         run_round.note_owner(base, repo_cwd)  # 준비만 된 라운드도 승계 증거를 가진다(code-12 P1)
-    (out / "context.md").write_text(new_ctx)
+    (out / "context.md").write_text(next_mark(out.name) + NEXT_MARK_RE.sub("", new_ctx))
     for extra in ("plan-", "impact-"):  # 계획서·아티팩트는 게이트를 넘어가도 참조된다
         for f in rd.glob(f"{extra}*"):
             shutil.copy2(f, out / f.name)

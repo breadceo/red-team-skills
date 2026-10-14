@@ -265,6 +265,18 @@ assert not all_test_regressions(_rj([R("apps/__tests__/a.test.tsx"), R("src/hook
 assert not all_test_regressions(_rj([])), "regression 없음"
 assert not all_test_regressions(_rj([{"classification": "pre-existing", "file": "x.test.ts"}]))
 
+# --next 도장: 이전 도장은 걷어내고 새 라운드 이름으로 다시 찍는다 / run_round 가 불일치를 경고한다
+from resume import NEXT_MARK_RE, next_mark
+import io, contextlib, run_round
+stamped = next_mark("code-2") + NEXT_MARK_RE.sub("", next_mark("code-1") + CTX)
+assert stamped.startswith("<!-- resume:next code-2 -->") and stamped.count("resume:next") == 1
+for name, ctx, expect in (("code-2", stamped, False), ("code-3", stamped, True),
+                          ("code-2", CTX, True), ("code-1", CTX, False), ("plan-1", CTX, False)):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        run_round.warn_not_from_resume(ctx, pathlib.Path("/x") / name)
+    assert ("resume.py --next" in buf.getvalue()) == expect, f"{name}: 경고 {'누락' if expect else '오발'}"
+
 print("PASS — 2라운드 누적 유지, 라운드 라벨, TODO 표시, 보류 감지, 중복 절 정리, "
       "오래된 반영 블록 접기(diet)·멱등, 인벤토리 실측 배너, PARSE-FAIL partial 차단, "
       "'특히 볼 것' TODO 표시 모두 정상")

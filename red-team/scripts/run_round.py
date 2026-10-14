@@ -1426,6 +1426,20 @@ def count_access_errors(raw: str, cwd: str) -> int:
                and re.search(root, line))
 
 
+def warn_not_from_resume(context: str, out: Path) -> None:
+    """두 번째 라운드부터는 컨텍스트가 `resume.py --next` 의 도장(`<!-- resume:next <이 라운드> -->`)을
+    달고 있어야 한다. 직전 context.md 를 복사·편집하면 도장이 이전 라운드 이름이거나 없고,
+    그 경우 --next 의 자동 장치(TODO 마커·반영 기록 접기·인벤토리 배너·테스트 고정 전수 열거)가
+    전부 빠진다(PH-2801 code-11·12 실측). 비차단 경고다."""
+    m = re.fullmatch(r"(plan|code)-(\d+)", out.name)
+    if not m or int(m.group(2)) < 2:
+        return
+    if f"<!-- resume:next {out.name} -->" not in context:
+        print(f"⚠ {out.name} 컨텍스트가 `resume.py --next` 로 만들어지지 않았다(도장 불일치/없음) — "
+              f"TODO 마커·반영 기록 접기·인벤토리 배너·테스트 고정 전수 열거가 빠진 채 돈다.\n"
+              f"  다음 라운드부터는 resume.py 가 출력하는 --next 명령으로 컨텍스트를 만든다.", flush=True)
+
+
 def warm_codex_acp() -> None:
     """acpx 가 리뷰어마다 `npx -y @agentclientprotocol/codex-acp@<ver>` 를 띄운다 — 캐시가 비어
     있으면 N 개가 동시에 설치하다 `~/.npm/_npx` ENOTEMPTY 로 4/5 가 30초 안에 죽고, 생존자 완주
@@ -1691,6 +1705,7 @@ def main():
     if not a.merge_into:
         # 컨텍스트를 라운드 디렉토리에 복사한다 — 라운드가 자체로 재현 가능해야 한다
         (out / "context.md").write_text(context)
+        warn_not_from_resume(context, out)
     cfg = load_cfg()
     if a.lean and a.full:
         ap.error("--lean 과 --full 은 함께 쓸 수 없다")

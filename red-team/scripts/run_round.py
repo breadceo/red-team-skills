@@ -1249,7 +1249,11 @@ def extract_json(raw: str):
                     # 사고(#25) 원본(서술 484자 + bare 판정, 앞선 opener 없음)은
                     # 이 정책에서도 회수됨을 검증했다.
                     return
-                if m.group(1) and raw[p] == "{" and end >= doc_last:
+                # 인라인 opener 도 **문서를 끝내는 객체**면 후보다 — 실제 리뷰어가
+                # 산문 끝에 같은 줄로 판정을 붙였다(`…하겠습니다.{\n "verdict"…`,
+                # PH-2801 code-7 b3, PARSE-FAIL 로 유실). 문서 끝 + verdict 형태(accept)
+                # 두 조건이 산문 속 예시·미종결 인용 조각을 거른다.
+                if raw[p] == "{" and end >= doc_last:
                     yield cand
                 pos = end
         obj = last(doc_end())

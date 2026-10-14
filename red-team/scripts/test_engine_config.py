@@ -171,7 +171,12 @@ def main():
         del os.environ["CODEX_CONFIG"]
 
         # claude 는 프롬프트를 -p 로, effort 를 --effort 로 준다 (stdin 은 쓰지 않는다)
-        claude, _, claude_stdin = rr.engine_cmd("claude", "PROMPT", "/repo", "opus", "high")
+        os.environ["CLAUDE_CODE_PLUGIN_DIRS"] = "/x/mods"
+        claude, claude_env, claude_stdin = rr.engine_cmd("claude", "PROMPT", "/repo", "opus", "high")
+        del os.environ["CLAUDE_CODE_PLUGIN_DIRS"]
+        # 사용자 전역 층 격리 — user CLAUDE.md·hook·mod 가 리뷰어에 끼면 PARSE-FAIL 로 이어진다(실측)
+        assert claude[claude.index("--setting-sources") + 1] == "project,local", claude
+        assert "CLAUDE_CODE_PLUGIN_DIRS" not in claude_env, claude_env
         assert claude[:3] == ["claude", "-p", "PROMPT"], claude
         assert claude_stdin is None, claude_stdin
         assert "--model" in claude and "opus" in claude, claude
@@ -590,6 +595,8 @@ def main():
         argv = shlex.split(cmd)
         assert argv[argv.index("--cwd") + 1] == td, argv
         assert argv[argv.index("--merge-into") + 1] == str(out2), argv
+        # top-up 명령은 빠진 축 + core 축 재샘플을 한 배치로 묶는다(직렬 3단계 방지)
+        assert argv[argv.index("--reviewers") + 1] == "b1-state-matrix,b2-interaction,b3-visibility,a-code", argv
 
         # top-up: 빠진 축을 같은 라운드에 병합하면 coverage 가 full 로 돌아온다
         sys.argv = ["run_round.py", "--gate", "code", "--merge-into", str(out2),

@@ -82,6 +82,27 @@ hook·skill 을 끄려고 `--bare` 를 쓰면 인증까지 끊겨 `Not logged in
 로 hook·skill 만 끈다. 리뷰어 세션에 다른 스킬의 세션 시작 프로토콜이 끼면 턴을 그쪽에
 다 쓰고 리뷰가 밀린다 — 실측된 실패다.
 
+## claude 엔진 격리 — hook 만 끄면 부족하다 (2026-10-14 실측)
+
+PH-1263 code-3 스냅샷으로 claude 전 축 라운드를 돌렸더니 `b3-visibility` 가 PARSE-FAIL
+이었다. raw 를 보니 리뷰는 GO 로 끝났는데, 사용자 전역 `~/.claude/CLAUDE.md` 의 메모리
+프로토콜과 `CLAUDE_CODE_PLUGIN_DIRS` 의 mod 가 리뷰어 세션에 올라와 compaction subagent
+를 띄웠고, 그 hand-back 보고가 마지막 턴이 되어 result 가 "하우스키핑 완료, 추가로 할 일
+없음" 텍스트로 바뀌었다. `--settings '{"hooks":{}}'` 는 hook 만 막고 CLAUDE.md·mod 는
+못 막는다. 같은 프롬프트로 네 변형을 재봤다:
+
+| 변형 | 전역 지시문 누출 | 시스템 프리픽스 |
+|---|---|---|
+| 현재(`--settings '{"hooks":{}}'`) | 있음 | 51.3k |
+| + `CLAUDE_CODE_PLUGIN_DIRS` 제거 | 있음 | 51.3k |
+| + `--setting-sources project,local`(user 층 제외) | 없음 | 20.4k |
+| + `--system-prompt` 교체 | 없음 | 18.5k |
+
+user 층을 빼는 것이 결정적이다 — CLAUDE.md 메모리도 setting source 를 따라간다. 리뷰
+대상 저장소의 CLAUDE.md 는 남기려고 `project,local` 로 했다. mod 는 env 로만 들어오므로
+env 에서 그 변수만 뺀다. 부수 효과로 축당 캐시 생성 토큰(프롬프트 본문과 함께 매번 다시
+쓰는 부분)이 ~30k 준다.
+
 ## 문서 6-구조의 출처 — B2C-52504 회고
 
 표면만 자꾸 고치게 되는 리뷰 지적의 대부분은 코드 실력이 아니라 **문서에 없던 축**에서

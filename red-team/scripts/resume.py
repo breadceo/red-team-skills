@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_round  # --dry-run 이 마이그레이션 스위치(run_round.MIGRATE)를 끄기 위해
-from run_round import branch_dir, git, GATES, sections, TODO  # 경로 파생·절 규격은 한 곳에서만 한다
+from run_round import branch_dir, git, GATES, sections, TODO, topup_reviewers  # 경로 파생·절 규격은 한 곳에서만 한다
 
 HOME_DIR = Path(__file__).resolve().parent.parent  # 스킬 디렉토리
 # 검색은 v2 루트(runs2/)와 구 루트(runs/) 둘 다 본다 — 아직 이전되지 않은 작업도
@@ -550,7 +550,8 @@ def main():
         print(f"\n⚠ 축 {','.join(missing)} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
               f"  원인 — {' · '.join(why)}\n"
               f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
-              f"    {round_command(repo_cwd, gate, rd, missing)}")
+              f"    {round_command(repo_cwd, gate, rd, topup_reviewers(gate, missing, rj.get('assignments')))}\n"
+              f"  (core 축이 명령에 들어 있으면 재샘플까지 같은 배치다 — 뒤에 따로 돌리지 않는다)")
         return
     # 축은 다 돌았는데(coverage=full) 축 스스로는 NO-GO 를 냈고 findings 가 0 이라 GO 로
     # 집계된 라운드다 — partial 과 같은 이유로 게이트 통과가 아니고, 같은 자리에서 막는다

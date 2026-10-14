@@ -107,6 +107,21 @@ GATES = {
                             "why": "무효화 타이밍·응답 도착 순서·외부 신호의 보장 범위 — a-plan 과 겹치지 않는 시간축"},
     },
 }
+def topup_reviewers(gate, missing, assignments=None):
+    """partial GO 의 top-up 병합에 넣을 축 — 빠진 축에 core 축 재샘플을 같은 배치로 묶는다.
+    resample.md 규칙(GO 후보는 core 축 한 번 더)을 top-up 뒤에 따로 돌리면 라운드가 3단계
+    직렬이 된다(PH-1263 code-3: lean 4.5분 → top-up 2.5분 → 재샘플 3분). 같이 띄우면 시간은
+    병렬이라 공짜고, 토큰은 top-up 이 NO-GO 로 끝날 때만 헛돈이다. 그 헛돈의 크기가 엔진마다
+    달라 정책을 가른다(2026-10-14 실측, references/resample.md):
+      codex  — prompt prefix 캐시 97~99% 라 거의 0 → 같은 배치
+      claude — prompt 부분이 프로세스 간 캐시되지 않아 입력 전액 → 종전대로 top-up 뒤 따로
+    assignments 는 그 라운드 round.json 의 것 — core 가 어느 엔진으로 돌았는지 거기서 본다.
+    GO 후보의 regression 은 0 이라 덮어써도 합집합이 보존된다(resample.md 「왜 GO 라운드에만」)."""
+    core = [a for a, spec in GATES.get(gate, {}).items() if spec.get("core")]
+    eng = {a: (v or {}).get("engine") for a, v in (assignments or {}).items()}
+    return list(missing) + [a for a in core if a not in missing and eng.get(a) == "codex"]
+
+
 # --reviewers 로 GATES 밖 커스텀 축을 주면 이 스펙으로 돈다 — 성격을 모르면 비싼 쪽이 안전하다
 DEFAULT_SPEC = {"tier": "deep", "prefer": None, "why": "커스텀 축 — 성격을 모르면 비싼 쪽이 안전하다"}
 
@@ -165,15 +180,22 @@ def engine_cmd(engine: str, prompt: str, cwd: str, model: str | None,
                 *(["--model", model] if model else []), "--format", "json",
                 "codex", "exec", "--file", "-"], env, prompt
     if engine == "claude":
-        # hook·skill 을 끈다 — 리뷰어 세션에 다른 스킬의 프로토콜이 끼면 턴 하나를
-        # 그쪽에 다 쓰고 리뷰가 밀린다(hipocampus FIRST RESPONSE RULE 로 실측).
+        # 리뷰어 세션을 사용자 전역 설정에서 격리한다 — hook 만 끄는 것으로는 부족했다
+        # (references/evidence.md 「claude 엔진 격리」): ~/.claude/CLAUDE.md 와
+        # CLAUDE_CODE_PLUGIN_DIRS 의 mod 가 그대로 올라와 리뷰 도중 그 프로토콜의 subagent 가
+        # 뜨고, 그 hand-back 이 마지막 턴이 되어 verdict 대신 하우스키핑 보고가 result 로
+        # 돌아왔다(PARSE-FAIL). --setting-sources project,local 로 user 층을 빼면 전역
+        # CLAUDE.md·hook 이 같이 빠지고 시스템 프리픽스가 51k→20k 로 준다. 리뷰 대상
+        # 저장소의 CLAUDE.md 는 남긴다(그 저장소의 규약은 리뷰 근거다).
         # `--bare` 를 쓰지 않는다: 그것까지 끄면 인증도 함께 끊겨
         # `Not logged in · Please run /login` 한 줄만 받는다(실측). 로그인은 정상인데도 그렇다.
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_PLUGIN_DIRS"}
         return ["claude", "-p", prompt, "--disable-slash-commands",
+                "--setting-sources", "project,local",
                 "--settings", '{"hooks":{}}', *(["--model", model] if model else []),
                 *(["--effort", effort] if effort else []),
                 "--output-format", "json",
-                "--allowedTools", "Read,Grep,Glob,Bash"], dict(os.environ), None
+                "--allowedTools", "Read,Grep,Glob,Bash"], env, None
     sys.exit(f"모르는 엔진: {engine} — {'|'.join(ENGINES)} 중 하나여야 한다.")
 
 
@@ -1865,7 +1887,8 @@ def main():
         if merged["skipped"]:
             print(f"⚠ 축 {','.join(merged['skipped'])} 가 빠진 GO 다 (coverage=partial) — 게이트 통과가 아니다.\n"
                   f"  빠진 축을 이 라운드에 병합해 커버리지를 채운 뒤의 verdict 가 판정이다:\n"
-                  f"    {heal(merged['skipped'])}")
+                  f"    {heal(topup_reviewers(a.gate, merged['skipped'], merged.get('assignments')))}\n"
+                  f"  (core 축이 명령에 들어 있으면 재샘플까지 같은 배치다 — 뒤에 따로 돌리지 않는다)")
         if merged["unparsed"]:
             # 재실행 명령은 위 PARSE-FAIL 경고가 이미 안내했다 — 여기서는 그 GO 의 성격을 못 박는다.
             # 경고문을 읽었는지에 의존하지 않으려고 coverage 로 남기는 것이 이 분기의 목적이다.

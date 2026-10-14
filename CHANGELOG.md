@@ -38,6 +38,123 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-10-13
+
+PH-2801 code 게이트(13라운드)에서 실측한 병목·유실·이탈 세 가지를 닫았다.
+
+### ⚡ red-team — 라운드가 8분에서 6분으로, 첫 라운드 경합 사망이 사라졌다 (#92)
+
+한 사이클 20~25분의 원인은 셋이었다 — 리뷰어 5개가 `npx codex-acp` 를 동시에 띄우다 npm
+캐시 `ENOTEMPTY` 경합으로 4개가 죽고(code-1 17분), deep 축이 툴 호출 30~53회 중 절반을 스킬
+문서·디렉터리 순회·`node_modules` 재탐색에 썼고, same-origin 경고가 P1 만 세어 P2 라운드에서
+연속이 끊겼다.
+
+- **npx 워밍업** — fan-out 전에 codex 명령에 `--version` 을 붙여 1회 직렬 실행한다(1초).
+  stdin EOF·`--help` 는 교착하므로 `--version` 만 쓴다
+- **변경 파일 전문 동봉 + 탐색 예산** — diff 스냅샷 뒤에 작업 트리 전문(파일 40K자·전체
+  200K자 상한)을 붙이고, `_common.md` 에 스킬 문서·설정·디렉터리 순회 금지를 넣었다
+- **Codex 스킬 자동 탐색 끄기** — 별도 `CODEX_HOME` 이어도 `~/.agents/skills` 를 탐색하고
+  `features.skip_host_skill_discovery` 는 효과가 없다(0.159.2). 스킬별 `enabled = false`
+  절차를 `references/engines.md` 에 적었다
+- **same-origin 경고가 P2 도 센다** — PH-2801 기록으로 재판정하면 code-3 부터 경고가 뜬다
+  (수정 전: 끝까지 없음)
+- **`library_facts` 이월** — 리뷰어가 확인한 라이브러리 동작을 다음 code 라운드 프롬프트에
+  붙인다. 적용 후 실제 라운드가 아직 없어 리뷰어가 채우는지는 미검증이다
+
+| | code-4 (이전) | code-5 (워밍업·전문) | code-6 (+스킬 탐색 끔) |
+|---|---|---|---|
+| 라운드 시간 | 8분 | 8분 | 6분 |
+| `a-code` 토큰 / 스킬 읽기 | 128k / 1 | 113k / 1 | 105k / 0 |
+
+### 🐛 red-team — 산문 끝에 붙은 GO 가 PARSE-FAIL 로 유실됐다 (#93)
+
+`b3-visibility` 가 `…계산하겠습니다.{ "verdict": "GO", … }` 처럼 판정을 산문 같은 줄에
+붙여 냈고, bare JSON 폴백은 줄 시작 opener 만 받아(code-12 결정) 재실행이 필요했다. 이제
+인라인 opener 도 **그 객체가 문서를 끝내고** verdict 형태 검사를 통과하면 받는다. 문서 중간의
+인라인 조각은 그대로 거부한다(code-12·13 의 오인 방지 유지). 근거는 `references/evidence.md`.
+
+### ✨ red-team — `resume --next` 를 건너뛴 context 에 경고 (#94)
+
+code-11·12 는 직전 context.md 를 복사·편집해 만들어 TODO 마커·반영 기록 접기·인벤토리
+배너가 전부 빠졌는데, 그 이탈이 보이지 않았다.
+
+- `resume.py --next` 가 context.md 첫 줄에 `<!-- resume:next <라운드명> -->` 도장을 찍는다.
+  이전 도장은 걷어내므로 복사본은 **이전 라운드 이름**을 달고 있게 된다
+- `run_round.py` 가 `plan|code-N`(N≥2)에서 자기 이름의 도장이 없으면 **비차단 경고**를 낸다.
+  첫 라운드·`--merge-into` 는 대상이 아니다
+
+## 2026-10-06
+
+### ✨ pr-triage — top-level·review 회신에 지적자 @mention (#90)
+
+inline 회신은 스레드 답글이라 알림이 가지만, top-level·review 회신은 새 PR 코멘트라 지적자가
+어느 지적에 대한 답인지 알 수 없었다.
+
+- `fetch_comments.py` 가 코멘트마다 `mention` 필드를 낸다. 봇(fp 마커)·나·`[bot]` 계정이면
+  `null` — hermes 가 작성자 계정으로 올린 코멘트에 자기 자신을 mention 하는 일도 막힌다
+- `post_replies.py` 는 top-level·review 항목에 `mention` 키가 **필수**다(`null` 허용, 빠지면
+  게시 전 거부). 값이 있으면 첫 줄에 `@login ([원 코멘트](url))` 을 붙인다. inline 은 그대로다
+
+### 📝 red-team — 인계 코멘트 앵커를 사람 눈에서 숨긴다 (#91)
+
+`red-team handoff: <repo>/<branch>` 앵커는 기계용 표식이라 동료에게는 잡음이었다. 작업 C 는
+이제 앵커를 **여러 줄 HTML 주석 안의 독립 줄**에 둔다(`<!--\nred-team handoff: a/b\n-->`).
+**한 줄 주석은 매치되지 않는다** — `handoff_anchor()` 가 `None` 을 낸다. 이 형태는
+`is_bot()` 봇 판정에도 걸리지 않는다. 게시 전에 두 함수로 파싱을 검증하라는 절차를 넣었다.
+
+## 2026-09-30
+
+### 🔧 red-team — codex 티어를 gpt-6 계열로 (#89)
+
+| 티어 | 이전 | 이후 |
+|---|---|---|
+| deep | `gpt-5.6-sol` / high | `gpt-6.1-sol` / high |
+| mid | `gpt-5.6-terra` / high | `gpt-6-sol` / high |
+| cheap | `gpt-5.6-luna` / medium | `gpt-6-luna` / medium |
+
+**⚠ 어댑터를 올려야 한다.** gpt-6 계열은 `@agentclientprotocol/codex-acp@2.0.1` 이상에서만
+호출된다. 1.1.2 에서는 `Cannot apply --model "gpt-6.1-sol": the ACP agent did not advertise
+that model` 로 라운드가 실패한다. `~/.acpx/config.json` 의 `agents.codex.args` 버전을 올린다.
+
+`CODEX_PRICES` 에 gpt-6 단가가 아직 없어 이 티어의 라운드는 비용 없이 토큰만 집계된다.
+
+## 2026-09-21
+
+### 🐛 red-team — codex 리뷰어가 작업 트리에 쓸 수 있었다 (`7eccf99`)
+
+러너는 effort 를 지정할 때만 `CODEX_CONFIG` 를 만들었다. 그래서 호출자 환경의
+`CODEX_CONFIG`(`sandbox_mode=workspace-write`·`approval_policy=on-request`)가 그대로 리뷰어에
+닿아, 읽기만 해야 할 리뷰어가 트리에 쓸 수 있었다. 이제 항상 `sandbox_mode=read-only`·
+`approval_policy=never` 로 새로 만들고 effort 만 덧붙인다.
+
+함께 고친 것: 타임아웃 시 bytes 출력을 `[TIMEOUT]` 배너에 이어 붙이다 `TypeError` 가 나서
+부분 출력이 유실되던 문제.
+
+### 📝 pr-triage — 머지 직전에 커서를 한 번 더 본다 (#88)
+
+CI 초록·approve 는 「코멘트 0건」이 아니다. 실측(`ceo-client#1016`)에서 봇이 실제 결함을
+지적하고 **13초 뒤 머지**됐다. `SKILL.md` 10절을 신설했다 — 머지를 시켰으면 직전에
+`fetch_comments.py --new-only` 를 1회 돌리고, 0건이 아니면 1절로 돌아간다. 머지 자체는 여전히
+이 스킬의 일이 아니다.
+
+뒤이어 pr-triage `SKILL.md` 가 토큰 예산(5,000)을 넘어(~5,290) 근거 문단을
+`references/measurement.md`·`edge-cases.md` 로 옮겼다(`6645c40`, 삭제 없음).
+
+## 2026-09-11
+
+### 🚫 red-team — NO-GO 재샘플은 채택하지 않는다 (#87)
+
+`resample.md` 는 GO 후보에서만 core 축을 재샘플한다. 아래 #85 결과로 「NO-GO 는 다음 라운드가
+공짜로 재샘플한다」는 전제가 흔들려, **판정 기준을 먼저 적고** 쟀다(K=8 라운드 × `a-code`
+3샘플, ≈$5).
+
+- 추가 회수(M2) 중앙값 **0.5** — 기준 「+1 이상」 **미충족**. 실재율(M3)은 충족(추가 8건 전부
+  사실), 비용은 선기입 추정(20~30%)을 넘는 ≈40%
+- **부채택.** `resample.md`·`SKILL.md`·템플릿은 바꾸지 않았다. 「1샘플 침묵 ≠ 깨끗」은
+  재확인됐지만 매 NO-GO 라운드에서 살 값은 아니다
+- 사후 관찰(채택 근거 아님): 「지금 라운드의 `a-code` ≤1」로 자르면 Δ 중앙값 2 — 이 조건으로
+  확증 실험을 같은 기준으로 선기입해 뒀다. 전문은 `references/design.md`
+
 ## 2026-09-10
 
 리뷰어 탈출 결함 실측에서 나온 처방 15건을 순차로 닫았다(#52~#66). 그 뒤 **보강이 실제로
@@ -169,6 +286,20 @@ finding 을 그때의 5축 프롬프트와 대조해 `covered`(축이 지시했�
 lockfile 로 `yarn install --immutable`**(빠뜨리면 오늘의 의존성에는 참이고 리뷰 대상 시점에는
 거짓인 finding 이 나와 실험이 무효가 된다) · 재현 검증 · 합성 base 커밋 · GT 에서 봉인 항목 거르기 ·
 판정 기준 사전 기입.
+
+### 📊 red-team — 놓친 이유는 탐색 부족이 아니라 판단 오류다 (#84 · #85)
+
+#82 의 첫 판에는 「모델이 그 코드 영역을 탐색하지 않는 것일 가능성이 크다」고 적었는데, raw
+ACP 스트림을 열어 보니 리뷰어는 GT 파일을 읽었다. #84 가 위 문단을 정정했다.
+
+이어서 `covered` 66건 중 raw 가 남은 36건을 `tool_call`·`agent_thought_chunk` 로 판정했다
+(기준은 라운드 전 고정): misjudged 26 · seen-silent 4 · sealed 4 · suppressed 2 ·
+**unexplored 0**. 여러 건은 다음 라운드에 같은 리뷰어가 스스로 잡았다 — **프롬프트에 문장을
+더하는 것은 처방이 아니다.** 주의 분산·예산 고갈 가설도 반증됐다(컨텍스트 사용 중앙값 53%).
+
+엔진 A/B(같은 재현 입력, codex 3 vs claude 3)에서 GT 회수는 합집합 0/6, claude 는 codex 와
+다른 것을 잡지 않았고 코드로 확인된 P1 은 codex 2/3·claude 0/3, 비용은 25~40배였다. **엔진
+교체도 처방이 아니다.** 전문은 `references/design.md`.
 
 ## 2026-09-07
 

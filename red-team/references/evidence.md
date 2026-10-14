@@ -1597,3 +1597,22 @@ b2 의 「해소한다의 기준은 사용자가 보는 것이 바뀌는 것이�
 **샘플 수.** 같은 입력 3샘플이 서로 다른 finding 집합을 냈다(고유 4개, 겹친 것 1개, 한 샘플 최대
 2개). 1샘플로 축의 발화·침묵을 효과라고 부르면 안 된다 — 측정 결과는
 `references/design.md` 의 「15개 PR 보강 후 실측」 절.
+
+## deep 축을 astra/low 로 내리지 않는 이유 — PH-2801 code-1 A/B (2026-10-14)
+
+같은 입력(code-1 시점 커밋 `c715dada6` worktree + 그 라운드의 diff.md·context.md)으로 5축 전부를
+`--model/--effort` 강제로 돌렸다. 어댑터는 `gpt-6.1-astra` 를 광고하지 않아 astra 는 `gpt-6-astra` 다.
+arm 당 1회 샘플이라 분산이 섞여 있고 cheap 축도 같은 모델로 돌았다.
+
+| | gpt-6.1-sol/high | gpt-6-astra/low | gpt-6-astra/medium |
+|---|---|---|---|
+| 벽시계 | 10.8분 | 3.3분 | 5.0분 |
+| 토큰 | 430k | 282k | 314k |
+| 툴 호출 | 153 | 55 | 65 |
+
+원본 6건을 결함 종류 5종으로 묶은 회수: sol 4/5, astra/low 2/5, astra/medium 2/5. astra 두 arm 이
+공통으로 놓친 것은 **목록 밖 조회 타임아웃 없음(P1)** 과 **조회 중 userId 불일치(P2)** 이고, 타임아웃
+결함은 뒤의 code-7 구조 변경에서 되살아난 바로 그것이다. 5종 중 Provider 재조회 실패 정리(P1) 는
+세 arm 모두 놓쳤다(원본만 잡음 — 분산). 부수 관찰: astra/medium b4 가 claim 을 중국어로 냈다.
+속도 3배는 recall 2/5 의 값이라 deep 축은 sol/high 를 유지한다. 재실측은 같은 절차로 한다 —
+worktree 를 그 라운드 커밋에 고정하고 node_modules 를 심볼릭 링크한 뒤 `--merge-into` 로 사본 라운드에 돈다.

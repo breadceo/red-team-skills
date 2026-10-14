@@ -38,6 +38,48 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-10-14
+
+PH-1263 code 게이트 소요 시간을 분석하다 MoE GO 후보 라운드의 직렬 구조와 claude 엔진의
+설정 누출을 찾았다. 둘 다 #96 에서 닫았다.
+
+### ⚡ red-team — top-up 과 core 재샘플을 한 배치로 (#96)
+
+MoE 가 켜진 GO 후보 라운드는 lean → top-up(빠진 축) → 재샘플(core) 3단계 직렬이라 full
+병렬(6분)보다 느렸다 — code-2 7m20s, code-3 10m30s. 같은 날 full 라운드는 3m25s~6분.
+
+- **partial GO 의 치유 명령이 core 축을 포함한다** — 러너·`resume.py` 가 안내하는
+  `--merge-into … --reviewers` 에 빠진 축과 core 축을 함께 넣는다(`topup_reviewers`).
+  core 가 명령에 들어 있으면 뒤에 따로 재샘플하지 않는다(돌리면 N=3)
+- **엔진별로 가른다** — core 가 codex 로 돌았을 때만. top-up 이 NO-GO 로 끝나면 같이
+  띄운 재샘플이 헛돈인데, codex 는 같은 prefix 재전송이 캐시 읽기 97~99% 라 거의 0 이고
+  (code-1 첫 실행조차 97.6%), claude 는 프로세스가 바뀌면 prompt 부분을 매번 다시 캐시
+  생성한다(동일 prompt 3회: 매회 cache_creation 38,997). claude·엔진 미상은 종전대로
+  top-up 뒤에 따로 돈다
+- GO 후보 라운드당 a-code 1회분(3~4.5분) 절약. 규칙은 `references/resample.md`
+
+### 🐛 red-team — claude 리뷰어가 사용자 전역 설정을 끌고 왔다 (#96)
+
+code-3 스냅샷으로 claude 전 축을 돌리니 `b3-visibility` 가 PARSE-FAIL 이었다. 리뷰는 GO 로
+끝났는데 `~/.claude/CLAUDE.md` 의 메모리 프로토콜과 `CLAUDE_CODE_PLUGIN_DIRS` 의 mod 가
+리뷰어 세션에 올라와 리뷰 도중 subagent 를 띄웠고, 그 hand-back 보고가 마지막 턴이 되어
+result 를 덮었다. `--settings '{"hooks":{}}'` 는 hook 만 막는다.
+
+- env 에서 `CLAUDE_CODE_PLUGIN_DIRS` 를 빼고 `--setting-sources project,local` 로 user
+  층을 제외한다. CLAUDE.md 메모리도 setting source 를 따라가므로 전역 지시문이 함께
+  빠진다. 리뷰 대상 저장소의 CLAUDE.md 는 남긴다
+- 시스템 프리픽스 51.3k → 20.4k 토큰. 변형 4종 비교는 `references/evidence.md`
+- `--bare` 는 여전히 쓰지 않는다(인증이 끊긴다)
+
+| 같은 code-3 스냅샷, `--full` 5축 | claude | codex |
+|---|---|---|
+| 벽시계 | 3m42s | 6m38s |
+| 병목 축 | a-code (opus) 3m42 | a-code (gpt-6.1-sol) 6m38 |
+| verdict | NO-GO (b3 PARSE-FAIL, 수정 전) | NO-GO full |
+| 비용 | $3.59 | 구독 |
+
+1회 표본이다 — codex a-code 는 같은 날 3m25s 도 있었다.
+
 ## 2026-10-13
 
 PH-2801 code 게이트(13라운드)에서 실측한 병목·유실·이탈 세 가지를 닫았다.

@@ -937,10 +937,12 @@ def seal_headings(text: str) -> list[str]:
     신호이고, 실측에서는 정확히 그 항목이 회귀였다(발동 집합 2건이 5축 전원 findings 0 으로
     GO 를 통과한 뒤 PR 리뷰가 잡았다). 제목만 본다 — `## 스코프 밖` **안**의 "지적해도
     반영하지 않는다" 소제목은 정상이다. 봉인 자리를 하나로 몰아 두면 판정 요청과의 우선순위
-    규약(`prompts/_common.md`)이 걸릴 자리도 하나가 된다.
+    규약(`prompts/_common.md`)이 걸릴 자리도 하나가 된다. `## 판정 완료` 는 두 번째 봉인
+    자리다(#97) — 범위가 아니라 근거를 들어 판정한 finding 을 닫는 절이라 같은 규약을 받는다.
     """
     return [h.strip() for h in re.findall(r"^## .+$", text, re.M)
-            if not h.strip().startswith("## 스코프 밖") and any(m in h for m in SEAL_MARKS)]
+            if not h.strip().startswith(("## 스코프 밖", "## 판정 완료"))
+            and any(m in h for m in SEAL_MARKS)]
 
 
 def prev_context(base: Path, gate: str) -> Path | None:
@@ -969,8 +971,8 @@ def check_context(context: str, ctx_src: Path, prev: Path | None, allow_drop: bo
     if extra := seal_headings(context):
         print(f"⚠ {ctx_src.name}: `## 스코프 밖` 밖에서 봉인을 선언한 절이 있다:\n"
               + "".join(f"    {h}\n" for h in extra)
-              + "  봉인은 `## 스코프 밖` 한 곳에만 쓴다 — 같은 항목을 두 번 닫으면, 그 주제를\n"
-                "  '판정해 달라' 로 올렸더라도 리뷰어가 닫힌 것으로 읽는다.\n"
+              + "  봉인은 `## 스코프 밖`(범위)·`## 판정 완료`(근거 있는 판정) 두 곳에만 쓴다 — 같은 항목을\n"
+                "  두 번 닫으면, 그 주제를 '판정해 달라' 로 올렸더라도 리뷰어가 닫힌 것으로 읽는다.\n"
                 "  확정된 기획·정책이면 `### 기획·정책 확인 완료 사항` 으로 옮긴다.", flush=True)
     if prev is None:
         return
@@ -1063,10 +1065,14 @@ def zax_draft(task: str, gate: str) -> tuple[Path, bool]:
             "**이 티켓에서 손대지 않는 파일·기능만**. 외부에서 확정된 기획·정책은 여기가 아니라 "
             "`### 기획·정책 확인 완료 사항` 절로 적는다(절이 없으면 만든다) — "
             "정책 확정과 그 구현의 검증은 다른 대상이고, 여기 적으면 구현까지 봉인된다. "
-            "봉인은 이 절 하나에만 쓴다>"
+            "봉인은 이 절(범위)과 `## 판정 완료`(근거 있는 판정)에만 쓴다>"
             + (f"\n\n미확인으로 남은 것(리뷰어가 볼 지점):\n{unknown}" if unknown else ""),
-            "## 이미 반영된 지적 (재제기 금지)\n"
-            "<2라운드부터 `resume.py` 가 직전 라운드 decisions.md 에서 끌어온다>",
+            "## 이미 반영된 지적 (검증 대상 — 닫혔는지 확인한다)\n"
+            "<2라운드부터 `resume.py` 가 직전 라운드 decisions.md `## 반영` 에서 끌어온다 — "
+            "봉인이 아니라 리뷰어가 fix 가 닫혔는지 검증하는 목록이다>",
+            "## 판정 완료 (재제기 금지)\n"
+            "<사람이 근거를 들어 판정한 것(실재하지 않음·의도된 동작·위험 수용). "
+            "`resume.py` 가 decisions.md `## 판정 완료` 에서 끌어온다 — 근거 없는 항목은 적지 않는다>",
             "## 검증 상태\n<`/task done` 의 tsc·lint·test 결과를 붙인다 — "
             "비워두면 리뷰어가 '테스트 없음' 을 지적하느라 시간을 쓴다>"]
     if gate == "plan":
@@ -1809,11 +1815,15 @@ def main():
         "repo_root": git(a.cwd, "rev-parse", "--show-toplevel") or str(Path(a.cwd).resolve()),
         "engine": "+".join(engines),
         "assignments": {}, "reviewers": {}, "findings": [], "access_errors": {},
-        "library_facts": []}
+        "library_facts": [], "paraphrase": {}}
     for r, parsed, lost, tokens in results:
         for x in (parsed or {}).get("library_facts", []) or []:
             if isinstance(x, str) and x.strip() and x.strip() not in merged.setdefault("library_facts", []):
                 merged["library_facts"].append(x.strip())
+        # 리뷰어가 읽은 의도(#98) — 사람이 context.md 「이 변경이 하려는 것」과 대조한다.
+        # 병합 라운드(setdefault)에서도 그 축의 것만 바뀐다.
+        if isinstance(p := (parsed or {}).get("paraphrase"), str) and p.strip():
+            merged.setdefault("paraphrase", {})[r] = p.strip()
         e, m, ef, t = assignments[r]
         merged["reviewers"][r] = parsed.get("verdict") if parsed else "PARSE-FAIL"
         merged["assignments"][r] = {"engine": e, "model": m, "effort": ef, "tier": t,
@@ -1840,6 +1850,13 @@ def main():
     (out / "round.json").write_text(json.dumps(merged, ensure_ascii=False, indent=2))
 
     print(f"\n{merged['verdict']}  {merged['counts']}")
+    if para := merged.get("paraphrase"):
+        # findings 보다 먼저 읽는 자리다 — 의도를 잘못 읽은 축의 findings 는 틀린 전제에서 나왔다.
+        print("▶ 리뷰어가 읽은 의도 — context.md 「이 변경이 하려는 것」과 대조한다. 어긋나면 "
+              "findings 처리 전에 컨텍스트를 고치고 다시 돈다:")
+        for r in reviewers:
+            if r in para:
+                print(f"  [{r}] {para[r]}")
     toks = [a["tokens"] for a in merged["assignments"].values() if a.get("tokens")]
     if toks:
         total = sum(t["total"] for t in toks)

@@ -43,6 +43,9 @@ DEC2 = """# code-2 처리 결과
 ## 반영 — 다음 컨텍스트의 `이미 반영된 지적` 이 된다
 - [b3] 대비 미달 → #9ca3af 로 (커밋 bbb)
 
+## 판정 완료 — 다음 컨텍스트의 `판정 완료` 가 된다 (재제기 금지)
+- [b1] 로딩 중 로그인 안내 → 실재하지 않음 — 근거: Guard.tsx:40 이 isLoading 을 먼저 가른다
+
 ## 후속 티켓 — 다음 컨텍스트의 `스코프 밖` 이 된다
 - [a-code] 디자인시스템 대비 → TICKET-222
 
@@ -51,6 +54,16 @@ DEC2 = """# code-2 처리 결과
 
 r2 = carry_forward(CTX, DEC1, "code-1")
 r3 = carry_forward(r2, DEC2, "code-2")
+
+# 0) 판정 완료(#97) — 절이 없던 옛 컨텍스트에도 절을 만들어 이관하고, 반영 절과 섞이지 않는다
+assert "## 판정 완료 (재제기 금지)" in r3 and "### code-2 에서 판정" in r3, "판정 완료 이관 누락"
+assert "Guard.tsx:40" in r3, "판정 근거가 유실됐다 — 근거가 곧 재제기를 막는 내용이다"
+_applied = r3[r3.index("## 이미 반영된 지적"):r3.index("## 검증 상태")]
+assert "Guard.tsx:40" not in _applied, "판정 항목이 '이미 반영된 지적'(검증 대상) 절에 섞였다"
+r3b = carry_forward(r3, DEC1, "code-3")   # 판정 없는 라운드는 절을 건드리지 않는다
+assert r3b.count("## 판정 완료") == 1 and r3b.count("### code-2 에서 판정") == 1, "판정 절 중복"
+r3c = carry_forward(r3, DEC2, "code-3")   # 있는 절에는 append 한다(replace 가 아니다)
+assert r3c.count("에서 판정") == 2 and r3c.count("## 판정 완료") == 1, "판정 누적 실패"
 
 # 1) 1라운드 반영분이 3라운드 컨텍스트에도 살아 있어야 한다
 assert "버튼 A 가 죽어 있었다" in r3, "code-1 반영분이 유실됐다 (replace 버그 재발)"

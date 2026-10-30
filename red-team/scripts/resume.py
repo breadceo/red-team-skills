@@ -14,7 +14,8 @@
 
 `--next` 가 하는 일은 사람이 잊으면 루프가 수렴하지 않는 부분이다 —
 직전 라운드 context.md 를 복사하고 decisions.md 의 `반영`을 `이미 반영된 지적` 절에,
-`후속 티켓`을 `스코프 밖` 절에 옮겨 붙인다. 이 누적이 재제기를 막는다.
+`판정 완료`를 `판정 완료` 절에, `후속 티켓`을 `스코프 밖` 절에 옮겨 붙인다. 이 누적이
+재제기를 막는다 — 단 `이미 반영된 지적` 은 봉인이 아니라 리뷰어의 검증 대상이다(#97).
 """
 import argparse, json, os, re, shlex, shutil, sys
 from pathlib import Path
@@ -406,6 +407,7 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = 
     """
     applied = block(decisions, "반영")
     deferred = block(decisions, "후속 티켓")
+    judged = block(decisions, "판정 완료")
     secs, dropped = collapse_per_round(sections(prev_ctx))
     for h, b in dropped:
         print(f"   ↳ 철 지난 중복 절 제거: {h} ({len(b.strip().splitlines())}줄) "
@@ -421,6 +423,9 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = 
             secs[i] = (h, merged)
         elif h.startswith("## 스코프 밖") and deferred:
             secs[i] = (h, b.rstrip() + f"\n\n### {prev_round} 에서 후속 티켓으로 분리\n\n{deferred}\n")
+        elif h.startswith("## 판정 완료") and judged:
+            # 봉인 절이라 접지 않는다 — 근거가 곧 재제기를 막는 내용이다(#97)
+            secs[i] = (h, b.rstrip() + f"\n\n### {prev_round} 에서 판정\n\n{judged}\n")
         elif h.startswith(INV) and banner:
             # 옛 배너는 통째로 걷어내고 다시 넣는다 — 라운드마다 쌓이면 그것대로 stale 이다
             secs[i] = (h, "\n" + banner + INV_RE.sub("", b).lstrip("\n"))
@@ -431,6 +436,9 @@ def carry_forward(prev_ctx: str, decisions: str, prev_round: str, banner: str = 
             secs[i] = (h, secs[i][1].rstrip() + f"\n{sweep}\n")
     if sweep and not any(h.startswith("## 이번 라운드에서 특히 볼 것") for h, _ in secs):
         secs.append(("\n## 이번 라운드에서 특히 볼 것 (선택)", f"\n{TODO}\n{sweep}\n"))
+    if judged and not any(h.startswith("## 판정 완료") for h, _ in secs):
+        # #97 이전에 시작된 컨텍스트에는 절이 없다 — 판정을 버리지 않고 절을 만든다
+        secs.append(("\n## 판정 완료 (재제기 금지)", f"\n### {prev_round} 에서 판정\n\n{judged}\n"))
     return render(secs)
 
 
@@ -633,7 +641,7 @@ def main():
     for extra in ("plan-", "impact-"):  # 계획서·아티팩트는 게이트를 넘어가도 참조된다
         for f in rd.glob(f"{extra}*"):
             shutil.copy2(f, out / f.name)
-    print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/후속티켓을 이관했다.")
+    print(f"\n✅ {out/'context.md'} 생성 — decisions.md 의 반영/판정 완료/후속티켓을 이관했다.")
     todo_secs = [h for h, _ in sections(new_ctx) if h.startswith(PER_ROUND)]
     if todo_secs:
         print(f"   손으로 갱신할 절 {len(todo_secs)}개가 남았다 ({TODO} 표시됨): "

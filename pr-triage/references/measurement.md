@@ -83,6 +83,10 @@ python3 "<pr-triage-skill>/evals/score.py" --answers answers.json --predictions 
 
 ### 분모 정의 — 이게 없어서 대조가 안 됐다
 
+SKILL.md 2절의 "사실 판단의 기본값은 리뷰어가 맞다"(88%) 와 5절의 `real-defect` 빈도(45%)는
+다른 축이다 — 두 축을 한 칸에 적었던 것이 편향의 출처였다(2절을 분류 빈도로 읽으면 `real-defect`
+가 과다 적용된다).
+
 2차까지의 5절 표는 %만 적고 **분모를 명기하지 않았다.** 재산출할 때 셋을 함께 적는다:
 
 | 이름 | 값(3차) | 정의 |

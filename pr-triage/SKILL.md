@@ -9,7 +9,7 @@ description: 내 PR 에 달린 리뷰 코멘트를 감시하다가, 신규 코�
 
 | 무엇 | 왜 |
 |---|---|
-| `red-team` 스킬 | 트리아지 상태·의사결정 기록이 같은 `~/.red-team/runs2/<repo>/<branch>/` 를 쓴다 — 경로 복제 시 처리 기록이 조용히 사라진다 |
+| `red-team` 스킬 | 트리아지 상태·의사결정 기록이 같은 `~/.red-team/runs2/<repo>/<branch>/` 를 쓴다 |
 | `red-team` 0단계 완료 | 6절 코드 게이트가 `run_round.py` 를 부른다 |
 | `gh` CLI 인증 | 수집·회신이 전부 `gh api` 다 |
 | code-hub MCP (선택) | 레포 밖 계약 주장 확인 — 없으면 그 건은 사용자에게 올라간다 |
@@ -46,19 +46,15 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --new-only
 커서 기준 **미처리** 코멘트만 나온다(PR·저장소 생략 시 현재 브랜치). 커서는
 `pr-<N>-triage.json` 의 `notified`/`triaged` — 알림 직후 세션이 죽어도 처리 대상이 남는다.
 
-출력의 표시: `→` 내 마지막 응답 이후 코멘트(앞쪽도 부분 응답일 수 있다) /
-`+Nc` 그 코멘트 이후 푸시된 커밋 수(크면 낡은 코드를 본 리뷰 — **해당 커밋 먼저 확인**) /
-`↻N` 봇 fingerprint 재게시 회차(**`fp_seq` 가 유일한 진실** — 산문·기억으로 세지 않는다.
-2 이상이면 봇 분기: `references/edge-cases.md`) / `∉diff`·`∉hunk` inline 코멘트가 변경
-범위 밖(**표시일 뿐 걸러내지 않는다**). diff 플래그는 inline 전용 — top-level 봇 코멘트의
-범위 대조는 `--show-files` 목록과 본문 속 경로를 모델이 한다.
+출력 표시(`→`·`+Nc`·`↻N`·`∉diff`·`∉hunk`)의 뜻과 행동은 `references/edge-cases.md`(1절 출력
+범례) — **`+Nc` 가 크면 해당 커밋 먼저 확인, `↻N` 2 이상이면 봇 분기, `∉` 는 걸러내지 않는다.**
 **작성자 계정으로 올라오는 리뷰가 있다**(사내 봇) — `🤖` 마커(`--bot-marker`)와 그보다
 강한 **fp 마커**로 가른다. `<APPROVED>` 리뷰도 실질 지적이 있을 수 있어 본문을 확인한다.
 
 ### 2. 두 질문을 따로 묻는다 — "맞나"와 "여기서 고칠 것인가"
 
-**사실 판단의 기본값은 "리뷰어가 맞다"**(88%). **그러나 범위 판단까지 덮으면 안 된다** —
-"맞으니 고친다" 직행이 30% 오류의 전부였다. 코멘트마다 순서대로:
+**사실 판단의 기본값은 "리뷰어가 맞다"**(88%). **그러나 범위 판단까지 덮으면 안 된다**
+("맞으니 고친다" 직행이 오류의 전부 — `references/measurement.md`). 코멘트마다 순서대로:
 
 1. **사실인가?** — 코드로 확인한다. 기본값은 "맞다"
 2. **이 티켓에서 고칠 것인가?** — `## 스코프 밖`·후속 티켓과 대조. 사실이어도 범위 밖은
@@ -92,9 +88,8 @@ diff / 미결 목록(문서·ABORTED)에 등재된 지적 / 레포 밖(BE 계약
 
 ### 5. 분류
 
-빈도는 실측 건수다(분모 정의와 출처: `references/measurement.md`). **2절의 "사실 판단의
-기본값은 리뷰어가 맞다"(88%) 를 `real-defect` 빈도(45%)로 읽지 않는다** — 두 축을 한 칸에
-적었던 것이 편향의 출처였다.
+빈도는 실측 건수다(분모 정의와 출처: `references/measurement.md`). **2절의 "리뷰어가
+맞다"(88%) 를 `real-defect` 빈도(45%)로 읽지 않는다.**
 
 | 분류 | 실측 | 다음 행동 |
 |---|---|---|
@@ -150,8 +145,8 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --log-classificat
 
 ### 6-1. 처리 결과를 red-team 기록에 넣는다
 
-`decisions.md` 에 넣으면 **다음 컨텍스트로 자동 이관되어 재제기가 막힌다.** 절을 잘못
-짚으면 조용히 누락된다 — 손으로 붙이지 말고 스크립트로:
+`decisions.md` 에 넣으면 다음 컨텍스트로 이관되어 재제기가 막힌다. **손으로 붙이지 말고
+스크립트로**(절을 잘못 짚으면 조용히 누락된다):
 
 ```bash
 python3 "<pr-triage-skill>/scripts/record_decisions.py" \
@@ -182,8 +177,8 @@ python3 "<pr-triage-skill>/scripts/record_decisions.py" \
   부족하다(변경 전 그 경로가 실제로 무엇을 했는지 쓴다)
 - 사과·수식어 없이. 리뷰어가 필요한 것은 판정과 근거다
 
-**같은 지적이 또 올라오면** — 사람의 재제기는 납득할 근거가 빠진 신호다. 말을 바꾸지
-말고 코드와 커밋을 짚어 다시 답한다. **봇(fp 마커)은 산문을 소비하지 않는다** — 회차별
+**같은 지적이 또 올라오면** 말을 바꾸지 말고 코드와 커밋을 짚어 다시 답한다(왜 신호인지:
+`references/measurement.md` 재제기 절). **봇(fp 마커)은 산문을 소비하지 않는다** — 회차별
 재게시 프로토콜과 회신 본문 금지 사항은 `references/edge-cases.md`(봇 리뷰어 분기).
 
 ### 8. 게시
@@ -195,11 +190,9 @@ python3 "<pr-triage-skill>/scripts/post_replies.py" \
   --repo owner/name --pr N --replies "<replies.json>" [--confirm]
 ```
 
-`source: inline` 은 그 스레드 답글로, top-level·review 는 새 코멘트로(fetch 의
-`mention`·`url` 복사 필수 — 지적자 @멘션). 봇 판정에 걸리는
-본문은 게시 전 검증이 거부한다. 봇 코멘트에 회신할 때의 선택 필드(`fps`·`reaction`)는
-`references/edge-cases.md`(8절 선택 필드). 게시 후 **커서를 갱신한다** — 안 하면 다음
-라운드가 같은 코멘트를 또 처리한다:
+`replies.json` 항목 규칙(`source`·`mention`·`url`, 봇 회신의 `fps`·`reaction`)은
+`references/edge-cases.md`(8절 항목 규칙). 봇 판정에 걸리는 본문은 게시 전 검증이 거부한다.
+게시 후 **커서를 갱신한다** — 안 하면 다음 라운드가 같은 코멘트를 또 처리한다:
 
 ```bash
 python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
@@ -207,6 +200,18 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
 ```
 
 그리고 0절의 감시로 돌아간다.
+
+### 9-a. 교훈 초안 — 게시 성공 직후, `real-defect` 를 고친 라운드만
+
+```bash
+python3 "<pr-triage-skill>/scripts/extract_lesson_candidate.py" \
+  --repo owner/name --pr N --round-dir "<라운드 경로>" --commit <수정 커밋>
+```
+
+exit 0 이면 카드 JSON 을 한 화면으로 보여주고 **"넣는다 / 버린다" 1회만 묻는다(수정 안 받음).**
+넣는다 → `mcp__hipocampus__knowledge_put(card)`(deferred 면 ToolSearch), 결과 id 를 회신 요약에
+한 줄. 버린다 → `~/.red-team/lesson-drafts.jsonl` 에 `outcome: rejected` 한 줄 append. exit
+1~4(후보 없음·형식·하루 3장 상한·중복)는 한 줄만 알리고 넘어간다 — 큐·자동 승인 없음.
 
 ### 9. approve·LGTM 후 — PR 본문을 최신화한다
 
@@ -217,9 +222,8 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" \
 
 ### 10. 머지 직전 — 커서를 한 번 더 본다
 
-머지는 이 스킬의 일이 아니지만(경계), **트리아지 세션에 머지를 시키면 커서를 다시 보는
-사람이 없다.** CI 초록·`mergeStateStatus: CLEAN`·approve 는 **코멘트가 없다는 뜻이
-아니다**(감시기는 폴링이다 — `references/measurement.md`).
+CI 초록·`mergeStateStatus: CLEAN`·approve 는 **코멘트가 없다는 뜻이 아니다**(감시기는
+폴링이다 — 근거는 `references/measurement.md` 10절 커서 재확인 절).
 
 ```bash
 python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --new-only
@@ -239,7 +243,7 @@ python3 "<pr-triage-skill>/scripts/fetch_comments.py" --pr <N> --new-only
 | 문서 | 언제 읽나 |
 |---|---|
 | `references/monitoring.md` | PR 감시를 시작할 때 — 호스트별 exact 실행 경로 |
-| `references/edge-cases.md` | docs-only PR, 미결 등재 지적(문서·ABORTED), 레포 밖 계약 주장, **기록 없는 PR**, 기록 재확인·인계 폴백, fp 봇 재게시, **게이트 GO 후 외부 산출물·미결 목록 위치**, **8절 `fps`·`reaction` 필드**, 9절 실행 시 |
+| `references/edge-cases.md` | **1절 출력 범례**, docs-only PR, 미결 등재 지적(문서·ABORTED), 레포 밖 계약 주장, **기록 없는 PR**, 기록 재확인·인계 폴백, fp 봇 재게시, **게이트 GO 후 외부 산출물·미결 목록 위치**, **8절 항목 규칙(`source`·`mention`·`fps`·`reaction`)**, 9절 실행 시 |
 | `references/measurement.md` | 스킬의 존재 이유, 본문 수치의 근거 확인, 재측정(**분모 정의·오분류 방향**), 분류 로그 임계값 알림 시, **10절 커서 재확인을 건너뛰고 싶을 때** |
 
 ## 유지보수

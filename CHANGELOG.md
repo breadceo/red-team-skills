@@ -38,6 +38,15 @@ python3 <설치 경로>/red-team/scripts/run_round.py --help | grep from-zax
 
 ---
 
+## 2026-10-31
+
+### ✨ pr-triage — 게시 직후 real-defect 1건을 교훈 카드 초안으로 (9-a절)
+
+`scripts/extract_lesson_candidate.py` 가 이번 라운드의 `real-defect`·`corrected=false` row 와
+`decisions.md` `## 반영` 줄·수정 커밋으로 카드 JSON 1장을 뽑는다. 하루 3장 상한·중복(lessons.py
+search ≥ 0.6)·sources 형식은 코드가 거부하고(exit 3·4·2), 모든 결과는 `~/.red-team/lesson-drafts.jsonl`
+에 남는다. 사용자는 "넣는다 / 버린다" 만 고른다 — 자동 승인 없음.
+
 ## 2026-10-14
 
 PH-1263 code 게이트 소요 시간을 분석하다 MoE GO 후보 라운드의 직렬 구조와 claude 엔진의

@@ -1,0 +1,38 @@
+pr-triage/scripts/extract_lesson_candidate.py
+  4668b4bdbd559474 1-108
+pr-triage/scripts/test_extract_lesson_candidate.py
+  4668b4bdbd559474 1-85
+pr-triage/SKILL.md
+  4668b4bdbd559474 211-223,233-234
+CHANGELOG.md
+  4668b4bdbd559474 41-49
+---
+{
+  "schema_version": "zax-attestation/1.2.0",
+  "base_commit_sha": "a1237a1ff68de6a08d9772cb2c253256e4fa515f",
+  "prompts": {
+    "4668b4bdbd559474": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e7903437-dcf7-4699-a162-83da16b328ce",
+        "model": "claude-fable-5-1"
+      },
+      "skills": [
+        {
+          "id": "thalamus-brief-child-pr",
+          "ts": "2026-10-31T02:39:44.177Z"
+        }
+      ],
+      "tool_counts": {
+        "Read": 2,
+        "Bash": 15,
+        "Skill": 1,
+        "Write": 2,
+        "Edit": 3
+      },
+      "total_additions": 230,
+      "total_deletions": 0,
+      "overriden_lines": 0
+    }
+  }
+}
